@@ -27,7 +27,8 @@
 - `CozyAudio`: 모든 효과음은 `audio.out(node, pan)` → `sfxBus`로, 배경음(바람·풍경·모닥불)은 `masterGain`으로 보낸다. 둘 다 잔향(`reverb`)과 컴프레서(`comp`)를 거친다.
 - `enhanceStandardMaterial`: 표준 재질에 바람, 높이 안개, 분해 보기, 낙하 애니메이션(`aSpawn` 인스턴스 속성)을 셰이더로 덧붙인다. 그림자용 `customDepthMaterial`도 낙하 애니메이션을 따라간다.
 - `initGame()` 안: 렌더러/렌더 타깃 → 카메라(`updateCameraTransform`) → 조명 → 후처리(`runPostPipeline`) → 섬·인스턴스 → `rebuildInstances()` → `islandRoot`로 묶기 → 입력 → 17. 시작 조립 → `animate()`.
-- **시작 화면과 조립 (17. STARTUP ASSEMBLY):** HTML의 `#loader`(정적 SVG 새싹 토큰, three.js 전에 보여야 해서 `makeToken` 출력을 붙여 넣음, id 접두어 `ldtk`)가 먼저 뜨고, `body.booting`이 HUD를 숨긴다. 뒤에서 완성된 섬을 3프레임 그려 셰이더·그림자를 미리 컴파일한 뒤 `onBootReady`로 토큰이 빛난다. 누르면 `beginFromLoader`가 소리를 켜고(사용자 동작 안이라 가능) `startAssembly`를 부른다. 타임라인은 `IT` 상수 하나에 모여 있다. 섬 세 층은 위치 오프셋으로 떨어지고, 오브젝트는 `spawnT`를 미래로 잡아 기존 낙하 셰이더를 그대로 쓴다. 불빛은 `introLightK(x, z, now)`(스프라이트, 포인트 라이트, 불꽃, 불티, 굴뚝 연기), 접지 그림자는 `introShadowK`로 가린다. 효과·소리는 `introFx`로 예약해서 건너뛰기(`finishIntro(true)`) 때 한꺼번에 지운다. "처음 섬으로"는 `resetIsland`(흔들림 → `islandRoot`째 낙하 → 다시 조립). 조립 중 입력은 window capture 단계의 `onIntroInput`이 막고 건너뛰기로 쓴다(휠만 통과). `#intro=0`이면 끄고, `#debug=1`이면 기본으로 꺼진다.
+- **시작 화면과 조립 (17. STARTUP ASSEMBLY):** 사용자 결정: 로딩 토큰 없이 검은 화면(`#loader`, 글자는 실패 때 "다시 불러오기"뿐)에서 페이드인, 건너뛰기 없음. `body.booting`이 HUD를 숨긴다. 검은 화면 뒤에서 완성된 섬을 3프레임 그려 셰이더·그림자를 미리 컴파일한 뒤 `onBootReady`가 검은 화면을 걷고 `startAssembly(true, FIRST_LEAD)`를 부른다. 타임라인은 `IT` 상수 하나에 모여 있다. 섬 세 층은 위치 오프셋으로 떨어지고, 오브젝트는 `spawnT`를 미래로 잡아 기존 낙하 셰이더를 그대로 쓴다. 불빛은 `introLightK(x, z, now)`(스프라이트, 포인트 라이트, 불꽃, 불티, 굴뚝 연기, 차례는 `intro.ignite`), 접지 그림자는 `introShadowK`로 가린다. 효과·소리는 `introFx`로 예약한다. 섬 층·오두막 착지에는 임팩트 링(`spawnRing`, 풀 4개, 셰이더로 폭 일정), 불이 붙을 때는 픽셀 별 반짝임(`spawnSparks`, 깊이 테스트 없음: 불빛 위치가 오두막 안이라 가려짐)을 넣는다. 둘 다 시계의 함수라 `introClock`으로 멈춰 찍을 수 있고, 쉴 때는 draw call이 없다. "처음 섬으로"는 `resetIsland`(흔들림 → `islandRoot`째 낙하 → 다시 조립). 조립 중 입력은 window capture 단계의 `holdIntroInput`이 막는다(휠, 새로고침·개발자 도구 키만 통과). `#intro=0`이면 끄고, `#debug=1`이면 기본으로 꺼진다.
+- **소리 기본값:** `audio.wantOn = true`(아이콘도 켜짐). 브라우저가 첫 클릭·키 전에는 소리를 막으므로, 허락돼 있으면 `onBootReady`에서 바로 켜고, 아니면 `unlockAudio`(첫 pointerdown/keydown)가 켠다. 막힌 동안 컨텍스트 시계가 멈춰 예약된 소리가 나중에 한꺼번에 터지므로, 조립 소리는 `introReady()`(실행 중일 때만)로 거른다. 배경음 버튼으로 끄면 `wantOn = false`.
 - **`islandRoot`:** 섬 층, 울타리, 오두막, 불빛 후광, 연기, 불꽃, 불티, 모든 인스턴스 오브젝트의 부모. 먼지, 꽃잎, 커서, 포인트 라이트는 월드에 둔다. 섬 위에 서는 새 오브젝트 그룹을 만들면 여기에 넣는다(초기화 때 같이 떨어지도록).
 
 ## 지켜야 할 규칙 (어기면 조용히 깨짐)
@@ -59,12 +60,13 @@ $env:SHOT='night'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#d
 - `#debug=1`이면 `window.__mori`(state, project, hit, audio, items, lights, renderables)가 생긴다. 읽기 전용 테스트 훅이다. `renderables()`로 draw call이 어디서 나오는지 나눠 볼 수 있다.
 - 헤드리스는 SwiftShader(소프트웨어 렌더링)라 몇 초에 몇 프레임뿐이다. 시간(ms) 측정은 의미 없고, draw call 수(`#fps=1`이면 `body[data-bench]`와 콘솔에 기록)로 비교한다. 기본 섬 기준 그림자 갱신 없는 프레임 59 calls(오두막 합치기 개선 전 82).
 - 시간대 전환은 천천히 섞이므로 스크린샷에는 `#time=night`처럼 시작 옵션을 쓴다(즉시 적용됨).
-- 헤드리스에서는 조립 중 한 프레임이 몇 초씩 걸려 시각이 안 맞는다. 조립 장면은 `__mori.introClock(초)`로 시계를 멈추고 `__mori.frame()`이 2 늘어난 뒤 찍는다(`intro.mjs` 참고, 결과 `tools/shots/intro-*.png`). `null`을 주면 다시 흐른다.
+- 헤드리스에서는 조립 중 한 프레임이 몇 초씩 걸려 시각이 안 맞는다. 조립 장면은 `__mori.introClock(초)`로 시계를 멈추고 `__mori.frame()`이 2 늘어난 뒤 찍는다(`intro.mjs` 참고, 결과 `tools/shots/intro-*.png`). `null`을 주면 다시 흐른다. `__mori.introFx()`는 보이는 링 수와 반짝임 상태를 준다.
+- `cdp.mjs`는 기본으로 자동 재생을 허락한다. 실제 첫 방문처럼 소리가 막힌 상태를 보려면 `$env:AUTOPLAY='0'`.
 - URL 옵션 전체 목록은 README 참고.
 
 ## 남은 일
 - 명세서 미완: 1픽셀 외곽선·샤픈 후처리.
-- **시작 화면 후속 (사용자 답 대기):** 조립 연출에 임팩트 링(섬 층·오두막 착지 때만 바닥에 낮게 퍼지는 크림색 고리)과 불 켜질 때 픽셀 별 반짝임을 더할지. Claude 의견: 링은 큰 착지에만, 만화식 직선 임팩트 라인은 분위기와 안 맞아 반짝임으로 대신. 실제 노트북에서 조립 중 프레임(그림자를 매 프레임 갱신하는 3.6초 동안 자동 해상도가 떨어지는지)과 소리 느낌은 아직 확인 안 됨.
+- **시작 화면 확인 필요:** 실제 노트북에서 조립 중 프레임(그림자를 매 프레임 갱신하는 약 4초 동안 자동 해상도가 떨어지는지), 소리 느낌, 페이드 길이, 반짝임 크기(낮에는 작게 보임). 만화식 직선 임팩트 라인은 사용자와 합의해 넣지 않음.
 - **다음: 오브젝트 늘리기** (목록은 사용자 확인 완료). 한 카테고리씩 만들고 스크린샷으로 확인한 뒤 커밋. 생활 소품부터 제안했고 시작 카테고리는 아직 안 정함. 디테일이 중요하다고 사용자가 강조함(부품 어긋남, 재질 구분, 불빛 반사). 구조물은 `SOUP_ITEMS`, 울타리·모닥불도 조립 방식으로 다시 만들고, 나무·덤불·꽃은 적층. 새 적층 오브젝트와 기존 적층 아이콘도 실제 모델 아이콘으로.
 
   | 카테고리 | 추가할 것 |

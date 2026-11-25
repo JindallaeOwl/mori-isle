@@ -392,74 +392,21 @@
     body.photo-mode #photo-exit-btn { opacity: 0.4; pointer-events: auto; }
     body.photo-mode #photo-exit-btn:hover { opacity: 1; transform: scale(1.15); }
 
-    /* ---------- startup: one wooden sprout token while loading, then the island assembles ---------- */
-    /* the token is static SVG so it shows before three.js arrives; its motion is transform-only so it
-       keeps moving while the main thread is busy building textures and meshes */
+    /* ---------- startup: black, then the scene fades in while the island assembles ---------- */
     #loader {
       position: fixed;
       inset: 0;
       z-index: 100;
       display: grid;
       place-items: center;
-      background: #161d30;
-      transition: opacity 0.65s ease;
+      background: #000;
+      transition: opacity 0.9s ease;
     }
     #loader.go { opacity: 0; pointer-events: none; }
-    #loader-glow {
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      width: 340px;
-      height: 340px;
-      margin: -170px 0 0 -170px;
-      background: radial-gradient(closest-side, rgba(255, 178, 80, 0.2), rgba(255, 150, 60, 0.06) 55%, transparent);
-      animation: loader-breathe 2.8s ease-in-out infinite;
-      transition: opacity 0.5s ease;
-      pointer-events: none;
-    }
-    #loader-token {
-      position: relative;
-      width: 92px;
-      height: 92px;
-      animation: loader-bob 1.6s ease-in-out infinite;
-      pointer-events: none;
-    }
-    #loader-token .token { filter: drop-shadow(0 6px 5px rgba(10, 6, 2, 0.45)) saturate(0.85) brightness(0.9); transition: filter 0.4s ease; }
-    /* ready: the token lights up and nudges, asking to be pressed */
-    #loader.ready { cursor: pointer; }
-    #loader.ready #loader-token { pointer-events: auto; animation: loader-nudge 1.5s ease-in-out infinite; }
-    #loader.ready #loader-token .token { filter: drop-shadow(0 0 14px var(--glow-soft)) drop-shadow(0 6px 5px rgba(10, 6, 2, 0.4)) brightness(1.06); }
-    #loader.ready #loader-glow { animation-duration: 1.5s; background: radial-gradient(closest-side, rgba(255, 184, 84, 0.32), rgba(255, 150, 60, 0.09) 55%, transparent); }
-    #loader.ready #loader-token:hover { animation: none; transform: translateY(-5px) scale(1.1) rotate(-4deg); transition: transform 0.25s var(--spring); }
-    #loader.go #loader-token { animation: none; transform: scale(0.86); transition: transform 0.16s ease; }
-    /* three.js never arrived: the sprout tips over, one quiet word, click reloads */
+    /* three.js never arrived: one quiet word, click reloads */
     #loader.failed { cursor: pointer; }
-    #loader.failed #loader-token { animation: none; transform: rotate(-24deg) translateY(6px); }
-    #loader.failed #loader-glow { opacity: 0.3; }
-    #loader-retry {
-      position: absolute;
-      top: calc(50% + 62px);
-      left: 50%;
-      transform: translateX(-50%);
-      color: var(--ink-dim);
-      white-space: nowrap;
-      opacity: 0;
-      transition: opacity 0.4s ease;
-    }
+    #loader-retry { color: var(--ink-dim); white-space: nowrap; opacity: 0; transition: opacity 0.4s ease; }
     #loader.failed #loader-retry { opacity: 1; }
-    @keyframes loader-bob {
-      0%, 100% { transform: translateY(0) rotate(-3deg); }
-      50% { transform: translateY(-7px) rotate(3deg); }
-    }
-    @keyframes loader-nudge {
-      0%, 60%, 100% { transform: translateY(0) scale(1); }
-      22% { transform: translateY(-10px) scale(1.08) rotate(-5deg); }
-      40% { transform: translateY(1px) scale(0.97) rotate(2deg); }
-    }
-    @keyframes loader-breathe {
-      0%, 100% { opacity: 0.65; transform: scale(0.94); }
-      50% { opacity: 1; transform: scale(1.04); }
-    }
 
     /* the HUD stays out of sight until the island has assembled (beats the idle rule too) */
     body.booting .ui-layer, body.booting #item-name, body.booting #hint { opacity: 0 !important; pointer-events: none !important; }
@@ -483,10 +430,8 @@
   </style>
 </head>
 <body class="booting">
-  <!-- Startup: a wooden sprout token until the game is ready; press it to assemble the island -->
+  <!-- Startup: black until the game is ready, then it fades away as the island assembles -->
   <div id="loader">
-    <div id="loader-glow"></div>
-    <div id="loader-token" role="button" aria-label="시작"><svg class="token" viewBox="0 0 56 56" aria-hidden="true"><defs><linearGradient id="ldtkg" x1="0" y1="0" x2="0.25" y2="1"><stop offset="0" stop-color="#f3dba9"/><stop offset="1" stop-color="#d6a66b"/></linearGradient><clipPath id="ldtkc"><path d="M28 4.54C40.08 4.42 49.58 13.92 50.04 26C49.58 38.08 40.08 47.58 28 47.46C15.92 47.58 6.42 38.08 5.93 26C6.42 13.92 15.92 4.42 28 4.42Z"/></clipPath></defs><g transform="rotate(1.38 28 27)"><path d="M28 4.54C40.08 4.42 49.58 13.92 50.04 26C49.58 38.08 40.08 47.58 28 47.46C15.92 47.58 6.42 38.08 5.93 26C6.42 13.92 15.92 4.42 28 4.42Z" transform="translate(0 3.6)" fill="#6f4528"/><path d="M28 4.54C40.08 4.42 49.58 13.92 50.04 26C49.58 38.08 40.08 47.58 28 47.46C15.92 47.58 6.42 38.08 5.93 26C6.42 13.92 15.92 4.42 28 4.42Z" fill="url(#ldtkg)"/><g clip-path="url(#ldtkc)"><path d="M2 15.95C14 13.41 22 18.49 34 15.95S48 13.41 56 16.95" stroke="#a87443" stroke-width="1" fill="none" opacity="0.24"/><path d="M2 28.88C14 25.3 22 32.46 34 28.88S48 25.3 56 29.88" stroke="#a87443" stroke-width="1" fill="none" opacity="0.26"/><path d="M2 40.59C14 37.43 22 43.74 34 40.59S48 37.43 56 41.59" stroke="#a87443" stroke-width="1" fill="none" opacity="0.29"/><path d="M28 4.54C40.08 4.42 49.58 13.92 50.04 26C49.58 38.08 40.08 47.58 28 47.46C15.92 47.58 6.42 38.08 5.93 26C6.42 13.92 15.92 4.42 28 4.42Z" transform="translate(0 1.6)" fill="none" stroke="#fff6e2" stroke-width="2.6" opacity="0.55"/><path d="M28 4.54C40.08 4.42 49.58 13.92 50.04 26C49.58 38.08 40.08 47.58 28 47.46C15.92 47.58 6.42 38.08 5.93 26C6.42 13.92 15.92 4.42 28 4.42Z" transform="translate(0 -1.6)" fill="none" stroke="#9b6537" stroke-width="2.6" opacity="0.45"/></g><g class="glyph" transform="translate(0 -1)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(0 1.1)" opacity="0.75"><path d="M28 42.5V30" fill="none" stroke="#fff1d2"/><path d="M28 31.5c0-6.5 5-10 11-10c0 6.5-5 10-11 10z" fill="none" stroke="#fff1d2"/><path d="M28 34c0-4.5-3.2-7.5-8.5-7.5c0 4.5 3.2 7.5 8.5 7.5z" fill="none" stroke="#fff1d2"/><path d="M20.5 42.5h15" fill="none" stroke="#fff1d2"/></g><path d="M28 42.5V30" fill="none" stroke="#5b3a1f"/><path d="M28 31.5c0-6.5 5-10 11-10c0 6.5-5 10-11 10z" fill="#7fb04f" stroke="#5b3a1f"/><path d="M28 34c0-4.5-3.2-7.5-8.5-7.5c0 4.5 3.2 7.5 8.5 7.5z" fill="#a2c96c" stroke="#5b3a1f"/><path d="M20.5 42.5h15" fill="none" stroke="#5b3a1f"/></g></g></svg></div>
     <div id="loader-retry">다시 불러오기</div>
   </div>
   <script>
@@ -784,6 +729,7 @@
         this.ctx = null;
         this.masterGain = null;
         this.enabled = false;
+        this.wantOn = true; // sound is on by default; it actually starts on the first click / key
         this.chimeTimer = null;
         this.isNight = false;
       }
@@ -961,6 +907,7 @@
       toggle(silent = false) {
         this.ensureSfxContext();
         this.enabled = !this.enabled;
+        this.wantOn = this.enabled;
         const now = this.ctx.currentTime;
         this.masterGain.gain.cancelScheduledValues(now);
         this.masterGain.gain.setTargetAtTime(this.enabled ? 0.42 : 0.0001, now, silent ? 0.9 : 0.25);
@@ -1076,10 +1023,13 @@
         th.start(tEnd); th.stop(tEnd + 0.12);
       }
 
-      // --- startup assembly (section 17): only with sound on ---
+      // --- startup assembly (section 17): only with sound on and running. While the browser still
+      // holds audio back the context is suspended and its clock stopped: anything scheduled then
+      // would all play at once when it resumes, so those sounds are simply skipped
+      introReady() { return !!this.ctx && this.enabled && this.ctx.state === "running"; }
       // a heavy island layer landing: low thud + dull knock + a little grit
       introThump(size = 1, pan = 0) {
-        if (!this.ctx || !this.enabled) return;
+        if (!this.introReady()) return;
         const t = this.ctx.currentTime;
         const o = this.ctx.createOscillator(), g = this.ctx.createGain();
         o.type = 'sine';
@@ -1095,7 +1045,7 @@
       }
       // one object landing: the placement "tok", pitch climbing through the whole sequence
       introClick(pitch = 1, pan = 0, heavy = false) {
-        if (!this.ctx || !this.enabled) return;
+        if (!this.introReady()) return;
         const t = this.ctx.currentTime, f = 600 * pitch, vol = heavy ? 0.15 : 0.11;
         const o = this.ctx.createOscillator(), g = this.ctx.createGain();
         o.type = 'triangle';
@@ -1121,7 +1071,7 @@
       }
       // water: a round "bloop" (rising sine)
       introPlop(pan = 0, pitch = 1) {
-        if (!this.ctx || !this.enabled) return;
+        if (!this.introReady()) return;
         const t = this.ctx.currentTime;
         const o = this.ctx.createOscillator(), g = this.ctx.createGain();
         o.type = 'sine';
@@ -1135,7 +1085,7 @@
       }
       // a lamp or fire catching: soft noise "fwoomp" with a warm two-note glow
       introIgnite(pan = 0, pitch = 1) {
-        if (!this.ctx || !this.enabled) return;
+        if (!this.introReady()) return;
         const ctx = this.ctx, t = ctx.currentTime;
         const src = ctx.createBufferSource(); src.buffer = this.white;
         const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 1.4;
@@ -1159,7 +1109,7 @@
       }
       // the island giving way before a reset: low rumble with a few loose knocks
       introRumble() {
-        if (!this.ctx || !this.enabled) return;
+        if (!this.introReady()) return;
         const ctx = this.ctx, t = ctx.currentTime;
         const src = ctx.createBufferSource(); src.buffer = this.white; src.loop = true;
         const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 170; lp.Q.value = 0.9;
@@ -3557,7 +3507,7 @@
         initGame();
       } catch (err) {
         console.error('Failed to initialize Mori Isle:', err);
-        document.getElementById('loader')?.classList.add('failed'); // the sprout tips over, click reloads
+        document.getElementById('loader')?.classList.add('failed'); // "다시 불러오기", click reloads
       }
     });
 
@@ -5844,9 +5794,11 @@
       const AUDIO_ICONS = { off: makeToken('sound-off', { round: true }), on: makeToken('sound-on', { round: true }) };
       const btnAudio = document.getElementById('btn-audio');
       const audioIcon = document.getElementById('audio-icon');
+      // shows the setting: "on" from the start even while the browser still waits for a first click
       function syncAudioIcon() {
-        audioIcon.innerHTML = audio.enabled ? AUDIO_ICONS.on : AUDIO_ICONS.off;
-        btnAudio.classList.toggle('on', audio.enabled);
+        const on = audio.enabled || audio.wantOn;
+        audioIcon.innerHTML = on ? AUDIO_ICONS.on : AUDIO_ICONS.off;
+        btnAudio.classList.toggle('on', on);
       }
       syncAudioIcon();
       btnAudio.addEventListener('click', () => { audio.toggle(); syncAudioIcon(); });
@@ -6212,6 +6164,7 @@
 
         // Startup assembly / reset crumble: island layers, water, paths, fence (section 17)
         if (intro.phase === 'assemble' || intro.phase === 'crumble') updateIntro(elapsed);
+        updateIntroFx(elapsed); // impact rings + ignition sparkles (hidden when idle)
 
         // 4. Height-Proportional Contact Shadows (shift along key light & soften alpha as layers float!)
         const shadowFade = THREE.MathUtils.clamp(1.0 - pMid * 0.58, 0.32, 1.0);
@@ -6392,33 +6345,35 @@
       const csLast = { pMid: -1, pProps: -1, list: null };
 
       /* =======================================================================
-         17. STARTUP ASSEMBLY (loader -> island stacks itself bottom to top -> HUD)
+         17. STARTUP ASSEMBLY (black -> fade in while the island stacks itself -> HUD)
              Like Cinderwatch's board rise, but Lego-style: the three island layers drop in one
-             by one (bedrock, subsoil, grass + hills), the pond fills, then everything on top drops
-             with the usual stacked-drop shader (spawn times set in the future, back to front),
-             lamps light up one by one and the HUD hops in. "처음 섬으로" first lets the island
-             fall away, then assembles it again. Any click or key skips to the end.
+             by one (bedrock, subsoil, grass + hills) with impact rings, the pond fills, then
+             everything on top drops with the usual stacked-drop shader (spawn times set in the
+             future, back to front), lamps light up one by one with pixel star sparkles and the HUD
+             hops in. "처음 섬으로" first lets the island fall away, then assembles it again.
+             No skipping; input is held back until it is done (wheel zoom still works).
              #intro=0 turns it off; it is off by default with #debug=1 (tests want a finished
              island at once), #debug=1&intro=1 turns it back on.
          ======================================================================= */
       const INTRO_ON = HASH.intro !== undefined ? HASH.intro !== '0' : HASH.debug !== '1';
-      const IT = {                        // seconds after the start press (3.4 s + settle)
+      const IT = {                        // seconds after the start (3.4 s + settle)
         layers: [0.0, 0.25, 0.5],         // bedrock, subsoil, grass + hills start falling
         layerFall: 0.42, layerFrom: 12,   // fall time and height (starts above the screen)
         water: 1.0,                       // pond fills, lily pads pop
         big: [1.2, 0.8],                  // cabins and trees: start, back-to-front spread
         small: [2.0, 0.5],                // props, flowers, rocks
         path: 2.0, fence: 2.1,
-        light: [2.6, 0.4],                // lamps and fires catch, back to front
+        light: [2.6, 0.4],                // lamps and fires catch, one after another
         ui: 3.0, end: 3.6
       };
+      const FIRST_LEAD = 0.45;            // the black starts fading this long before the first layer falls
       const CRUMBLE_HOLD = 0.2, CRUMBLE_LEN = 0.95; // tremble, then the whole island drops away
       const WATER_Y = waterMesh.position.y, WATER_FROM = WATER_Y - 0.4;
-      const LAYER_DUST = [[-1.40, 5.45], [-0.60, 5.85], [0.0, 5.95]]; // top y and half width of each layer
+      const LAYER_EDGE = [[-1.40, 5.45], [-0.60, 5.85], [0.0, 5.95]]; // top y and half width of each layer
       const introLayers = [chunkBedrock, chunkSubsoil, chunkTopSurface];
       const loaderEl = document.getElementById('loader');
-      const intro = { phase: INTRO_ON ? 'boot' : 'done', t0: 0, withUI: false, ignite: [], swallowUntil: 0 };
-      let bootFrames = 0, loaderReady = false;
+      const intro = { phase: INTRO_ON ? 'boot' : 'done', t0: 0, withUI: false, ignite: [] };
+      let bootFrames = 0;
       if (!INTRO_ON) document.body.classList.remove('booting');
 
       // 0 = the far (hill) corner, 1 = the near corner of the default view
@@ -6447,6 +6402,141 @@
         return THREE.MathUtils.smoothstep(now - intro.t0, IT.big[0], IT.small[0] + IT.small[1] + 0.3);
       }
       const popScale = (u) => (u <= 0 ? 0.0001 : (u >= 1 ? 1 : easeOutBack(u)));
+
+      // --- impact rings: a cream ring skims out over the ground when something heavy lands
+      // (island layers: rounded square hugging the island edge; cabins: a circle). Constant
+      // world-space width, drawn in the low-res scene so it reads as a pixel ring.
+      const RING_POOL = 4;
+      const ringGeo2 = new THREE.PlaneGeometry(2, 2); ringGeo2.rotateX(-Math.PI / 2);
+      const impactRings = [];
+      for (let i = 0; i < RING_POOL; i++) {
+        const mat = new THREE.ShaderMaterial({
+          uniforms: { uR: { value: 0 }, uW: { value: 0.1 }, uA: { value: 0 }, uHalf: { value: 1 }, uExp: { value: 2 } },
+          vertexShader: `
+            varying vec2 vP;
+            void main() { vP = position.xz; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+          fragmentShader: `
+            uniform float uR; uniform float uW; uniform float uA; uniform float uHalf; uniform float uExp;
+            varying vec2 vP;
+            void main() {
+              vec2 p = abs(vP) * uHalf;
+              float d = pow(pow(p.x, uExp) + pow(p.y, uExp), 1.0 / uExp);
+              float band = 1.0 - smoothstep(uW * 0.45, uW, abs(d - uR));
+              float trail = smoothstep(uR - uW * 5.0, uR, d) * step(d, uR) * 0.22; // faint wash behind the front
+              float a = max(band, trail) * uA;
+              if (a < 0.01) discard;
+              gl_FragColor = vec4(vec3(1.0, 0.95, 0.84) * 1.15, a);
+            }`,
+          transparent: true,
+          depthWrite: false
+        });
+        const mesh = new THREE.Mesh(ringGeo2, mat);
+        mesh.visible = false;
+        mesh.frustumCulled = false;
+        mesh.renderOrder = 2;
+        scene.add(mesh);
+        impactRings.push({ mesh, t0: -100, dur: 1 });
+      }
+      function spawnRing(at, x, y, z, { r0, r1, w, a, exp, dur }) {
+        let ring = impactRings[0];
+        for (const r of impactRings) if (r.t0 + r.dur < ring.t0 + ring.dur) ring = r; // free or oldest
+        Object.assign(ring, { t0: at, dur, r0, r1, w, a });
+        ring.mesh.position.set(x, y, z);
+        const half = r1 + w;
+        ring.mesh.scale.set(half, 1, half);
+        const u = ring.mesh.material.uniforms;
+        u.uHalf.value = half; u.uExp.value = exp;
+      }
+      const layerRing = (half) => ({ r0: half, r1: half + 2.6, w: 0.2, a: 0.6, exp: 8, dur: 0.55 });
+      const CABIN_RING = { r0: 0.35, r1: 1.55, w: 0.11, a: 0.7, exp: 2, dur: 0.45 };
+
+      // --- pixel star sparkles: little 4-point stars twinkle out of a lamp or fire as it catches
+      const SPARK_COUNT = 64;
+      const sparkPos = new Float32Array(SPARK_COUNT * 3), sparkLife = new Float32Array(SPARK_COUNT), sparkSize = new Float32Array(SPARK_COUNT);
+      const sparks = Array.from({ length: SPARK_COUNT }, () => ({ t0: -100, dur: 1, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 }));
+      const sparkGeo = new THREE.BufferGeometry();
+      sparkGeo.setAttribute('position', new THREE.BufferAttribute(sparkPos, 3));
+      sparkGeo.setAttribute('aLife', new THREE.BufferAttribute(sparkLife, 1));
+      sparkGeo.setAttribute('aSize', new THREE.BufferAttribute(sparkSize, 1));
+      const sparkPoints = new THREE.Points(sparkGeo, new THREE.ShaderMaterial({
+        uniforms: { uPx: sharedUniforms.uPointScale, uNightFactor: sharedUniforms.uNightFactor },
+        vertexShader: `
+          attribute float aLife; attribute float aSize; uniform float uPx; varying float vLife;
+          void main() {
+            vLife = aLife;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            float grow = sin(clamp(aLife, 0.0, 1.0) * 3.14159); // pops open, then closes
+            gl_PointSize = aLife > 0.0 ? max(1.0, floor(aSize * uPx * (0.35 + 0.65 * grow) + 0.5)) : 0.0;
+          }`,
+        fragmentShader: `
+          uniform float uNightFactor; varying float vLife;
+          void main() {
+            if (vLife <= 0.0) discard;
+            vec2 c = abs(gl_PointCoord - 0.5) * 2.0;           // 0 centre .. 1 edge
+            float arms = max(step(c.x, 0.15) * (1.0 - c.y), step(c.y, 0.15) * (1.0 - c.x));
+            float core = step(max(c.x, c.y), 0.3);
+            float a = max(arms * 1.15, core);
+            if (a < 0.12) discard;
+            vec3 col = mix(vec3(1.0, 0.72, 0.3), vec3(1.0, 0.95, 0.78), core);
+            gl_FragColor = vec4(col * mix(1.5, 2.8, uNightFactor) * a * (1.0 - vLife * 0.5), 1.0);
+          }`,
+        // no depth test: the light source often sits inside its object (a cabin window light is
+        // behind the walls), and a glint that brief reads fine even when it shows through
+        transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending
+      }));
+      sparkPoints.frustumCulled = false;
+      sparkPoints.renderOrder = 3;
+      sparkPoints.visible = false;
+      scene.add(sparkPoints);
+      let sparkCursor = 0;
+      function spawnSparks(at, x, y, z, n = 7) {
+        for (let k = 0; k < n; k++) {
+          const idx = sparkCursor, s = sparks[idx]; sparkCursor = (sparkCursor + 1) % SPARK_COUNT;
+          const a = (k / n) * Math.PI * 2 + Math.random() * 0.6, r = 0.16 + Math.random() * 0.26;
+          Object.assign(s, {
+            t0: at + k * 0.035 + Math.random() * 0.03, dur: 0.42 + Math.random() * 0.2,
+            x: x + Math.cos(a) * r, y: y + Math.random() * 0.35, z: z + Math.sin(a) * r,
+            vx: Math.cos(a) * 0.25, vy: 0.3 + Math.random() * 0.25, vz: Math.sin(a) * 0.25
+          });
+          sparkSize[idx] = 10 + Math.random() * 4; // x uPointScale: 5~7 scene pixels at full size, a clear 4-point star
+        }
+        sparkGeo.attributes.aSize.needsUpdate = true;
+      }
+
+      // rings and sparkles are pure functions of the clock (so a held debug clock shows them too);
+      // both stay hidden (no draw call) when idle
+      let introFxWasActive = false;
+      function updateIntroFx(now) {
+        let any = false;
+        for (const r of impactRings) {
+          const u = (now - r.t0) / r.dur;
+          const on = u >= 0 && u < 1;
+          r.mesh.visible = on;
+          if (!on) continue;
+          any = true;
+          const e = 1 - (1 - u) ** 3, uni = r.mesh.material.uniforms;
+          uni.uR.value = r.r0 + (r.r1 - r.r0) * e;
+          uni.uW.value = r.w * (1 - 0.5 * u);
+          uni.uA.value = r.a * (1 - u) ** 1.5;
+        }
+        let lit = false;
+        for (let i = 0; i < SPARK_COUNT; i++) {
+          const s = sparks[i], age = now - s.t0, p = age / s.dur;
+          if (p < 0 || p >= 1) { sparkLife[i] = 0; continue; }
+          lit = true;
+          sparkLife[i] = Math.max(p, 0.001);
+          sparkPos[i * 3] = s.x + s.vx * age;
+          sparkPos[i * 3 + 1] = s.y + s.vy * age;
+          sparkPos[i * 3 + 2] = s.z + s.vz * age;
+        }
+        if (lit || introFxWasActive) {
+          sparkGeo.attributes.position.needsUpdate = true;
+          sparkGeo.attributes.aLife.needsUpdate = true;
+        }
+        sparkPoints.visible = lit;
+        introFxWasActive = lit;
+        return any || lit;
+      }
 
       // per frame while assembling or crumbling (called from animate after the exploded-view code,
       // which sets the subsoil / bedrock / fence heights every frame; offsets are added on top)
@@ -6492,7 +6582,7 @@
         fenceGroup.visible = f >= 0;
         if (f >= 0 && f < 0.16) fenceGroup.position.y += 1.2 * (1 - (f / 0.16) ** 2);
         petalInst.visible = u >= IT.layers[2] + IT.layerFall;
-        if (u >= IT.end) finishIntro(false);
+        if (u >= IT.end) finishIntro();
       }
 
       // dust thrown out along the four edges of a layer that just landed
@@ -6506,8 +6596,8 @@
       function introShake(amp) { shakeStart = performance.now() * 0.001; shakeAmp = amp; }
 
       // spawn times for everything on the island + the juice for each landing
-      function startAssembly(withUI) {
-        const t0 = performance.now() * 0.001 + 0.12;
+      function startAssembly(withUI, lead = 0.12) {
+        const t0 = performance.now() * 0.001 + lead;
         intro.phase = 'assemble'; intro.t0 = t0; intro.withUI = withUI;
         isExploded = false; explodeToggleTime = -10;
         hoveredHit = null; updateHoverVisuals();
@@ -6539,12 +6629,14 @@
           landing(def, fp.wx, getContinuousTerrainHeight(fp.wx, fp.wz), fp.wz, fp.spawnT);
         });
         rebuildInstances();
-        markShadowsDirty(IT.end + 0.4); // casters keep moving the whole time
+        markShadowsDirty(IT.end + lead + 0.4); // casters keep moving the whole time
 
-        // island layers
-        LAYER_DUST.forEach(([y, half], i) => {
-          introFx(t0 + IT.layers[i] + IT.layerFall, () => {
+        // island layers: dust off the edges, an impact ring, a thud and a shake
+        LAYER_EDGE.forEach(([y, half], i) => {
+          const at = t0 + IT.layers[i] + IT.layerFall;
+          introFx(at, () => {
             dustRing(y, half);
+            spawnRing(at, 0, y + 0.03, 0, layerRing(half));
             introShake([0.07, 0.06, 0.08][i]);
             audio.introThump([1, 0.85, 0.95][i], 0);
           });
@@ -6553,7 +6645,7 @@
         introFx(t0 + IT.water + 0.05, () => audio.introPlop(screenPan(2.4, 0, 2.4), 0.85));
         lilyParts.forEach((lp, i) => introFx(t0 + IT.water + 0.3 + i * 0.09, () => audio.introPlop(screenPan(lp.x, 0, lp.z), 1.15 + i * 0.12)));
         // objects: dust when the first slice lands, one "tok" when the top lands; the pitch climbs
-        // through the whole sequence instead of restarting per object
+        // through the whole sequence instead of restarting per object. Cabins also get a ring.
         events.sort((a, b) => a.top - b.top);
         events.forEach((ev, i) => {
           const pan = screenPan(ev.x, ev.y, ev.z), cabin = ev.def.type === '3d_cabin', big = introIsBig(ev.def);
@@ -6561,14 +6653,17 @@
           introFx(ev.first, () => burstDust(ev.x, ev.y, ev.z, n, r));
           introFx(ev.top, () => {
             audio.introClick(1 + 0.65 * i / Math.max(1, events.length - 1), pan, cabin);
-            if (cabin) introShake(0.06);
+            if (cabin) { introShake(0.06); spawnRing(ev.top, ev.x, ev.y + 0.03, ev.z, CABIN_RING); }
           });
         });
-        // lamps and fires catch one by one, evenly spaced, back to front
+        // lamps and fires catch one by one, evenly spaced, back to front, each with a few sparkles
         const lights = lightSources.slice().sort((a, b) => introDiag(a.x, a.z) - introDiag(b.x, b.z));
         const step = Math.min(0.14, IT.light[1] / Math.max(1, lights.length - 1));
         intro.ignite = lights.map((s, i) => ({ x: s.x, z: s.z, t: t0 + IT.light[0] + i * step }));
-        lights.forEach((s, i) => introFx(intro.ignite[i].t, () => audio.introIgnite(screenPan(s.x, s.baseY, s.z), 0.9 + i * 0.06)));
+        lights.forEach((s, i) => introFx(intro.ignite[i].t, () => {
+          spawnSparks(intro.ignite[i].t, s.x, s.baseY - 0.1, s.z);
+          audio.introIgnite(screenPan(s.x, s.baseY, s.z), 0.9 + i * 0.06);
+        }));
         campfireSpots.forEach((f) => introFx(introIgniteAt(f.x, f.z), () => { emberAcc += 10; }));
         // the HUD hops in
         if (withUI) introFx(t0 + IT.ui, popUI);
@@ -6582,10 +6677,9 @@
         wakeUI();
       }
 
-      // end of the assembly; skipped = jump straight to the finished island
-      function finishIntro(skipped) {
-        if (intro.phase !== 'assemble' && intro.phase !== 'crumble') return;
-        const wasCrumble = intro.phase === 'crumble';
+      // end of the assembly: put every intro offset back
+      function finishIntro() {
+        if (intro.phase !== 'assemble') return;
         intro.phase = 'done';
         for (let i = pendingFx.length - 1; i >= 0; i--) if (pendingFx[i].intro) pendingFx.splice(i, 1);
         islandRoot.position.set(0, 0, 0); islandRoot.rotation.set(0, 0, 0);
@@ -6594,20 +6688,9 @@
         waterMesh.visible = true; waterMesh.position.y = WATER_Y;
         lilyParts.forEach((lp) => lp.meshes.forEach((m) => m.scale.setScalar(1)));
         fenceGroup.visible = true; petalInst.visible = true;
-        if (skipped) {
-          if (wasCrumble) populateStarterIsland(false);
-          placedItems.forEach((e) => { e.spawnT = -100; });
-          freeProps.forEach((fp) => { fp.spawnT = -100; });
-          rebuildInstances(); // also restores path / crate visibility; cabins merge next frame
-          audio.introThump(0.7, 0);
-          introShake(0.05);
-        } else {
-          for (const im of [pathCenterInst, pathConnInst, pathCobbleInst, crateClutterInst]) im.visible = im.count > 0;
-        }
+        for (const im of [pathCenterInst, pathConnInst, pathCobbleInst, crateClutterInst]) im.visible = im.count > 0;
         markShadowsDirty(1.0);
-        if (document.body.classList.contains('booting')) {
-          if (skipped) { document.body.classList.remove('booting'); wakeUI(); } else popUI();
-        }
+        if (document.body.classList.contains('booting')) popUI();
       }
 
       // "처음 섬으로": tremble, fall away, assemble again
@@ -6625,39 +6708,41 @@
         introFx(now + CRUMBLE_LEN, () => { populateStarterIsland(false); startAssembly(false); });
       }
 
-      // loader: the finished island has been drawn a few times behind it
+      // the finished island has been drawn a few times behind the black (shaders and shadow map
+      // compiled): fade the black away while the assembly begins
       function onBootReady() {
-        loaderReady = true;
-        loaderEl.classList.add('ready');
-      }
-      // the start press is a user gesture, so sound can start here (on by default)
-      function beginFromLoader() {
-        loaderReady = false;
-        audio.setEnabled(true);
-        syncAudioIcon();
+        // sound is on by default, but browsers only allow it after a click or key: start it now
+        // if this browser already allows it, otherwise the first input does (see below)
+        audio.init();
+        if (audio.ctx.state === 'running') { audio.setEnabled(true); syncAudioIcon(); }
         loaderEl.classList.add('go');
-        setTimeout(() => loaderEl.remove(), 900);
-        startAssembly(true);
+        setTimeout(() => loaderEl.remove(), 1000);
+        startAssembly(true, FIRST_LEAD);
       }
-      if (!INTRO_ON) { loaderEl.classList.add('go'); setTimeout(() => loaderEl.remove(), 900); }
+      if (!INTRO_ON) { loaderEl.classList.add('go'); setTimeout(() => loaderEl.remove(), 1000); }
 
-      // input while not "done": the loader press starts, anything else skips; nothing reaches the
-      // game (no placing or key shortcuts mid-assembly). Wheel zoom is left alone.
-      function onIntroInput(e) {
+      // first click or key turns the sound on (unless the player switched it off). Registered
+      // before the input hold below, so it also counts during the assembly.
+      function unlockAudio(e) {
+        if (e.type === 'keydown' && (e.ctrlKey || e.metaKey || e.altKey || /^F\d+$/.test(e.key))) return;
+        if (audio.wantOn && !audio.enabled) { audio.setEnabled(true); syncAudioIcon(); }
+        if (audio.enabled || !audio.wantOn) {
+          window.removeEventListener('pointerdown', unlockAudio, true);
+          window.removeEventListener('keydown', unlockAudio, true);
+        }
+      }
+      window.addEventListener('pointerdown', unlockAudio, true);
+      window.addEventListener('keydown', unlockAudio, true);
+
+      // while the island assembles (or crumbles) nothing reaches the game: no placing, no key
+      // shortcuts, no HUD clicks. Wheel zoom is left alone; reload / devtools keys pass through.
+      function holdIntroInput(e) {
         if (intro.phase === 'done') return;
-        if (e.type === 'keydown' && (e.repeat || e.ctrlKey || e.metaKey || e.altKey || /^F\d+$/.test(e.key)
-          || ['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Tab'].includes(e.key))) return; // keep reload, devtools...
+        if (e.type === 'keydown' && (e.ctrlKey || e.metaKey || e.altKey || /^F\d+$/.test(e.key))) return;
         e.stopPropagation();
         e.preventDefault();
-        intro.swallowUntil = performance.now() + 450; // and the click that follows this press
-        if (intro.phase === 'boot') { if (loaderReady) beginFromLoader(); return; }
-        finishIntro(true);
       }
-      window.addEventListener('pointerdown', onIntroInput, true);
-      window.addEventListener('keydown', onIntroInput, true);
-      window.addEventListener('click', (e) => {
-        if (performance.now() < intro.swallowUntil) { e.stopPropagation(); e.preventDefault(); }
-      }, true);
+      for (const ev of ['pointerdown', 'keydown', 'click', 'contextmenu']) window.addEventListener(ev, holdIntroInput, true);
 
       // #debug=1: read-only state hook for automated tests (headless Chrome)
       if (HASH.debug === '1') {
@@ -6667,11 +6752,17 @@
             pan: [camPan.x, camPan.y], targetPan: [targetPan.x, targetPan.y],
             dist: camDist, targetDist: targetCamDist, elev: camElev * 180 / Math.PI, orbit: orbitAngle,
             placed: placedItems.size, free: freeProps.length, photo: isPhotoMode, exploded: isExploded,
-            intro: intro.phase, loaderReady
+            intro: intro.phase
           }),
           // startup assembly hooks for tools/tests/intro.mjs
           resetIsland: () => resetIsland(),
           frame: () => frameNo,
+          introFx: () => {
+            const live = [...sparkLife].map((l, i) => [l, i]).filter(([l]) => l > 0);
+            return { rings: impactRings.filter((r) => r.mesh.visible).length, sparks: sparkPoints.visible, live: live.length,
+              first: live.length ? [...sparkPos.slice(live[0][1] * 3, live[0][1] * 3 + 3)].map((v) => +v.toFixed(2)).concat(+sparkSize[live[0][1]].toFixed(1)) : null,
+              px: sharedUniforms.uPointScale.value, lights: intro.ignite.map((g) => [+g.x.toFixed(2), +g.z.toFixed(2), +(g.t - intro.t0).toFixed(2)]) };
+          },
           // hold the animation clock at `sec` seconds into the current assembly / crumble (null = run)
           introClock: (sec) => { debugClock = sec === null ? null : intro.t0 + sec; markShadowsDirty(3); },
           items: () => ITEM_DEFS.map((d) => ({ id: d.id, name: d.name, category: d.category, type: d.type, freePlace: d.freePlace, autoConnect: d.autoConnect })),

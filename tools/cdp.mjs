@@ -11,8 +11,10 @@ const [url, scriptFile] = process.argv.slice(2);
 const CHROME = process.env.CHROME || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const port = 9300 + Math.floor(Math.random() * 500);
 const prof = mkdtempSync(join(tmpdir(), 'mori-cdp-'));
+// AUTOPLAY=0 keeps Chrome's normal rule (no sound before the first click / key), like a real visit
+const autoplay = process.env.AUTOPLAY === '0' ? [] : ['--autoplay-policy=no-user-gesture-required'];
 const proc = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${prof}`,
-  '--enable-unsafe-swiftshader', '--use-angle=swiftshader', '--autoplay-policy=no-user-gesture-required', '--window-size=1000,640', 'about:blank'], { stdio: 'ignore' });
+  '--enable-unsafe-swiftshader', '--use-angle=swiftshader', ...autoplay, '--window-size=1000,640', 'about:blank'], { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let wsUrl;
