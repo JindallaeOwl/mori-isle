@@ -210,7 +210,7 @@
     .dock-sep {
       width: 1px;
       height: 40px;
-      margin: 0 2px 16px;
+      margin: 0 2px 4px;
       background: linear-gradient(transparent, rgba(244, 232, 204, 0.3), transparent);
     }
 
@@ -235,13 +235,6 @@
 
     .cat canvas { width: 48px; height: 48px; image-rendering: pixelated; }
     .tool svg { width: 24px; height: 24px; color: var(--ink); transition: transform 0.3s var(--spring); }
-
-    .key {
-      font-family: var(--font-small);
-      font-size: 10px;
-      color: var(--ink-dim);
-      transition: color 0.2s ease;
-    }
 
     /* warm pool of light behind the active slot */
     .cat::before, .tool::before {
@@ -276,7 +269,6 @@
 
     .cat.active::before, .tool.active::before { opacity: 1; transform: none; }
     .cat.active::after, .tool.active::after { opacity: 1; transform: none; }
-    .cat.active .key, .tool.active .key { color: var(--glow); }
     .tool.active.eraser::before { background: radial-gradient(closest-side, rgba(255, 120, 100, 0.45), transparent); }
     .tool.active.eraser::after { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
 
@@ -364,6 +356,20 @@
 
     #item-name.show { opacity: 1; transform: translate(-50%, 0); }
 
+    #hint {
+      position: fixed;
+      transform: translate(-50%, 3px);
+      color: var(--ink);
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      z-index: 60;
+      transition: opacity 0.15s ease, transform 0.22s var(--spring);
+    }
+
+    #hint.show { opacity: 1; transform: translate(-50%, 0); }
+    #hint .hint-key { font-family: var(--font-small); color: var(--glow); margin-left: 3px; }
+
     /* photo mode: a single faint close mark */
     #photo-exit-btn {
       position: fixed;
@@ -390,7 +396,6 @@
       .cat .icon, .tool .icon, .cat canvas { width: 40px; height: 40px; }
       .item { width: 42px; }
       .item canvas { width: 38px; height: 38px; }
-      .key { display: none; }
       #sys { gap: 2px; right: 10px; }
     }
   </style>
@@ -403,28 +408,28 @@
 
   <!-- Top right: icon-only system buttons -->
   <div id="sys" class="ui-layer lit">
-    <button class="sys-btn" id="btn-time" title="시간대"><span id="time-icon"></span></button>
-    <button class="sys-btn" id="btn-audio" title="배경음"><span id="audio-icon"></span></button>
-    <button class="sys-btn" id="btn-explode" title="분해 보기 (E)">
+    <button class="sys-btn" id="btn-time" aria-label="시간대" data-hint="시간대"><span id="time-icon"></span></button>
+    <button class="sys-btn" id="btn-audio" aria-label="배경음" data-hint="배경음"><span id="audio-icon"></span></button>
+    <button class="sys-btn" id="btn-explode" aria-label="분해 보기 (E)" data-hint="분해 보기 (E)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 12 12 17 22 12"/><polyline points="2 17 12 22 22 17"/></svg>
     </button>
-    <button class="sys-btn" id="btn-photo" title="감상 모드">
+    <button class="sys-btn" id="btn-photo" aria-label="감상 모드" data-hint="감상 모드">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
     </button>
     <div id="sys-sep"></div>
-    <button class="sys-btn" id="btn-reset" title="섬 초기화">
+    <button class="sys-btn" id="btn-reset" aria-label="섬 초기화" data-hint="섬 초기화">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
     </button>
-    <button class="sys-btn" id="btn-help" title="조작법 (H)">
+    <button class="sys-btn" id="btn-help" aria-label="조작법 (H)" data-hint="조작법 (H)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="M9.3 9.2a2.8 2.8 0 0 1 5.4 1c0 1.9-2.7 2.4-2.7 4"/><path d="M12 17.6h.01"/></svg>
     </button>
   </div>
 
   <div id="reset-popover" class="panel ui-layer lit">
-    <button class="pop-btn" id="pop-starter" title="처음 섬으로">
+    <button class="pop-btn" id="pop-starter" aria-label="처음 섬으로" data-hint="처음 섬으로">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21v-8"/><path d="M12 13c0-4 3-6 7-6 0 4-3 6-7 6z"/><path d="M12 15c0-3-2.4-5-6-5 0 3 2.4 5 6 5z"/><path d="M7 21h10"/></svg>
     </button>
-    <button class="pop-btn danger" id="pop-clear" title="모두 비우기">
+    <button class="pop-btn danger" id="pop-clear" aria-label="모두 비우기" data-hint="모두 비우기">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
     </button>
   </div>
@@ -446,19 +451,18 @@
   <div id="hud-dock" class="ui-layer lit">
     <div id="cat-container" style="display:flex;gap:inherit;align-items:flex-end"></div>
     <div class="dock-sep"></div>
-    <button class="tool eraser" id="btn-eraser" data-tool="delete" title="지우개 (X)">
+    <button class="tool eraser" id="btn-eraser" data-tool="delete" aria-label="지우개 (X)" data-hint="지우개 (X)">
       <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20H7L3 16c-.8-.8-.8-2 0-2.8l9.9-9.9c.8-.8 2-.8 2.8 0l5 5c.8.8.8 2 0 2.8L11.8 20"/><path d="M7.5 10.5l6 6"/></svg></span>
-      <span class="key">X</span>
     </button>
-    <button class="tool" id="btn-rotate" title="방향 돌리기 (R)">
+    <button class="tool" id="btn-rotate" aria-label="방향 돌리기 (R)" data-hint="방향 돌리기 (R)">
       <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg></span>
-      <span class="key">R</span>
     </button>
   </div>
 
   <div id="item-name" class="lit"></div>
+  <div id="hint" class="lit"></div>
 
-  <button id="photo-exit-btn" class="lit" title="감상 모드 끝내기 (Esc)">
+  <button id="photo-exit-btn" class="lit" aria-label="감상 모드 끝내기 (Esc)" data-hint="감상 모드 끝내기 (Esc)">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
   </button>
 
@@ -1632,16 +1636,26 @@
       return { def, geometry };
     }
 
-    // Small iso icon rendered from the real mesh (HDR target -> gamma -> 40px canvas)
+    // Small iso icon rendered from the real model (HDR target -> gamma -> 40px canvas)
     function renderSoupIcon(renderer, geometry) {
+      const mat = makeSoupMaterial(null);
+      const c = renderObjectIcon(renderer, new THREE.Mesh(geometry, mat));
+      mat.dispose();
+      return c;
+    }
+    const _iconBox = new THREE.Box3(), _iconSphere = new THREE.Sphere();
+    function renderObjectIcon(renderer, object) {
       const N = 40, SS = 2, W = N * SS;
       const rt = new THREE.WebGLRenderTarget(W, W, { type: THREE.HalfFloatType });
       const scene = new THREE.Scene();
-      const mat = makeSoupMaterial(null);
-      scene.add(new THREE.Mesh(geometry, mat));
+      const parent = object.parent;
+      scene.add(object);
       scene.add(new THREE.HemisphereLight(0xdde8ff, 0x4a3a30, 1.3));
       const sun = new THREE.DirectionalLight(0xfff0dc, 2.6); sun.position.set(-2, 5, 3); scene.add(sun);
-      const bs = geometry.boundingSphere, r = bs.radius * 0.92;
+      object.updateMatrixWorld(true);
+      const bs = _iconBox.setFromObject(object).getBoundingSphere(_iconSphere), r = bs.radius * 0.92;
+      const prevFog = sharedUniforms.uFogDensity.value;
+      sharedUniforms.uFogDensity.value = 0; // scene materials add low mist near y=0: keep icons clean
       const cam = new THREE.OrthographicCamera(-r, r, r, -r, 0.01, 100);
       cam.position.copy(bs.center).add(new THREE.Vector3(1, 0.85, 1).normalize().multiplyScalar(20));
       cam.lookAt(bs.center);
@@ -1653,7 +1667,10 @@
       renderer.readRenderTargetPixels(rt, 0, 0, W, W, buf);
       renderer.setRenderTarget(prevRT); renderer.setClearColor(prevCol, prevA);
       renderer.shadowMap.needsUpdate = prevShadowNeeds;
-      rt.dispose(); mat.dispose();
+      sharedUniforms.uFogDensity.value = prevFog;
+      scene.remove(object);
+      if (parent) parent.add(object);
+      rt.dispose();
       const c = document.createElement('canvas'); c.width = N; c.height = N;
       const ctx = c.getContext('2d'), img = ctx.createImageData(N, N);
       const half = THREE.DataUtils.fromHalfFloat, enc = (x) => Math.round(255 * Math.pow(clamp(x * 1.1, 0, 1), 1 / 2.2));
@@ -3994,6 +4011,54 @@
         ghostMeshesById[def.id] = ghostMesh;
       });
 
+      // Icons for the items that are not Soup props, rendered from their real 3D parts
+      // (same look as in the scene, instead of hand-drawn 2D icons).
+      {
+        const iconOf = (id, obj) => { if (assetsById[id]) assetsById[id].iconCanvas = renderObjectIcon(renderer, obj); };
+        // cabin: the merged prefab itself
+        const cabin = buildStorybookCabinPrefab();
+        mergeCabinPrefab(cabin);
+        iconOf('cabin', cabin);
+        disposeObjectTree(cabin);
+        // path: a short run of dirt with stepping stones on a grass tile
+        const grassMat = new THREE.MeshStandardMaterial({ color: '#6fae4e', roughness: 0.95 });
+        const path = new THREE.Group();
+        const tile = new THREE.Mesh(createBeveledBoxGeometry(1.0, 0.1, 1.3, 0.03), grassMat); tile.position.y = -0.05; path.add(tile);
+        const pc = new THREE.Mesh(pathDirtGeo, pathDirtMat); pc.position.y = 0.014; path.add(pc);
+        for (const dz of [-1, 1]) { const m = new THREE.Mesh(pathConnGeo, pathDirtMat); m.position.set(0, 0.013, dz * 0.36); path.add(m); }
+        [[0.1, -0.2, 1.0], [-0.1, 0.12, 0.85], [0.06, 0.45, 0.75], [-0.04, -0.5, 0.8]].forEach(([x, z, s], i) => {
+          const m = new THREE.Mesh(cobbleGeo, cobbleMat); m.position.set(x, 0.034, z); m.scale.set(s, 1, s * 0.85); m.rotation.y = i; path.add(m);
+        });
+        iconOf('path', path);
+        // fence: three posts joined by rails
+        const fence = new THREE.Group();
+        for (const x of [-0.56, 0, 0.56]) { const p = new THREE.Mesh(fencePostGeo, fenceWoodMat); p.position.set(x, 0.18, 0); fence.add(p); }
+        for (const x of [-0.28, 0.28]) for (const y of [0.13, 0.27]) {
+          const r = new THREE.Mesh(fenceRailGeo, fenceRailMat); r.position.set(x, y, 0); r.rotation.y = Math.PI / 2; fence.add(r);
+        }
+        iconOf('fence', fence);
+        // campfire: the stacked fire ring plus a little flame (in the scene the flame is a shader billboard)
+        const cf = assetsById.campfire;
+        if (cf && cf.colorTex) {
+          const ringMat = new THREE.MeshStandardMaterial({
+            map: cf.colorTex, emissive: '#ffffff', emissiveMap: cf.emTex, emissiveIntensity: 1.5,
+            alphaTest: 0.5, vertexColors: true, roughness: 0.78, side: THREE.DoubleSide
+          });
+          const fire = new THREE.Group();
+          fire.add(new THREE.Mesh(cf.geometry, ringMat));
+          const F = new Soup();
+          F.cone(0.13, 0.34, 0, 0.3, 0, C('#ff7a26'), { n: 5, emis: 0.55, jit: 0 });
+          F.cone(0.08, 0.24, 0.035, 0.27, 0.02, C('#ffd060'), { n: 5, emis: 0.9, jit: 0 });
+          F.cone(0.05, 0.16, -0.06, 0.22, -0.03, C('#ffb040'), { n: 4, emis: 0.7, jit: 0, r: [0, 0, 0.3] });
+          const flameMat = makeSoupMaterial(null);
+          const flame = new THREE.Mesh(F.build({ ao: null }), flameMat);
+          fire.add(flame);
+          iconOf('campfire', fire);
+          ringMat.dispose(); flameMat.dispose(); flame.geometry.dispose();
+        }
+        grassMat.dispose();
+      }
+
       // --- GHIBLI-STYLE FLUFFY CURVED GRASS TUFT GEOMETRY (InstancedMesh + Upward Normals) ---
       // 4 plump outward-curving blades per clump; root matches ground grass, tips glow warm yellow-green.
       function createGhibliGrassTuftGeometry() {
@@ -5311,14 +5376,11 @@
         });
         const btn = document.createElement('button');
         btn.className = 'cat';
-        btn.title = `${cat.name} (${ci + 1})`;
+        btn.setAttribute('aria-label', `${cat.name} (${ci + 1})`); // no native tooltip: the tray says it all
         const slotIcon = document.createElement('span');
         slotIcon.className = 'icon';
         slotIcon.appendChild(iconCopy(items[0]));
-        const key = document.createElement('span');
-        key.className = 'key';
-        key.textContent = ci + 1;
-        btn.append(slotIcon, key);
+        btn.append(slotIcon);
         // click/tap: pick the slot's item and toggle the tray (touch has no hover)
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -5360,6 +5422,28 @@
         }
         selectTool(id, true);
       }
+
+      // in-style hover labels for icon buttons (replaces the browser's title tooltip):
+      // appear after a short hover, below the top-right icons and above the dock tools
+      const hintEl = document.getElementById('hint');
+      let hintTimer = 0;
+      document.querySelectorAll('[data-hint]').forEach((el) => {
+        el.addEventListener('mouseenter', () => {
+          clearTimeout(hintTimer);
+          hintTimer = setTimeout(() => {
+            const r = el.getBoundingClientRect(), m = el.dataset.hint.match(/^(.*?)\s*\((.+)\)$/);
+            hintEl.innerHTML = m ? `${m[1]} <span class="hint-key">${m[2]}</span>` : el.dataset.hint;
+            const below = r.top < window.innerHeight / 2;
+            hintEl.style.left = `${Math.round(r.left + r.width / 2)}px`;
+            hintEl.style.top = below ? `${Math.round(r.bottom + 6)}px` : '';
+            hintEl.style.bottom = below ? '' : `${Math.round(window.innerHeight - r.top + 6)}px`;
+            hintEl.classList.add('show');
+          }, 320);
+        });
+        const hide = () => { clearTimeout(hintTimer); hintEl.classList.remove('show'); };
+        el.addEventListener('mouseleave', hide);
+        el.addEventListener('pointerdown', hide);
+      });
 
       // help panel
       const helpPanel = document.getElementById('help-panel');

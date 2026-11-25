@@ -11,6 +11,8 @@ export default async ({ wait, evaluate, mouse, key, log }) => {
 
   ok('five category slots', (await J(`document.querySelectorAll('.cat').length`)) === 5);
   ok('no instruction banner or counter', !(await J(`!!document.querySelector('.hints-pill, #item-counter, #active-item-label')`)));
+  ok('no browser tooltips on HUD buttons', (await J(`document.querySelectorAll('#hud-dock [title], #sys [title], .panel [title]').length`)) === 0);
+  ok('no key numbers under the dock icons', (await J(`document.querySelectorAll('#hud-dock .key').length`)) === 0);
 
   // hover category 4 -> tray opens; move up onto an item and click it
   const r = await J(`document.querySelectorAll('.cat')[3].getBoundingClientRect()`);
