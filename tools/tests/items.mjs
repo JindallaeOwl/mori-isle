@@ -16,7 +16,7 @@ export default async ({ wait, evaluate, mouse, key, log }) => {
   ok('names carry no placement notes', !items.some((d) => /\(|자유배치|자동연결/.test(d.name)), items.map((d) => d.name).join(' / '));
   const order = items.map((d) => cats.indexOf(d.category));
   ok('palette is grouped by category', order.every((v, i) => i === 0 || v >= order[i - 1]));
-  const btnCats = await J(`[...document.querySelectorAll('.slot-btn[data-tool]')].filter(b => b.dataset.tool !== 'delete').map(b => b.dataset.category)`);
+  const btnCats = await J(`[...document.querySelectorAll('#hud-dock .item[data-tool]')].filter(b => b.dataset.tool !== 'delete').map(b => b.dataset.category)`);
   ok('palette buttons know their category', btnCats.length === items.length && btnCats.every((c) => cats.includes(c)));
 
   // candidate tiles on the open front lawn (away from the pond and the starter cabin)
@@ -28,7 +28,7 @@ export default async ({ wait, evaluate, mouse, key, log }) => {
   }
   let ti = 0;
   const placeSomewhere = async (tool) => {
-    await evaluate(`document.querySelector('.slot-btn[data-tool="${tool}"]').click()`);
+    await evaluate(`document.querySelector('#hud-dock [data-tool="${tool}"]').click()`);
     await wait(300);
     for (let tries = 0; tries < 14 && ti < tiles.length; tries++) {
       const [wx, wz] = tiles[ti++];

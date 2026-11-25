@@ -5,10 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Mori Isle — Cozy 3D Miniature Diorama</title>
 
-  <!-- Clean cozy UI typography -->
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Silkscreen:wght@400;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/galmuri@2.40.3/dist/galmuri.css" />
 
   <!-- Three.js ES Module Import Map -->
   <script type="importmap">
@@ -21,18 +18,16 @@
 
   <style>
     :root {
-      --ui-bg: rgba(24, 22, 32, 0.80);
-      --ui-bg-hover: rgba(44, 40, 56, 0.92);
-      --ui-border: rgba(247, 235, 210, 0.24);
-      --ui-border-active: #f7cf78;
-      --ui-text: #f8f2e6;
-      --ui-muted: #c7beab;
-      --ui-accent: #8fd18a;
-      --ui-sky: #7ec8f2;
-      --ui-danger: #eb8181;
-      --ui-shadow: 0 10px 30px rgba(8, 6, 16, 0.45);
-      --font-display: 'Silkscreen', 'Courier New', monospace;
-      --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+      --ink: #f4e8cc;          /* warm cream for icons and the few words left */
+      --ink-dim: rgba(244, 232, 204, 0.5);
+      --glow: #ffc45e;         /* lamp light = "this is selected" */
+      --glow-soft: rgba(255, 184, 84, 0.5);
+      --danger: #ff8f7a;
+      --scrim: rgba(3, 6, 16, 0.72); /* bottom shade, retinted per time of day from JS */
+      --halo: rgba(4, 6, 14, 0.55);  /* shade behind an open tray, also per time of day */
+      --spring: cubic-bezier(.34, 1.56, .64, 1);
+      --font: 'Galmuri11', 'Galmuri9', monospace;
+      --font-small: 'Galmuri9', 'Galmuri11', monospace;
     }
 
     * {
@@ -49,8 +44,9 @@
       height: 100%;
       overflow: hidden;
       background-color: #161d30;
-      font-family: var(--font-body);
-      color: var(--ui-text);
+      font-family: var(--font);
+      font-size: 12px;
+      color: var(--ink);
     }
 
     #canvas-container {
@@ -61,9 +57,7 @@
       cursor: crosshair;
     }
 
-    #canvas-container.dragging {
-      cursor: grabbing;
-    }
+    #canvas-container.dragging { cursor: grabbing; }
 
     #canvas-container canvas {
       display: block;
@@ -71,7 +65,25 @@
       height: 100% !important;
     }
 
-    /* Smooth UI hide for Photo Mode */
+    button {
+      font: inherit;
+      color: inherit;
+      background: none;
+      border: 0;
+      padding: 0;
+      cursor: pointer;
+    }
+
+    button:focus-visible {
+      outline: 1px dashed var(--glow);
+      outline-offset: 3px;
+    }
+
+    /* everything drawn over the scene shares one drop shadow so it reads on day and night */
+    .lit {
+      filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.75)) drop-shadow(0 0 5px rgba(0, 0, 0, 0.45));
+    }
+
     .ui-layer {
       transition: opacity 0.4s ease, transform 0.4s ease;
     }
@@ -79,437 +91,307 @@
     body.photo-mode .ui-layer {
       opacity: 0;
       pointer-events: none !important;
-      transform: translateY(14px);
     }
 
-    body.photo-mode #top-bar {
-      transform: translateY(-14px);
-    }
+    body.photo-mode #hud-dock { transform: translate(-50%, 16px); }
+    body.photo-mode #sys { transform: translateY(-16px); }
 
-    /* Top bar */
-    #top-bar {
+    /* untouched for a while: the UI steps back so the diorama is the only thing on screen */
+    body.ui-idle:not(.photo-mode) .ui-layer { opacity: 0.32; }
+
+    #hud-scrim {
       position: fixed;
-      top: 14px;
-      left: 16px;
-      right: 16px;
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 12px;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 150px;
+      background: linear-gradient(to bottom, transparent, var(--scrim));
       pointer-events: none;
+      z-index: 5;
+      transition: background 1.2s ease, opacity 0.4s ease;
+    }
+
+    /* ---------- top right: icon-only system buttons ---------- */
+    #sys {
+      position: fixed;
+      top: 16px;
+      right: 18px;
+      display: flex;
+      gap: 6px;
       z-index: 20;
     }
 
-    .top-right-group {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      pointer-events: none;
+    .sys-btn {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      color: var(--ink);
+      transition: transform 0.22s var(--spring), color 0.2s ease;
     }
 
-    .brand-pill {
-      pointer-events: auto;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 9px 14px;
-      background: var(--ui-bg);
-      border: 1.5px solid var(--ui-border);
-      border-radius: 14px;
-      box-shadow: var(--ui-shadow);
-      backdrop-filter: blur(10px);
+    .sys-btn svg { width: 19px; height: 19px; }
+    .sys-btn:hover { transform: scale(1.18) translateY(-1px); }
+    .sys-btn:active { transform: scale(0.92); }
+    .sys-btn.on { color: var(--glow); }
+    .sys-btn.on svg { filter: drop-shadow(0 0 6px var(--glow-soft)); }
+
+    #sys-sep {
+      width: 1px;
+      margin: 8px 4px;
+      background: linear-gradient(transparent, rgba(244, 232, 204, 0.35), transparent);
     }
 
-    .brand-dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: var(--ui-accent);
-      box-shadow: 0 0 10px rgba(143, 209, 138, 0.75);
-      flex-shrink: 0;
-    }
-
-    .brand-title {
-      font-family: var(--font-display);
-      font-size: 13px;
-      letter-spacing: 0.06em;
-      color: #fff6e3;
-      line-height: 1.1;
-    }
-
-    .brand-sub {
-      font-size: 12px;
-      color: var(--ui-muted);
-      line-height: 1.2;
-      margin-top: 2px;
-    }
-
-    .hints-pill {
-      pointer-events: auto;
-      padding: 8px 13px;
-      background: rgba(20, 18, 28, 0.68);
-      border: 1.5px solid rgba(244, 232, 206, 0.16);
-      border-radius: 12px;
-      font-size: 12px;
-      color: #dfd6c5;
-      backdrop-filter: blur(8px);
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      align-items: center;
-    }
-
-    .hint-key {
-      display: inline-block;
-      padding: 1px 6px;
-      border-radius: 5px;
-      background: rgba(255, 255, 255, 0.12);
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      color: #ffe2a8;
-      font-size: 11px;
-      font-weight: 600;
-      margin-right: 4px;
-    }
-
-    /* Prominent Exploded View Toggle Pill */
-    #btn-explode-top {
-      pointer-events: auto;
-      height: 40px;
-      padding: 0 14px;
-      border-radius: 12px;
-      border: 1.5px solid rgba(126, 200, 242, 0.45);
-      background: rgba(24, 26, 40, 0.84);
-      color: #e4f4ff;
-      font-family: var(--font-body);
-      font-weight: 600;
-      font-size: 12px;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      box-shadow: var(--ui-shadow);
-      backdrop-filter: blur(10px);
-      transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
-    }
-
-    #btn-explode-top:hover {
-      background: rgba(36, 42, 62, 0.94);
-      border-color: var(--ui-sky);
-      transform: translateY(-2px);
-    }
-
-    #btn-explode-top.active {
-      background: rgba(126, 200, 242, 0.24);
-      border-color: #9ce0ff;
-      color: #ffffff;
-      box-shadow: 0 0 18px rgba(126, 200, 242, 0.42);
-    }
-
-    #btn-explode-top svg {
-      width: 16px;
-      height: 16px;
-    }
-
-    /* Bottom Floating Dock */
-    #hud-dock {
+    /* small floating panels under the system buttons */
+    .panel {
       position: fixed;
-      bottom: 16px;
-      left: 50%;
-      transform: translateX(-50%);
-      max-width: calc(100vw - 20px);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 8px;
-      z-index: 25;
-      pointer-events: none;
-    }
-
-    #active-item-label {
-      pointer-events: none;
-      padding: 5px 14px;
-      border-radius: 999px;
-      background: rgba(20, 18, 28, 0.8);
-      border: 1.5px solid rgba(244, 232, 206, 0.2);
-      font-family: var(--font-body);
-      font-weight: 600;
-      font-size: 12px;
-      color: #ffe8b6;
-      letter-spacing: 0.02em;
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
-      white-space: nowrap;
-      backdrop-filter: blur(8px);
-    }
-
-    .mode-tag {
-      display: inline-block;
-      margin-left: 6px;
-      padding: 1px 6px;
-      border-radius: 999px;
-      font-size: 10px;
-      font-weight: 700;
-      background: rgba(143, 209, 138, 0.2);
-      color: #b7f0b2;
-      border: 1px solid rgba(143, 209, 138, 0.4);
-    }
-
-    .mode-tag.free {
-      background: rgba(247, 207, 120, 0.22);
-      color: #ffe2a8;
-      border-color: rgba(247, 207, 120, 0.45);
-    }
-
-    .dock-bar {
-      pointer-events: auto;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 8px 10px;
-      background: var(--ui-bg);
-      border: 1.5px solid var(--ui-border);
-      border-radius: 18px;
-      box-shadow: var(--ui-shadow);
-      backdrop-filter: blur(12px);
-      overflow-x: auto;
-      max-width: calc(100vw - 20px);
-      scrollbar-width: none;
-    }
-
-    .dock-bar::-webkit-scrollbar {
-      display: none;
-    }
-
-    .palette-group, .tools-group {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      flex-shrink: 0;
-    }
-
-    .dock-divider {
-      width: 1.5px;
-      height: 36px;
-      background: rgba(244, 232, 206, 0.18);
-      border-radius: 2px;
-      margin: 0 4px;
-      flex-shrink: 0;
-    }
-
-    .slot-btn {
-      position: relative;
-      width: 46px;
-      height: 46px;
-      padding: 3px;
-      border-radius: 12px;
-      border: 1.5px solid rgba(244, 232, 206, 0.16);
-      background: rgba(255, 255, 255, 0.05);
-      color: var(--ui-text);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: transform 0.14s ease, border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
-      flex-shrink: 0;
-    }
-
-    .slot-btn:hover {
-      background: rgba(255, 255, 255, 0.13);
-      border-color: rgba(244, 232, 206, 0.45);
-      transform: translateY(-2px);
-    }
-
-    .slot-btn:active {
-      transform: translateY(0px) scale(0.96);
-    }
-
-    .slot-btn.active {
-      background: rgba(247, 208, 122, 0.22);
-      border-color: var(--ui-border-active);
-      box-shadow: 0 0 14px rgba(247, 208, 122, 0.35), inset 0 0 8px rgba(247, 208, 122, 0.15);
-      transform: translateY(-3px);
-    }
-
-    .slot-btn.free-prop::after {
-      content: '';
-      position: absolute;
-      top: 4px;
-      right: 4px;
-      width: 5px;
-      height: 5px;
-      border-radius: 50%;
-      background: #ffd88c;
-      opacity: 0.75;
-    }
-
-    .slot-btn.delete-btn.active {
-      background: rgba(235, 129, 129, 0.24);
-      border-color: var(--ui-danger);
-      box-shadow: 0 0 14px rgba(235, 129, 129, 0.35);
-    }
-
-    .slot-btn canvas {
-      width: 38px;
-      height: 38px;
-      pointer-events: none;
-    }
-
-    .action-btn {
-      height: 44px;
-      min-width: 44px;
-      padding: 0 10px;
-      border-radius: 12px;
-      border: 1.5px solid rgba(244, 232, 206, 0.18);
-      background: rgba(255, 255, 255, 0.06);
-      color: var(--ui-text);
-      font-family: var(--font-display);
-      font-size: 10px;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      transition: transform 0.14s ease, border-color 0.14s ease, background 0.14s ease;
-      flex-shrink: 0;
-    }
-
-    .action-btn:hover {
-      background: rgba(255, 255, 255, 0.14);
-      border-color: rgba(244, 232, 206, 0.45);
-      transform: translateY(-2px);
-    }
-
-    .action-btn:active {
-      transform: scale(0.96);
-    }
-
-    .action-btn.on {
-      border-color: var(--ui-accent);
-      background: rgba(143, 209, 138, 0.18);
-      color: #e4ffe0;
-    }
-
-    .action-btn svg {
-      width: 18px;
-      height: 18px;
-      flex-shrink: 0;
-    }
-
-    .rot-badge {
-      font-family: var(--font-body);
-      font-weight: 700;
-      font-size: 12px;
-      color: #ffd88c;
-      min-width: 24px;
-      text-align: center;
-    }
-
-    /* Reset Confirmation Popover */
-    #reset-popover {
-      position: fixed;
-      bottom: 96px;
-      left: 50%;
-      transform: translateX(-50%) scale(0.95);
-      background: rgba(24, 22, 34, 0.96);
-      border: 1.5px solid var(--ui-border);
-      border-radius: 14px;
-      padding: 13px 16px;
-      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 10px;
-      z-index: 40;
+      top: 58px;
+      right: 18px;
+      z-index: 30;
+      padding: 12px 14px;
+      background: rgba(10, 12, 22, 0.78);
+      border-radius: 3px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(6px);
       opacity: 0;
+      transform: translateY(-6px);
       pointer-events: none;
-      transition: opacity 0.2s ease, transform 0.2s ease;
-      backdrop-filter: blur(12px);
+      transition: opacity 0.18s ease, transform 0.25s var(--spring);
     }
 
-    #reset-popover.open {
+    .panel.open {
       opacity: 1;
+      transform: none;
       pointer-events: auto;
-      transform: translateX(-50%) scale(1);
     }
 
-    .popover-title {
-      font-family: var(--font-display);
-      font-size: 11px;
-      color: #ffe8b6;
-      text-align: center;
+    #help-panel {
+      display: grid;
+      grid-template-columns: auto auto;
+      gap: 6px 16px;
+      line-height: 1.25;
     }
 
-    .popover-actions {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      justify-content: center;
+    #help-panel b {
+      font-family: var(--font-small);
+      font-weight: 400;
+      color: var(--glow);
+      text-align: right;
+      white-space: nowrap;
     }
+
+    #reset-popover { display: flex; gap: 10px; padding: 10px; }
 
     .pop-btn {
-      padding: 7px 12px;
-      border-radius: 9px;
-      border: 1.5px solid rgba(244, 232, 206, 0.25);
-      background: rgba(255, 255, 255, 0.08);
-      color: var(--ui-text);
-      font-family: var(--font-display);
+      width: 40px;
+      height: 40px;
+      display: grid;
+      place-items: center;
+      color: var(--ink);
+      transition: transform 0.22s var(--spring), color 0.15s ease;
+    }
+
+    .pop-btn svg { width: 21px; height: 21px; }
+    .pop-btn:hover { transform: scale(1.15); color: var(--glow); }
+    .pop-btn.danger:hover { color: var(--danger); }
+
+    /* ---------- bottom: category dock ---------- */
+    #hud-dock {
+      position: fixed;
+      bottom: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: flex-end;
+      gap: 14px;
+      z-index: 25;
+    }
+
+    .dock-sep {
+      width: 1px;
+      height: 40px;
+      margin: 0 2px 16px;
+      background: linear-gradient(transparent, rgba(244, 232, 204, 0.3), transparent);
+    }
+
+    .cat-wrap { position: relative; }
+
+    .cat, .tool {
+      position: relative;
+      width: 56px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+    }
+
+    .cat .icon, .tool .icon {
+      width: 48px;
+      height: 48px;
+      display: grid;
+      place-items: center;
+      transition: transform 0.28s var(--spring);
+    }
+
+    .cat canvas { width: 48px; height: 48px; image-rendering: pixelated; }
+    .tool svg { width: 24px; height: 24px; color: var(--ink); transition: transform 0.3s var(--spring); }
+
+    .key {
+      font-family: var(--font-small);
       font-size: 10px;
-      cursor: pointer;
-      transition: background 0.15s, border-color 0.15s;
+      color: var(--ink-dim);
+      transition: color 0.2s ease;
     }
 
-    .pop-btn:hover {
-      background: rgba(255, 255, 255, 0.16);
+    /* warm pool of light behind the active slot */
+    .cat::before, .tool::before {
+      content: '';
+      position: absolute;
+      left: -6px;
+      right: -6px;
+      top: -6px;
+      height: 62px;
+      background: radial-gradient(closest-side, rgba(255, 178, 80, 0.5), transparent);
+      opacity: 0;
+      transform: scale(0.6);
+      transition: opacity 0.25s ease, transform 0.35s var(--spring);
+      pointer-events: none;
     }
 
-    .pop-btn.danger {
-      border-color: rgba(235, 129, 129, 0.6);
-      background: rgba(235, 129, 129, 0.2);
-      color: #ffd5d5;
+    .cat::after, .tool::after {
+      content: '';
+      position: absolute;
+      bottom: -5px;
+      width: 18px;
+      height: 2px;
+      background: var(--glow);
+      box-shadow: 0 0 8px var(--glow);
+      opacity: 0;
+      transform: scaleX(0.2);
+      transition: opacity 0.2s ease, transform 0.3s var(--spring);
     }
 
-    .pop-btn.primary {
-      border-color: rgba(143, 209, 138, 0.6);
-      background: rgba(143, 209, 138, 0.2);
-      color: #e4ffe0;
+    .cat-wrap:hover .cat .icon, .cat-wrap.open .cat .icon, .tool:hover .icon { transform: translateY(-5px) scale(1.16); }
+    .cat:active .icon, .tool:active .icon { transform: scale(0.92); }
+
+    .cat.active::before, .tool.active::before { opacity: 1; transform: none; }
+    .cat.active::after, .tool.active::after { opacity: 1; transform: none; }
+    .cat.active .key, .tool.active .key { color: var(--glow); }
+    .tool.active.eraser::before { background: radial-gradient(closest-side, rgba(255, 120, 100, 0.45), transparent); }
+    .tool.active.eraser::after { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+
+    /* the item tray that rises out of a category */
+    .tray {
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      display: flex;
+      gap: 4px;
+      padding: 0 10px 14px;  /* bottom padding bridges the gap so the hover never drops */
+      transform: translateX(-50%);
+      pointer-events: none;
     }
 
-    /* Photo Mode Corner Exit Button */
+    .tray::before { /* soft dark halo instead of a box */
+      content: '';
+      position: absolute;
+      inset: -18px -10px 8px;
+      background: radial-gradient(ellipse at 50% 60%, var(--halo), transparent 70%);
+      opacity: 0;
+      transition: opacity 0.2s ease;
+      pointer-events: none;
+    }
+
+    .cat-wrap.open .tray { pointer-events: auto; }
+    .cat-wrap.open .tray::before { opacity: 1; }
+
+    .item {
+      position: relative;
+      width: 48px;
+      height: 52px;
+      display: grid;
+      place-items: center;
+      opacity: 0;
+      transform: translateY(12px) scale(0.6);
+      transition: opacity 0.16s ease, transform 0.32s var(--spring);
+      transition-delay: 0s;
+    }
+
+    .cat-wrap.open .item {
+      opacity: 1;
+      transform: none;
+      transition-delay: calc(var(--i) * 28ms);
+    }
+
+    .item canvas {
+      width: 44px;
+      height: 44px;
+      image-rendering: pixelated;
+      transition: transform 0.25s var(--spring);
+    }
+
+    .item:hover canvas { transform: translateY(-4px) scale(1.22); }
+    .item:active canvas { transform: scale(0.9); }
+
+    .item::after {
+      content: '';
+      position: absolute;
+      bottom: 1px;
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--glow);
+      box-shadow: 0 0 6px var(--glow);
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+
+    .item.active::after { opacity: 1; }
+
+    /* one quiet line of text: the name of what you point at or just picked */
+    #item-name {
+      position: fixed;
+      left: 50%;
+      bottom: 150px;
+      transform: translate(-50%, 4px);
+      color: #ffe6b0;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      z-index: 26;
+      transition: opacity 0.18s ease, transform 0.25s var(--spring);
+    }
+
+    #item-name.show { opacity: 1; transform: translate(-50%, 0); }
+
+    /* photo mode: a single faint close mark */
     #photo-exit-btn {
       position: fixed;
       top: 16px;
-      right: 16px;
-      padding: 8px 14px;
-      border-radius: 10px;
-      border: 1.5px solid rgba(255, 245, 224, 0.3);
-      background: rgba(22, 20, 30, 0.55);
-      color: #fff3d6;
-      font-family: var(--font-display);
-      font-size: 10px;
-      cursor: pointer;
+      right: 18px;
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      color: var(--ink);
       z-index: 50;
       opacity: 0;
       pointer-events: none;
-      transition: opacity 0.25s ease, background 0.2s ease;
-      backdrop-filter: blur(8px);
+      transition: opacity 0.25s ease, transform 0.22s var(--spring);
     }
 
-    body.photo-mode #photo-exit-btn {
-      opacity: 0.42;
-      pointer-events: auto;
-    }
+    #photo-exit-btn svg { width: 18px; height: 18px; }
+    body.photo-mode #photo-exit-btn { opacity: 0.4; pointer-events: auto; }
+    body.photo-mode #photo-exit-btn:hover { opacity: 1; transform: scale(1.15); }
 
-    body.photo-mode #photo-exit-btn:hover,
-    body.photo-mode #photo-exit-btn:focus {
-      opacity: 1;
-      background: rgba(22, 20, 30, 0.88);
-    }
-
-    @media (max-width: 960px) {
-      .hints-pill { display: none; }
-      .slot-btn { width: 42px; height: 42px; }
-      .slot-btn canvas { width: 34px; height: 34px; }
-      .action-btn { height: 40px; min-width: 40px; padding: 0 8px; }
-      .btn-text-hide-sm { display: none; }
+    @media (max-width: 760px) {
+      #hud-dock { gap: 6px; bottom: 10px; }
+      .cat, .tool { width: 46px; }
+      .cat .icon, .tool .icon, .cat canvas { width: 40px; height: 40px; }
+      .item { width: 42px; }
+      .item canvas { width: 38px; height: 38px; }
+      .key { display: none; }
+      #sys { gap: 2px; right: 10px; }
     }
   </style>
 </head>
@@ -517,90 +399,68 @@
   <!-- WebGL Viewport -->
   <div id="canvas-container"></div>
 
-  <!-- Top Branding, Controls Hint & Exploded View Toggle -->
-  <div id="top-bar" class="ui-layer">
-    <div class="brand-pill">
-      <div class="brand-dot" id="time-dot"></div>
-      <div>
-        <div class="brand-title">MORI ISLE</div>
-        <div class="brand-sub" id="item-counter">Miniature Diorama</div>
-      </div>
-    </div>
+  <div id="hud-scrim" class="ui-layer"></div>
 
-    <div class="top-right-group">
-      <div class="hints-pill">
-        <span><span class="hint-key">L-Click</span>Place</span>
-        <span><span class="hint-key">R-Click</span>Remove</span>
-        <span><span class="hint-key">R-Drag</span>Orbit</span>
-        <span><span class="hint-key">R</span>Rotate</span>
-        <span><span class="hint-key">E</span>Explode</span>
-      </div>
-
-      <button id="btn-explode-top" title="디오라마 층별 분해 보기 (E)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
-          <polygon points="12 2 2 7 12 12 22 7 12 2" />
-          <polyline points="2 12 12 17 22 12" />
-          <polyline points="2 17 12 22 22 17" />
-        </svg>
-        <span id="explode-btn-text">디오라마 분해 보기</span>
-      </button>
-    </div>
+  <!-- Top right: icon-only system buttons -->
+  <div id="sys" class="ui-layer lit">
+    <button class="sys-btn" id="btn-time" title="시간대"><span id="time-icon"></span></button>
+    <button class="sys-btn" id="btn-audio" title="배경음"><span id="audio-icon"></span></button>
+    <button class="sys-btn" id="btn-explode" title="분해 보기 (E)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 12 12 17 22 12"/><polyline points="2 17 12 22 22 17"/></svg>
+    </button>
+    <button class="sys-btn" id="btn-photo" title="감상 모드">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+    </button>
+    <div id="sys-sep"></div>
+    <button class="sys-btn" id="btn-reset" title="섬 초기화">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+    </button>
+    <button class="sys-btn" id="btn-help" title="조작법 (H)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="M9.3 9.2a2.8 2.8 0 0 1 5.4 1c0 1.9-2.7 2.4-2.7 4"/><path d="M12 17.6h.01"/></svg>
+    </button>
   </div>
 
-  <!-- Bottom Floating Cozy HUD -->
-  <div id="hud-dock" class="ui-layer">
-    <div id="active-item-label">Pine Tree • 0°</div>
-    <div class="dock-bar">
-      <div class="palette-group" id="palette-container"></div>
-      <div class="dock-divider"></div>
-      <div class="tools-group">
-        <button class="action-btn" id="btn-rotate" title="회전 (R)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 12a9 9 0 1 1-3-6.7L21 8" />
-            <path d="M21 3v5h-5" />
-          </svg>
-          <span class="rot-badge" id="rot-label">0°</span>
-        </button>
-
-        <button class="action-btn" id="btn-time" title="시간대 변경">
-          <span id="time-icon"></span>
-          <span class="btn-text-hide-sm" id="time-label">Day</span>
-        </button>
-
-        <button class="action-btn" id="btn-audio" title="배경음 켜기/끄기">
-          <span id="audio-icon"></span>
-        </button>
-
-        <button class="action-btn" id="btn-photo" title="감상 모드 (UI 숨기기)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-            <circle cx="12" cy="13" r="4" />
-          </svg>
-        </button>
-
-        <button class="action-btn" id="btn-reset" title="섬 초기화">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="3 6 5 6 21 6" />
-            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-            <path d="M10 11v6M14 11v6" />
-          </svg>
-        </button>
-      </div>
-    </div>
+  <div id="reset-popover" class="panel ui-layer lit">
+    <button class="pop-btn" id="pop-starter" title="처음 섬으로">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21v-8"/><path d="M12 13c0-4 3-6 7-6 0 4-3 6-7 6z"/><path d="M12 15c0-3-2.4-5-6-5 0 3 2.4 5 6 5z"/><path d="M7 21h10"/></svg>
+    </button>
+    <button class="pop-btn danger" id="pop-clear" title="모두 비우기">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+    </button>
   </div>
 
-  <!-- Inline Reset Popover -->
-  <div id="reset-popover" class="ui-layer">
-    <div class="popover-title">Island Layout</div>
-    <div class="popover-actions">
-      <button class="pop-btn primary" id="pop-starter">Restore Starter</button>
-      <button class="pop-btn danger" id="pop-clear">Clear All</button>
-      <button class="pop-btn" id="pop-cancel">Cancel</button>
-    </div>
+  <div id="help-panel" class="panel ui-layer">
+    <b>왼쪽 클릭</b><span>놓기</span>
+    <b>오른쪽 클릭</b><span>지우기</span>
+    <b>오른쪽 드래그</b><span>돌리기 · 기울이기</span>
+    <b>휠 드래그</b><span>화면 이동</span>
+    <b>휠</b><span>확대 · 축소</span>
+    <b>1 ~ 5</b><span>도구 (다시 누르면 다음 것)</span>
+    <b>R</b><span>방향 돌리기</span>
+    <b>X</b><span>지우개</span>
+    <b>E</b><span>분해 보기</span>
+    <b>F</b><span>시점 되돌리기</span>
   </div>
 
-  <!-- Photo Mode Exit Button -->
-  <button id="photo-exit-btn">Exit Photo Mode (ESC)</button>
+  <!-- Bottom: categories (hover or tap to open), eraser, rotate -->
+  <div id="hud-dock" class="ui-layer lit">
+    <div id="cat-container" style="display:flex;gap:inherit;align-items:flex-end"></div>
+    <div class="dock-sep"></div>
+    <button class="tool eraser" id="btn-eraser" data-tool="delete" title="지우개 (X)">
+      <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20H7L3 16c-.8-.8-.8-2 0-2.8l9.9-9.9c.8-.8 2-.8 2.8 0l5 5c.8.8.8 2 0 2.8L11.8 20"/><path d="M7.5 10.5l6 6"/></svg></span>
+      <span class="key">X</span>
+    </button>
+    <button class="tool" id="btn-rotate" title="방향 돌리기 (R)">
+      <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg></span>
+      <span class="key">R</span>
+    </button>
+  </div>
+
+  <div id="item-name" class="lit"></div>
+
+  <button id="photo-exit-btn" class="lit" title="감상 모드 끝내기 (Esc)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+  </button>
 
   <script type="module">
     import * as THREE from 'three';
@@ -5112,10 +4972,6 @@
         }
         grassClutterInst.count = grassIdx; grassClutterInst.instanceMatrix.needsUpdate = true;
         pebbleClutterInst.count = pebbleIdx; pebbleClutterInst.instanceMatrix.needsUpdate = true;
-
-        const totalCount = placedItems.size + freeProps.length;
-        document.getElementById('item-counter').textContent =
-          totalCount === 0 ? 'Empty Island' : `${totalCount} Objects Placed`;
       }
 
       /* ---- STORYTELLING CLUSTERED STARTER DIORAMA ---- */
@@ -5286,15 +5142,13 @@
       /* =======================================================================
          13. EXPLODED VIEW TOGGLE & ATMOSPHERE INTERPOLATION
          ======================================================================= */
-      const btnExplodeTop = document.getElementById('btn-explode-top');
-      const explodeBtnText = document.getElementById('explode-btn-text');
+      const btnExplodeTop = document.getElementById('btn-explode');
 
       function toggleExplodedView() {
         isExploded = !isExploded;
         explodeToggleTime = performance.now() * 0.001;
         markShadowsDirty(1.4); // stagger + ease-out-back settle
-        btnExplodeTop.classList.toggle('active', isExploded);
-        explodeBtnText.textContent = isExploded ? '디오라마 합치기' : '디오라마 분해 보기';
+        btnExplodeTop.classList.toggle('on', isExploded);
         targetCamDist = isExploded ? 51.5 : 42.5;
         targetCamLookY = isExploded ? 1.05 : 0.05;
         audio.playExplodeCascade(isExploded);
@@ -5328,9 +5182,9 @@
       };
 
       const TIME_ICONS = {
-        day: `<svg viewBox="0 0 24 24" fill="none" stroke="#ffe17d" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M2 12h2.5M19.5 12H22M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg>`,
-        golden: `<svg viewBox="0 0 24 24" fill="none" stroke="#ffad66" stroke-width="2.2" stroke-linecap="round"><path d="M17 18a5 5 0 0 0-10 0"/><path d="M12 9V2M4.2 10.2l1.4 1.4M1 18h2M21 18h2M18.4 11.6l1.4-1.4M23 22H1"/></svg>`,
-        night: `<svg viewBox="0 0 24 24" fill="none" stroke="#a6bfff" stroke-width="2.2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`
+        day: `<svg viewBox="0 0 24 24" fill="none" stroke="#ffe08a" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M2 12h2.5M19.5 12H22M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg>`,
+        golden: `<svg viewBox="0 0 24 24" fill="none" stroke="#ffb070" stroke-width="2" stroke-linecap="round"><path d="M17 18a5 5 0 0 0-10 0"/><path d="M12 9V2M4.2 10.2l1.4 1.4M1 18h2M21 18h2M18.4 11.6l1.4-1.4M23 22H1"/></svg>`,
+        night: `<svg viewBox="0 0 24 24" fill="none" stroke="#b4c8ff" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`
       };
 
       function setTimeOfDay(idx) {
@@ -5339,69 +5193,194 @@
         targetAtmo = ATMOSPHERES[key];
         audio.isNight = key === 'night';
         document.getElementById('time-icon').innerHTML = TIME_ICONS[key];
-        document.getElementById('time-label').textContent = targetAtmo.name;
-        const dot = document.getElementById('time-dot');
-        dot.style.background = targetAtmo.dotColor;
-        dot.style.boxShadow = `0 0 10px ${targetAtmo.dotColor}`;
+        // bottom shade follows the sky so the dock reads without a box
+        document.documentElement.style.setProperty('--scrim', { day: 'rgba(28, 52, 84, 0.38)', golden: 'rgba(52, 24, 40, 0.45)', night: 'rgba(3, 6, 16, 0.72)' }[key]);
+        document.documentElement.style.setProperty('--halo', { day: 'rgba(30, 52, 84, 0.26)', golden: 'rgba(48, 22, 36, 0.36)', night: 'rgba(4, 6, 14, 0.55)' }[key]);
       }
 
       /* =======================================================================
          14. MINIMALIST COZY HUD SETUP
          ======================================================================= */
-      const paletteContainer = document.getElementById('palette-container');
-      const activeItemLabel = document.getElementById('active-item-label');
-      const rotLabel = document.getElementById('rot-label');
+      // Bottom dock: one slot per category. A slot shows the item last picked in it; hovering
+      // (or tapping) raises a tray with every item of that category.
+      const catContainer = document.getElementById('cat-container');
+      const itemNameEl = document.getElementById('item-name');
+      const rotateIcon = document.querySelector('#btn-rotate svg');
+      const catSlots = {}; // category id -> { wrap, slotIcon, items: [def], current }
+      let nameTimer = 0;
 
-      function updateSelectionUI() {
-        document.querySelectorAll('.slot-btn').forEach((btn) => {
-          btn.classList.toggle('active', btn.dataset.tool === selectedTool);
-        });
-        const deg = currentRotation * 90;
-        rotLabel.textContent = `${deg}°`;
-        if (selectedTool === 'delete') {
-          activeItemLabel.innerHTML = `제거 도구 • 클릭하여 지우기`;
-        } else {
-          const def = assetsById[selectedTool].def;
-          const badge = def.freePlace
-            ? `<span class="mode-tag free">자유 겹치기</span>`
-            : `<span class="mode-tag">${def.autoConnect ? '자동 연결' : '그리드 스냅'}</span>`;
-          activeItemLabel.innerHTML = `${def.name} • ${deg}° ${badge}`;
+      // name floats just above `anchor` (the open tray or the dock)
+      function showItemName(text, ms = 0, anchor = null) {
+        clearTimeout(nameTimer);
+        if (text) {
+          const r = (anchor || (openWrap && openWrap.querySelector('.tray')) || document.getElementById('hud-dock')).getBoundingClientRect();
+          itemNameEl.style.left = `${Math.round(r.left + r.width / 2)}px`;
+          itemNameEl.style.bottom = `${Math.round(window.innerHeight - r.top + 2)}px`;
         }
-        updateHoverVisuals();
+        itemNameEl.textContent = text;
+        itemNameEl.classList.toggle('show', !!text);
+        if (text && ms) nameTimer = setTimeout(() => itemNameEl.classList.remove('show'), ms);
+      }
+      // trim an icon to its opaque pixels and scale it to fill the slot (integer steps keep pixels crisp)
+      function fitIconCanvas(src, size = 40, pad = 2) {
+        const w = src.width, h = src.height, d = src.getContext('2d').getImageData(0, 0, w, h).data;
+        let x0 = w, y0 = h, x1 = -1, y1 = -1;
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (d[(y * w + x) * 4 + 3] > 24) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+        if (x1 < 0) return src;
+        const bw = x1 - x0 + 1, bh = y1 - y0 + 1, fit = (size - pad * 2) / Math.max(bw, bh);
+        const k = fit >= 2 ? Math.floor(fit) : (fit >= 1 ? 1 : fit);
+        const c = document.createElement('canvas'); c.width = size; c.height = size;
+        const ctx = c.getContext('2d'); ctx.imageSmoothingEnabled = k < 1;
+        const dw = bw * k, dh = bh * k;
+        ctx.drawImage(src, x0, y0, bw, bh, Math.round((size - dw) / 2), Math.round(size - pad - dh), dw, dh);
+        return c;
+      }
+      ITEM_DEFS.forEach((def) => { assetsById[def.id].iconCanvas = fitIconCanvas(assetsById[def.id].iconCanvas); });
+      function iconCopy(def) { // canvases can only live in one place: draw a copy for the slot
+        const src = assetsById[def.id].iconCanvas, c = document.createElement('canvas');
+        c.width = src.width; c.height = src.height;
+        c.getContext('2d').drawImage(src, 0, 0);
+        return c;
       }
 
-      ITEM_DEFS.forEach((def) => {
-        const btn = document.createElement('button');
-        btn.className = 'slot-btn' + (def.freePlace ? ' free-prop' : '');
-        btn.dataset.tool = def.id;
-        btn.title = def.name;
-        btn.dataset.category = def.category;
-        btn.appendChild(assetsById[def.id].iconCanvas);
-        btn.addEventListener('click', () => {
-          selectedTool = def.id;
-          audio.playUiBlip(520);
-          updateSelectionUI();
-        });
-        paletteContainer.appendChild(btn);
-      });
-
-      const delBtn = document.createElement('button');
-      delBtn.className = 'slot-btn delete-btn';
-      delBtn.dataset.tool = 'delete';
-      delBtn.title = '제거 도구';
-      delBtn.innerHTML = `<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#ff9494" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20H7L3 16c-.8-.8-.8-2 0-2.8l9.9-9.9c.8-.8 2-.8 2.8 0l5 5c.8.8.8 2 0 2.8L11.8 20"/><path d="M7.5 10.5l6 6"/></svg>`;
-      delBtn.addEventListener('click', () => {
-        selectedTool = 'delete';
-        audio.playUiBlip(380);
+      function updateSelectionUI() {
+        for (const cat of CATEGORIES) {
+          const slot = catSlots[cat.id];
+          if (!slot) continue;
+          const holds = slot.items.some((d) => d.id === selectedTool);
+          if (holds && slot.current !== selectedTool) {
+            slot.current = selectedTool;
+            slot.slotIcon.replaceChildren(iconCopy(assetsById[selectedTool].def));
+          }
+          slot.btn.classList.toggle('active', holds);
+        }
+        document.querySelectorAll('.item').forEach((b) => b.classList.toggle('active', b.dataset.tool === selectedTool));
+        document.getElementById('btn-eraser').classList.toggle('active', selectedTool === 'delete');
+        rotateIcon.style.transform = `rotate(${currentRotation * 90}deg)`;
+        updateHoverVisuals();
+      }
+      function selectTool(id, announce) {
+        selectedTool = id;
+        audio.playUiBlip(id === 'delete' ? 380 : 520);
         updateSelectionUI();
-      });
-      paletteContainer.appendChild(delBtn);
+        if (announce) showItemName(id === 'delete' ? '지우개' : assetsById[id].def.name, 1100);
+      }
 
+      // tray open/close: short open delay so sweeping across the dock doesn't pop trays,
+      // a grace period so moving from a slot up into its tray never closes it
+      let openWrap = null, openTimer = 0, closeTimer = 0;
+      function openTray(wrap) {
+        clearTimeout(closeTimer);
+        if (openWrap === wrap) return;
+        if (openWrap) openWrap.classList.remove('open');
+        openWrap = wrap;
+        wrap.classList.add('open');
+        audio.playUiBlip(760);
+      }
+      function closeTray() {
+        clearTimeout(openTimer);
+        if (openWrap) openWrap.classList.remove('open');
+        openWrap = null;
+        showItemName('');
+      }
+
+      CATEGORIES.forEach((cat, ci) => {
+        const items = ITEM_DEFS.filter((d) => d.category === cat.id);
+        if (!items.length) return;
+        const wrap = document.createElement('div');
+        wrap.className = 'cat-wrap';
+        const tray = document.createElement('div');
+        tray.className = 'tray';
+        items.forEach((def, i) => {
+          const b = document.createElement('button');
+          b.className = 'item';
+          b.dataset.tool = def.id;
+          b.dataset.category = def.category;
+          b.style.setProperty('--i', i);
+          b.setAttribute('aria-label', def.name);
+          b.appendChild(assetsById[def.id].iconCanvas);
+          b.addEventListener('mouseenter', () => showItemName(def.name));
+          b.addEventListener('mouseleave', () => showItemName(''));
+          b.addEventListener('click', (e) => {
+            e.stopPropagation();
+            selectTool(def.id, false);
+            showItemName(def.name, 900);
+            setTimeout(() => { if (openWrap === wrap) closeTray(); }, 160);
+          });
+          tray.appendChild(b);
+        });
+        const btn = document.createElement('button');
+        btn.className = 'cat';
+        btn.title = `${cat.name} (${ci + 1})`;
+        const slotIcon = document.createElement('span');
+        slotIcon.className = 'icon';
+        slotIcon.appendChild(iconCopy(items[0]));
+        const key = document.createElement('span');
+        key.className = 'key';
+        key.textContent = ci + 1;
+        btn.append(slotIcon, key);
+        // click/tap: pick the slot's item and toggle the tray (touch has no hover)
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const slot = catSlots[cat.id];
+          if (selectedTool !== slot.current) selectTool(slot.current, true);
+          if (openWrap === wrap) closeTray(); else openTray(wrap);
+        });
+        wrap.addEventListener('mouseenter', () => {
+          clearTimeout(closeTimer); clearTimeout(openTimer);
+          openTimer = setTimeout(() => openTray(wrap), openWrap ? 0 : 90);
+        });
+        wrap.addEventListener('mouseleave', () => {
+          clearTimeout(openTimer);
+          closeTimer = setTimeout(() => { if (openWrap === wrap) closeTray(); }, 220);
+        });
+        wrap.append(tray, btn);
+        catContainer.appendChild(wrap);
+        catSlots[cat.id] = { wrap, btn, slotIcon, items, current: items[0].id };
+      });
+      // tapping the scene closes an open tray
+      renderer.domElement.addEventListener('pointerdown', closeTray);
+
+      document.getElementById('btn-eraser').addEventListener('click', () => selectTool('delete', false));
       document.getElementById('btn-rotate').addEventListener('click', () => {
         currentRotation = (currentRotation + 1) % 4;
         audio.playRotate();
         updateSelectionUI();
       });
+
+      // number keys: 1..5 = category; pressing the same one again steps to its next item
+      function selectCategoryByIndex(ci) {
+        const cat = CATEGORIES[ci];
+        const slot = cat && catSlots[cat.id];
+        if (!slot) return;
+        let id = slot.current;
+        if (selectedTool === slot.current) {
+          const k = slot.items.findIndex((d) => d.id === slot.current);
+          id = slot.items[(k + 1) % slot.items.length].id;
+        }
+        selectTool(id, true);
+      }
+
+      // help panel
+      const helpPanel = document.getElementById('help-panel');
+      const btnHelp = document.getElementById('btn-help');
+      function toggleHelp(force) {
+        const open = force === undefined ? !helpPanel.classList.contains('open') : force;
+        helpPanel.classList.toggle('open', open);
+        btnHelp.classList.toggle('on', open);
+        if (open) document.getElementById('reset-popover').classList.remove('open');
+      }
+      btnHelp.addEventListener('click', (e) => { e.stopPropagation(); toggleHelp(); audio.playUiBlip(660); });
+
+      // idle: nothing moved for a while -> UI steps back
+      let idleTimer = 0;
+      function wakeUI() {
+        document.body.classList.remove('ui-idle');
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => document.body.classList.add('ui-idle'), 4000);
+      }
+      ['pointermove', 'pointerdown', 'keydown', 'wheel'].forEach((ev) => window.addEventListener(ev, wakeUI, { passive: true }));
+      wakeUI();
 
       document.getElementById('btn-time').addEventListener('click', () => {
         setTimeOfDay(timeIndex + 1);
@@ -5437,6 +5416,11 @@
       document.getElementById('btn-reset').addEventListener('click', (e) => {
         e.stopPropagation();
         resetPopover.classList.toggle('open');
+        if (resetPopover.classList.contains('open')) toggleHelp(false);
+      });
+      document.addEventListener('click', (e) => { // click anywhere else closes the small panels
+        if (!resetPopover.contains(e.target)) resetPopover.classList.remove('open');
+        if (!helpPanel.contains(e.target) && e.target !== btnHelp) toggleHelp(false);
       });
       document.getElementById('pop-starter').addEventListener('click', () => {
         populateStarterIsland();
@@ -5450,7 +5434,6 @@
         resetPopover.classList.remove('open');
         audio.playRemove();
       });
-      document.getElementById('pop-cancel').addEventListener('click', () => resetPopover.classList.remove('open'));
 
       /* =======================================================================
          15. POINTER, KEYBOARD & TOUCH INTERACTION CONTROLS
@@ -5604,19 +5587,20 @@
         if (e.key === 'Escape') {
           if (isPhotoMode) setPhotoMode(false);
           resetPopover.classList.remove('open');
+          toggleHelp(false);
+          closeTray();
         } else if (e.key === 'e' || e.key === 'E') {
           toggleExplodedView();
         } else if (e.key === 'r' || e.key === 'R') {
           currentRotation = (currentRotation + 1) % 4;
           audio.playRotate();
           updateSelectionUI();
+        } else if (e.key === 'x' || e.key === 'X') {
+          selectTool('delete', true);
+        } else if (e.key === 'h' || e.key === 'H') {
+          toggleHelp();
         } else if (e.key >= '1' && e.key <= '9') {
-          const idx = parseInt(e.key, 10) - 1;
-          if (ITEM_DEFS[idx]) {
-            selectedTool = ITEM_DEFS[idx].id;
-            audio.playUiBlip(520);
-            updateSelectionUI();
-          }
+          selectCategoryByIndex(parseInt(e.key, 10) - 1);
         }
       });
 

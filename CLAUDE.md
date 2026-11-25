@@ -23,6 +23,7 @@
 - 상단 상수: `HASH`(URL 옵션), `LOWRES`(저해상도 설정), `ATMOSPHERES`(낮·노을·밤), `ITEM_DEFS`(오브젝트 정의, `drawSlice`로 적층 레이어를 그림).
 - **4B. SOUP MESH KIT** (Cinderwatch에서 옮김, MIT 고지 포함): `Soup`으로 도형을 조립하고, 꼭짓점마다 `aSurf`(재질 종류, 거칠기, 흔들림, 발광)를 넣는다. 재질은 64×64 텍스처 11장 묶음(`L_WOOD`, `L_METAL` 등) + 요철 셰이더 하나를 공유한다. `add()` 한 번이 부품 하나이고, 부품을 높이순으로 묶어 `aLayerH`에 넣기 때문에 적층과 같은 낙하·분해 셰이더가 그대로 동작한다. 하위 조립품은 `merge()`로 붙이면 한 덩어리로 떨어진다.
 - **조립 오브젝트 추가:** `SOUP_ITEMS`에 `type: 'soup'`, `build(S, rng)`로 정의하고 같은 id의 `ITEM_DEFS` 항목을 대체한다. 아이콘은 실제 모델을 찍어 만든다(`renderSoupIcon`). 불빛이 칸 중앙에 있지 않으면 `glow.offsetX/offsetZ`를 준다. 색은 `MCOL`, 금속은 `metalness` 대신 낮은 거칠기(0.3~0.5)로 반사를 낸다.
+- **UI (14. HUD):** 글자를 최소로 둔다(사용자 결정). 아래는 카테고리 슬롯(`catSlots`, 호버 90ms 뒤 열림·220ms 유예 뒤 닫힘, 터치는 클릭으로 토글) + 지우개 + 회전, 오른쪽 위는 아이콘만. 이름은 호버·선택 때 `showItemName`으로 잠깐만 띄운다. 색은 CSS 변수(`--ink`, `--glow`, 시간대별 `--scrim`·`--halo`), 글꼴은 Galmuri(jsDelivr). 아이콘은 `fitIconCanvas`로 칸에 맞춘다. 새 텍스트 배너나 상자형 패널을 늘리지 말 것.
 - `CozyAudio`: 모든 효과음은 `audio.out(node, pan)` → `sfxBus`로, 배경음(바람·풍경·모닥불)은 `masterGain`으로 보낸다. 둘 다 잔향(`reverb`)과 컴프레서(`comp`)를 거친다.
 - `enhanceStandardMaterial`: 표준 재질에 바람, 높이 안개, 분해 보기, 낙하 애니메이션(`aSpawn` 인스턴스 속성)을 셰이더로 덧붙인다. 그림자용 `customDepthMaterial`도 낙하 애니메이션을 따라간다.
 - `initGame()` 안: 렌더러/렌더 타깃 → 카메라(`updateCameraTransform`) → 조명 → 후처리(`runPostPipeline`) → 섬·인스턴스 → `rebuildInstances()` → 입력 → `animate()`.
@@ -46,6 +47,7 @@
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/controls.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/audio.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/items.mjs
+node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/ui.mjs
 $env:SHOT='night'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1&time=night" tools/tests/screenshot.mjs
 ```
 - `tools/cdp.mjs`는 헤드리스 Chrome을 띄워 마우스·휠·키 입력, `evaluate`, 스크린샷을 제공한다. 결과 스크린샷은 `tools/shots/`(git 제외).
@@ -55,6 +57,7 @@ $env:SHOT='night'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#d
 - URL 옵션 전체 목록은 README 참고.
 
 ## 남은 일
-- 명세서 미완: 1픽셀 외곽선·샤픈 후처리, 상단 조작 안내 배너 제거(미니멀 UI 규칙).
+- 명세서 미완: 1픽셀 외곽선·샤픈 후처리.
+- 오브젝트 늘리기(약 30종, 카테고리별로): 구조물은 `SOUP_ITEMS`로, 울타리·모닥불도 조립 방식으로 다시 만들 예정. 나무·덤불·꽃은 적층.
 - Cinderwatch에서 가져올 후보(사용자와 논의됨): 섬 조립·붕괴 연출(섬 초기화), 계절 테마(눈·낙엽 덮기 셰이더), 높이 텍스처 표면 요철, 감상 모드 자동 카메라, 안정성(소리 설정 기억, WebGL 컨텍스트 복구, 모션 줄이기 설정), 파일 분할 + 빌드 스크립트.
 - 직접 확인 필요로 남은 것: 실제 노트북 프레임, 소리 느낌, 밤 밝기, WASD 이동 속도.
