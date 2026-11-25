@@ -1461,7 +1461,8 @@
     // --- Detail texture array: albedo (rgb) + height (a), 64x64 per surface type ---
     const L_DIRT = 0, L_ROCK = 1, L_MASON = 2, L_WOOD = 3, L_COBBLE = 4, L_METAL = 5, L_SLATE = 6, L_CLOTH = 7, L_PLAIN = 8, L_PLASTER = 9, L_THATCH = 10;
     const L_GRASS = 11; // Mori addition: short tufted blades for the island turf
-    const TEX_LAYERS = 12, TEX_N = 64;
+    const L_MOSS = 12;  // Mori addition: clumpy moss with bright fronds and dark gaps
+    const TEX_LAYERS = 13, TEX_N = 64;
     function makeDetailTextures() {
       const N = TEX_N, data = new Uint8Array(N * N * 4 * TEX_LAYERS);
       const put = (layer, x, y, r, g, b, h) => {
@@ -1491,9 +1492,15 @@
         {
           const n = pfbm(x / 8, y / 8, 8, 21, 4), n2 = pfbm(x / 16, y / 16, 4, 23, 3), n3 = pfbm(x / 16 + 9, y / 16 + 3, 4, 27, 3);
           const crack = (Math.abs(n2 - .5) < .022 || Math.abs(n3 - .52) < .016) ? 1 : 0;
+          const crackEdge = !crack && (Math.abs(n2 - .5) < .045 || Math.abs(n3 - .52) < .034) ? 1 : 0; // lit lip along cracks
           const strata = Math.sin((y + n2 * 26) * TAU / 16) * .05;
-          const m = .74 + .42 * n + strata - crack * .34 + (h2(x, y, 29) - .5) * .08, h = .3 + .6 * n - crack * .4;
-          put(L_ROCK, x, y, m, m, m * 1.03, h);
+          // Mori: pits and pale lichen flecks so a zoomed-in boulder still has something to catch the light
+          const pit = h2(x, y, 31), lich = pfbm(x / 4 + 5, y / 4, 16, 33, 2);
+          let m = .74 + .42 * n + strata - crack * .34 + crackEdge * .08 + (h2(x, y, 29) - .5) * .08, h = .3 + .6 * n - crack * .4 + crackEdge * .06;
+          let r = m, g = m, b = m * 1.03;
+          if (pit > .972) { r *= .72; g *= .72; b *= .74; h -= .22; }
+          else if (lich > .66 && pit < .5) { const k = smooth(.66, .74, lich) * .5; r = lerp(r, m * 1.18, k); g = lerp(g, m * 1.2, k); b = lerp(b, m * 1.02, k); h += .04 * k; }
+          put(L_ROCK, x, y, r, g, b, h);
         }
         {
           const row = Math.floor(y / 8), ox = (row & 1) ? 8 : 0, bx = Math.floor((x + ox) / 16), lx = (x + ox) % 16, ly = y % 8;
@@ -1573,6 +1580,13 @@
           let m = .84 + .2 * n + bladeL[o] - (bladeH[o] > 0 ? 0 : .12), h = .2 + .25 * n + bladeH[o] * .55;
           if (sp > .992) { m += .18; h += .2; } // dew / tiny clover glints
           put(L_GRASS, x, y, m * .97, m * 1.02, m * .9, h);
+        }
+        {
+          const n = pfbm(x / 8, y / 8, 8, 131, 4), clump = pfbm(x / 4, y / 4, 16, 133, 2), sp = h2(x, y, 135);
+          const cell = Math.sqrt(dist2(x % 4, y % 4, 1.5 + h2(x >> 2, y >> 2, 137), 1.5 + h2(x >> 2, y >> 2, 139))); // tiny cushions
+          let m = .74 + .3 * n + (clump - .5) * .4 - cell * .05, h = .25 + .45 * clump + .2 * n - cell * .06;
+          if (sp > .94) { m += .24; h += .18; } else if (sp < .07) { m -= .2; h -= .18; }
+          put(L_MOSS, x, y, m * .92, m * 1.06, m * .78, h);
         }
       }
       const mk = (linear) => {
@@ -1753,11 +1767,33 @@
       ico(r, x, y, z, c, o = {}) { o.s = o.sc ? [r * o.sc[0], r * o.sc[1], r * o.sc[2]] : r; o.p = [x, y, z]; o.c = c; return this.add(gIco(o.d === undefined ? 1 : o.d), o); }
       sph(r, x, y, z, c, o = {}) { o.s = o.sc ? [r * o.sc[0], r * o.sc[1], r * o.sc[2]] : r; o.p = [x, y, z]; o.c = c; if (o.smooth === undefined) o.smooth = true; return this.add(gSph(o.w || 8, o.h || 6), o); }
       torus(r, x, y, z, c, o = {}) { o.s = r; o.p = [x, y, z]; o.c = c; return this.add(gTorus(o.n || 10, o.t || 0.2, o.m || 5), o); }
+      // o.flat: cut the underside flat at -flat * r (Mori: rocks sit in the ground instead of balancing on a curve)
       rock(r, x, y, z, c, o = {}) {
-        const sd = soupRng() * 100, f = 1.5 / r, sq = o.sq === undefined ? 0.75 : o.sq;
-        o.deform = v => { const k = .72 + .56 * vnoise(v.x * f + v.y * f * .7 + sd, v.z * f - v.y * f * .6 + sd, 7); v.multiplyScalar(k); v.y *= sq; };
-        if (o.l === undefined) o.l = L_ROCK; if (o.r === undefined) o.r = [soupRng() * .5, soupRng() * TAU, soupRng() * .5];
+        const sd = soupRng() * 100, f = 1.5 / r, sq = o.sq === undefined ? 0.75 : o.sq, flat = o.flat;
+        o.deform = v => {
+          const k = .72 + .56 * vnoise(v.x * f + v.y * f * .7 + sd, v.z * f - v.y * f * .6 + sd, 7); v.multiplyScalar(k); v.y *= sq;
+          if (flat !== undefined && v.y < -flat * r) v.y = -flat * r;
+        };
+        if (o.l === undefined) o.l = L_ROCK; if (o.r === undefined) o.r = flat !== undefined ? [0, soupRng() * TAU, 0] : [soupRng() * .5, soupRng() * TAU, soupRng() * .5];
         o.s = r; o.p = [x, y, z]; o.c = c; return this.add(gIco(o.d === undefined ? 1 : o.d), o);
+      }
+      // Mori: grow a cover (moss) over the up-facing faces added since vertex `start`, broken up by noise
+      // (the per-face version of Cinderwatch's normal-based snow/cover shader)
+      cover(start, col, thr = 0.45, layer = L_MOSS, seed = 0) {
+        const P = this.P, N = this.N, K = this.K, S = this.S;
+        for (let v = start; v + 2 < this.verts; v += 3) {
+          const cx = (P[v * 3] + P[v * 3 + 3] + P[v * 3 + 6]) / 3, cy = (P[v * 3 + 1] + P[v * 3 + 4] + P[v * 3 + 7]) / 3, cz = (P[v * 3 + 2] + P[v * 3 + 5] + P[v * 3 + 8]) / 3;
+          const n = vnoise(cx * 11 + cy * 6, cz * 11 - cy * 4, seed + 501), n2 = h2(Math.floor(cx * 40), Math.floor(cz * 40 + cy * 30), seed + 503);
+          const score = N[v * 3 + 1] + (n - 0.5) * 0.5;
+          if (score < thr) continue;
+          const k = smooth(thr, thr + 0.18, score), mc = mulC(col, 0.82 + 0.32 * n2);
+          for (let j = 0; j < 3; j++) {
+            const o = (v + j) * 3;
+            K[o] = lerp(K[o], mc[0], k); K[o + 1] = lerp(K[o + 1], mc[1], k); K[o + 2] = lerp(K[o + 2], mc[2], k);
+            if (k > 0.45) { S[(v + j) * 4] = layer; S[(v + j) * 4 + 1] = 1.0; }
+          }
+        }
+        return this;
       }
       // tapered rod between two points
       seg(a, b, r0, r1, c, o = {}) {
@@ -2484,6 +2520,7 @@
       glass: C('#ffc766'), glassHot: C('#fff0c0'),
       clothR: C('#b0473a'), clothCream: C('#e9dcc0')
     };
+    const MOSS_D = C('#4c6a2c'); // olive-dark moss, reads apart from the bright turf
     const SOUP_ITEMS = {
       lantern: {
         type: 'soup',
@@ -2584,8 +2621,9 @@
           for (let k = 0; k < N; k++) {
             const a = k / N * TAU + rng.range(-.12, .12), d = rng.range(.25, .29), r = rng.range(.065, .09);
             const x = Math.cos(a) * d, z = Math.sin(a) * d;
-            S.rock(r, x, r * .45, z, mixC(MCOL.stoneD, MCOL.stoneL, rng() * .8), { sq: .7, rough: .8 });
-            if (rng() < .4) S.ico(r * .6, x * 1.04, r * .95, z * 1.04, mixC(MCOL.moss, MCOL.mossL, rng()), { sc: [1.2, .4, 1], d: 0, rough: 1 });
+            const start = S.verts;
+            S.rock(r, x, r * .3 - .02, z, mixC(MCOL.stoneD, MCOL.stoneL, rng() * .8), { sq: .7, rough: .8, flat: .3, uvs: 1.0 });
+            if (rng() < .45) S.cover(start, mixC(MOSS_D, MCOL.moss, rng() * .6), .76, L_MOSS, k * 7);
           }
           // ash bed and glowing coals
           S.cyl(.21, .02, 0, .01, 0, C('#4a4441'), { n: 9, l: L_DIRT, rough: 1 });
@@ -2616,19 +2654,17 @@
         contactRadius: 0.36,
         build(S, rng) {
           // big boulder, a smaller one leaning on it, a pebble; moss caps on the tops
-          const lump = (r, x, z, sq, mossK) => {
-            const c = mixC(MCOL.stoneD, MCOL.stone, rng.range(.3, .9));
-            S.rock(r, x, r * sq * .78, z, c, { sq, rough: .55 });
-            if (mossK > 0) { // a few patches sunk into the stone, not a lid
-              S.ico(r * .68, x - r * .18, r * sq * 1.5, z - r * .1, mixC(MCOL.moss, MCOL.mossL, rng() * .4), { sc: [1.1, .42 * mossK, .9], d: 1, rough: 1 });
-              S.ico(r * .4, x + r * .3, r * sq * 1.36, z + r * .25, mulC(MCOL.moss, .9), { sc: [1, .45, 1.2], d: 0, rough: 1 });
-              S.ico(r * .36, x - r * .66, r * sq * 1.0, z + r * .3, mulC(MCOL.moss, .8), { sc: [1, .6, 1], d: 0, rough: 1 });
-            }
+          // flat undersides sunk a few cm into the turf; moss grows over the up-facing faces
+          const FLAT = .3, SINK = .035;
+          const lump = (r, x, z, sq, mossThr) => {
+            const c = mixC(MCOL.stoneD, MCOL.stone, rng.range(.3, .9)), start = S.verts;
+            S.rock(r, x, FLAT * r - SINK, z, c, { sq, flat: FLAT, rough: .55, uvs: 1.0 });
+            if (mossThr < 1) S.cover(start, mixC(MOSS_D, MCOL.moss, rng() * .6), mossThr, L_MOSS, Math.floor(rng() * 99));
           };
-          lump(.25, -.05, -.03, .82, 1);
-          lump(.14, .2, .15, .78, .8);
-          lump(.06, -.22, .2, .7, 0);
-          for (let k = 0; k < 3; k++) S.rock(rng.range(.02, .035), rng.range(-.3, .3), .012, rng.range(.22, .32), MCOL.stoneL, { sq: .6, d: 0 });
+          lump(.26, -.05, -.03, 1.0, .74);
+          lump(.15, .21, .15, .95, .8);
+          lump(.065, -.23, .2, .8, .9);
+          for (let k = 0; k < 3; k++) S.rock(rng.range(.02, .035), rng.range(-.3, .3), .004, rng.range(.22, .32), MCOL.stoneL, { sq: .6, d: 0, flat: .2 });
         }
       }
     };
