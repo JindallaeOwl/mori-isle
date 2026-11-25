@@ -596,6 +596,15 @@
       return hillH + pondDip;
     }
 
+    // Visible turf surface: terrain + beveled outer rim + a few cm of low-poly relief
+    // (kept within ~±0.02 so props placed at tile elevation still sit on the ground)
+    function getTurfHeight(wx, wz) {
+      let y = getContinuousTerrainHeight(wx, wz);
+      const borderDist = Math.min(HALF_GRID - Math.abs(wx), HALF_GRID - Math.abs(wz));
+      if (borderDist < 0.18) y -= (0.18 - borderDist) * 0.45;
+      return y + (vnoise(wx * 2.3, wz * 2.3, 131) - 0.5) * 0.04 + (vnoise(wx * 6.1, wz * 6.1, 137) - 0.5) * 0.012;
+    }
+
     // 3-Point Lighting & Atmosphere Presets
     const ATMOSPHERES = {
       day: {
@@ -1451,13 +1460,25 @@
 
     // --- Detail texture array: albedo (rgb) + height (a), 64x64 per surface type ---
     const L_DIRT = 0, L_ROCK = 1, L_MASON = 2, L_WOOD = 3, L_COBBLE = 4, L_METAL = 5, L_SLATE = 6, L_CLOTH = 7, L_PLAIN = 8, L_PLASTER = 9, L_THATCH = 10;
-    const TEX_LAYERS = 11, TEX_N = 64;
+    const L_GRASS = 11; // Mori addition: short tufted blades for the island turf
+    const TEX_LAYERS = 12, TEX_N = 64;
     function makeDetailTextures() {
       const N = TEX_N, data = new Uint8Array(N * N * 4 * TEX_LAYERS);
       const put = (layer, x, y, r, g, b, h) => {
         const i = ((layer * N + y) * N + x) * 4;
         data[i] = clamp(r * 127.5, 0, 255); data[i + 1] = clamp(g * 127.5, 0, 255); data[i + 2] = clamp(b * 127.5, 0, 255); data[i + 3] = clamp(h * 255, 0, 255);
       };
+      // grass blades: short wrapped strokes, brighter and taller toward the tip
+      const bladeH = new Float32Array(N * N), bladeL = new Float32Array(N * N);
+      for (let k = 0; k < 340; k++) {
+        const bx = h2(k, 1, 121) * N, by = h2(k, 2, 121) * N, len = 2 + Math.floor(h2(k, 3, 121) * 3.5);
+        const dx = (h2(k, 4, 121) - .5) * .9, lit = h2(k, 5, 121);
+        for (let s = 0; s <= len; s++) {
+          const t = s / len, ix = ((Math.round(bx + dx * s) % N) + N) % N, iy = ((Math.round(by - s) % N) + N) % N, o = iy * N + ix;
+          bladeH[o] = Math.max(bladeH[o], .45 + .55 * t);
+          bladeL[o] = Math.max(bladeL[o], (.1 + .26 * t) * (.6 + .8 * lit));
+        }
+      }
       const CG = 8, CS = N / CG, sites = [];
       for (let j = 0; j < CG; j++) for (let i = 0; i < CG; i++) sites.push([(i + .2 + .6 * h2(i, j, 11)) * CS, (j + .2 + .6 * h2(i, j, 12)) * CS, h2(i, j, 13), h2(i, j, 14)]);
       for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
@@ -1547,6 +1568,12 @@
           let m = .76 + .42 * st; if (row === 0) m -= .3; if (row === 1) m += .08;
           put(L_THATCH, x, y, m * 1.04, m, m * .88, .3 + st * .5 + (row / 16) * .2);
         }
+        {
+          const o = y * N + x, n = pfbm(x / 8, y / 8, 8, 111, 3), sp = h2(x, y, 113);
+          let m = .84 + .2 * n + bladeL[o] - (bladeH[o] > 0 ? 0 : .12), h = .2 + .25 * n + bladeH[o] * .55;
+          if (sp > .992) { m += .18; h += .2; } // dew / tiny clover glints
+          put(L_GRASS, x, y, m * .97, m * 1.02, m * .9, h);
+        }
       }
       const mk = (linear) => {
         const t = new THREE.DataArrayTexture(data, N, N, TEX_LAYERS);
@@ -1635,6 +1662,19 @@
         mat.customProgramCacheKey = () => 'mori-soup-icon';
       }
       return mat;
+    }
+
+    // Island ground (turf, strata, paths): same detail textures + bump as soup props, no drop/explode slices
+    let _terrainMat = null; // one shared material (never disposed, the island is built once)
+    function makeTerrainMaterial() {
+      if (_terrainMat) return _terrainMat;
+      ensureSoupTextures();
+      const mat = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 }));
+      const base = mat.onBeforeCompile;
+      mat.onBeforeCompile = (sh, r) => { base(sh, r); injectSoupShader(sh); };
+      mat.customProgramCacheKey = () => 'mori-terrain';
+      mat.userData.shared = true;
+      return (_terrainMat = mat);
     }
 
     const ZERO3 = [0, 0, 0], WHITE = [1, 1, 1];
@@ -3110,59 +3150,70 @@
        8. THICK STRATIFIED DIORAMA ISLAND WITH ROUNDED POND & BACK HILLS
           Split into 3 geological chunks so Exploded View reveals earth strata!
        ========================================================================= */
-    function buildSculptedStratum(yBottomFn, yTopFn, width, colorA, colorB, roughness, metalness, taperBottom = 1.0, seed = 0) {
-      const segXZ = 24;
-      const segY = 3;
-      const geo = new THREE.BoxGeometry(width, 1.0, width, segXZ, segY, segXZ);
-      const pos = geo.attributes.position;
-      const cols = new Float32Array(pos.count * 3);
-      const cA = new THREE.Color(colorA);
-      const cB = new THREE.Color(colorB);
-      const tmpC = new THREE.Color();
-
-      for (let i = 0; i < pos.count; i++) {
-        let x = pos.getX(i);
-        let yNorm = pos.getY(i) + 0.5; // 0 bottom .. 1 top
-        let z = pos.getZ(i);
-
-        const yBot = yBottomFn(x, z);
-        const yTop = yTopFn(x, z);
-        const y = THREE.MathUtils.lerp(yBot, yTop, yNorm);
-
-        const scaleXZ = THREE.MathUtils.lerp(taperBottom, 1.0, yNorm);
-        x *= scaleXZ;
-        z *= scaleXZ;
-
-        const edge = Math.max(Math.abs(x), Math.abs(z)) / (width * 0.5 * scaleXZ);
-        if (edge > 0.88) {
-          const n = hash2D(Math.round(x * 1.8), Math.round(z * 1.8) + Math.round(y * 3.0), seed) - 0.5;
-          x += n * 0.16;
-          z += n * 0.16;
-          if (yNorm > 0.92 || yNorm < 0.08) {
-            x *= 0.986;
-            z *= 0.986;
-          }
+    // Stepped strata walls (Cinderwatch technique, src/31-terrain.js wallColumn): the rim is cut into
+    // bands; each band is an outward face, and each step between bands is a ledge that is lit on top
+    // and dark underneath. Per-segment shade jitter gives the chunky hand-cut look. Mori palette.
+    //   hw: half width at the top, yTopFn(x, z): top edge, yBot: bottom, levels: band bottoms (descending)
+    //   cols: band colors, layers: detail texture per band, taper: extra inset reached at yBot
+    function buildStrataChunk({ hw, yTopFn, yBot, levels, cols, layers, taper = 0, wob = 0.04, seed = 0, seg = 60, topCap = false, skin = null }) {
+      const S = new Soup(), NP = seg * 4, yMax = levels.length ? levels[0] + 1 : yBot + 1;
+      const base = (t) => {
+        const side = Math.floor(t / seg) % 4, f = (t % seg) / seg;
+        if (side === 0) return [-hw + 2 * hw * f, hw];
+        if (side === 1) return [hw, hw - 2 * hw * f];
+        if (side === 2) return [hw - 2 * hw * f, -hw];
+        return [-hw, -hw + 2 * hw * f];
+      };
+      const at = (b, inset, y) => { const s = (hw - inset) / hw; return [b[0] * s, y, b[1] * s]; };
+      const taperAt = (y) => taper * Math.pow(clamp((yMax - y) / (yMax - yBot), 0, 1), 1.3);
+      const insetAt = (t, j, y) => taperAt(y) + (j & 1) * 0.035 + (vnoise(t * 0.21, j * 3.1, seed + 45) - 0.5) * 2 * wob;
+      const shade = (c, k) => mulC(c, k);
+      const facing = (a, b, c, d, ox, oz, col, layer) => {
+        _sa.set(b[0] - a[0], b[1] - a[1], b[2] - a[2]); _sb.set(c[0] - a[0], c[1] - a[1], c[2] - a[2]); _sn.crossVectors(_sa, _sb);
+        if (_sn.x * ox + _sn.z * oz >= 0) S.quad(a, b, c, d, col, layer, 0.96, { uvs: 0.55 }); else S.quad(a, d, c, b, col, layer, 0.96, { uvs: 0.55 });
+      };
+      const ledge = (a, b, c, d, col, layer) => {
+        _sa.set(b[0] - a[0], b[1] - a[1], b[2] - a[2]); _sb.set(c[0] - a[0], c[1] - a[1], c[2] - a[2]); _sn.crossVectors(_sa, _sb);
+        const up = _sn.y >= 0, lit = shade(col, 1.22), dark = shade(col, 0.5);
+        S.quad(a, b, c, d, up ? lit : dark, layer, 0.96, { uvs: 0.55 }); S.quad(a, d, c, b, up ? dark : lit, layer, 0.96, { uvs: 0.55 });
+      };
+      for (let t = 0; t < NP; t++) {
+        const bA = base(t), bB = base(t + 1 === NP ? 0 : t + 1), ox = (bA[0] + bB[0]) / 2, oz = (bA[1] + bB[1]) / 2;
+        let yA = yTopFn(bA[0], bA[1]), yB = yTopFn(bB[0], bB[1]), inA = 0, inB = 0;
+        let j = 0; while (j < levels.length && levels[j] > Math.min(yA, yB) - 0.07) j++;
+        if (skin) { // thin dark root-mat band right under the turf edge
+          const loA = yA - skin.h, loB = yB - skin.h;
+          facing(at(bA, 0, yA), at(bA, 0, loA), at(bB, 0, loB), at(bB, 0, yB), ox, oz, shade(skin.col, 0.9 + 0.2 * h2(t, 1, seed)), L_DIRT);
+          yA = loA; yB = loB;
         }
-        pos.setXYZ(i, x, y, z);
-
-        const hVal = hash2D(Math.floor(x * 1.5), Math.floor(z * 1.5 + y * 2.2), seed + 3);
-        tmpC.copy(cA).lerp(cB, hVal);
-        const seamAO = 0.72 + 0.28 * Math.sin(yNorm * Math.PI * 0.85 + 0.15);
-        tmpC.multiplyScalar(seamAO);
-        cols[i * 3] = tmpC.r; cols[i * 3 + 1] = tmpC.g; cols[i * 3 + 2] = tmpC.b;
+        for (let guard = 0; guard < 40; guard++) {
+          const last = j >= levels.length;
+          const lvl = last ? yBot : levels[j];
+          const w = last ? 0 : 0.035;
+          const loA = Math.max(yBot, Math.min(yA - 0.02, lvl + w * (vnoise(t * 0.5, j, seed + 46) - 0.5)));
+          const loB = Math.max(yBot, Math.min(yB - 0.02, lvl + w * (vnoise((t + 1) * 0.5, j, seed + 46) - 0.5)));
+          const band = Math.min(j, cols.length - 1), col = shade(cols[band], 0.9 + 0.2 * h2(t, j, seed + 3));
+          facing(at(bA, inA, yA), at(bA, inA, loA), at(bB, inB, loB), at(bB, inB, yB), ox, oz, col, layers[band]);
+          if (last) break;
+          const nA = insetAt(t, j + 1, loA), nB = insetAt(t + 1, j + 1, loB);
+          ledge(at(bA, inA, loA), at(bA, nA, loA), at(bB, nB, loB), at(bB, inB, loB), col, layers[band]);
+          yA = loA; yB = loB; inA = nA; inB = nB; j++;
+        }
       }
-      geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-      geo.computeVertexNormals();
-
-      const mat = enhanceStandardMaterial(new THREE.MeshStandardMaterial({
-        vertexColors: true,
-        roughness,
-        metalness
-      }));
-      const mesh = new THREE.Mesh(geo, mat);
+      if (topCap) {
+        const y = yTopFn(0, 0), c = shade(cols[0], 0.7);
+        S.quad([-hw, y, -hw], [-hw, y, hw], [hw, y, hw], [hw, y, -hw], c, L_DIRT, 0.96, { uvs: 0.55 });
+      }
+      const mesh = new THREE.Mesh(S.build({ groups: 1, ao: null }), makeTerrainMaterial());
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       return mesh;
+    }
+    // band bottoms from y0 down to y1, thicknesses between tMin and tMax
+    function strataLevels(y0, y1, tMin, tMax, seed) {
+      const L = []; let y = y0, i = 0;
+      while (true) { y -= tMin + (tMax - tMin) * h2(i++, 9, seed); if (y <= y1 + tMin * 0.6) break; L.push(y); }
+      return L;
     }
 
     function buildMiniatureIsland(scene) {
@@ -3175,83 +3226,92 @@
       const segs = 72;
       const topGeo = new THREE.PlaneGeometry(GRID_SIZE, GRID_SIZE, segs, segs);
       topGeo.rotateX(-Math.PI / 2);
+      // smooth copy of the surface: only the build grid overlay rides on it
       const tPos = topGeo.attributes.position;
-      const tCols = new Float32Array(tPos.count * 3);
-      const colGrassA = new THREE.Color('#6db450');
-      const colGrassB = new THREE.Color('#5fa346');
-      const colHill = new THREE.Color('#579942');
-      const colShore = new THREE.Color('#b8a472'); // Soft sandy/mossy wet rim
-      const colBed = new THREE.Color('#4a615c');
-      const tmpC = new THREE.Color();
+      for (let i = 0; i < tPos.count; i++) tPos.setY(i, getTurfHeight(tPos.getX(i), tPos.getZ(i)));
 
-      for (let i = 0; i < tPos.count; i++) {
-        const wx = tPos.getX(i);
-        const wz = tPos.getZ(i);
-        let y = getContinuousTerrainHeight(wx, wz);
-
-        // Subtle beveled edge rounding along the outer diorama border
-        const borderDist = Math.min(HALF_GRID - Math.abs(wx), HALF_GRID - Math.abs(wz));
-        if (borderDist < 0.18) {
-          y -= (0.18 - borderDist) * 0.45;
-        }
-        tPos.setY(i, y);
-
-        const sdf = getPondSDF(wx, wz);
-        const n = hash2D(Math.floor(wx * 2.2), Math.floor(wz * 2.2), 11);
-        tmpC.copy(colGrassA).lerp(colGrassB, n);
-
-        // Slightly richer deep green on elevated back hills
-        if (y > 0.25) tmpC.lerp(colHill, THREE.MathUtils.clamp((y - 0.25) * 0.7, 0, 0.55));
-        // Smooth organic sandy/mossy transition around the rounded pond edge
-        if (sdf < 0.42) {
-          const shoreMix = 1.0 - THREE.MathUtils.smoothstep(sdf, -0.05, 0.42);
-          tmpC.lerp(colShore, shoreMix * 0.78);
-        }
-        if (sdf < 0.02) {
-          const bedMix = 1.0 - THREE.MathUtils.smoothstep(sdf, -0.35, 0.02);
-          tmpC.lerp(colBed, bedMix * 0.85);
-        }
-        tCols[i * 3] = tmpC.r; tCols[i * 3 + 1] = tmpC.g; tCols[i * 3 + 2] = tmpC.b;
+      // Faceted low-poly turf (Cinderwatch terrain technique, src/31-terrain.js): jittered grid,
+      // one flat normal + one color per triangle, detail texture + bump. Mori palette.
+      const terrainMat = makeTerrainMaterial();
+      const TCELL = 0.2, TNV = Math.round(GRID_SIZE / TCELL) + 1;
+      const TV = new Float32Array(TNV * TNV * 3);
+      for (let j = 0; j < TNV; j++) for (let i = 0; i < TNV; i++) {
+        let x = -HALF_GRID + i * TCELL, z = -HALF_GRID + j * TCELL;
+        if (i > 0 && i < TNV - 1) x += (h2(i, j, 151) - 0.5) * TCELL * 0.5;
+        if (j > 0 && j < TNV - 1) z += (h2(i, j, 152) - 0.5) * TCELL * 0.5;
+        const o = (j * TNV + i) * 3;
+        const rim = i === 0 || j === 0 || i === TNV - 1 || j === TNV - 1; // rim stays exact: the topsoil wall meets it
+        TV[o] = x; TV[o + 1] = getTurfHeight(x, z) + (rim ? 0 : (h2(i, j, 153) - 0.5) * 0.026); TV[o + 2] = z;
       }
-      topGeo.setAttribute('color', new THREE.BufferAttribute(tCols, 3));
-      topGeo.computeVertexNormals();
-
-      const topMat = enhanceStandardMaterial(new THREE.MeshStandardMaterial({
-        vertexColors: true,
-        roughness: 0.88,
-        metalness: 0.0
-      }));
-      const topMesh = new THREE.Mesh(topGeo, topMat);
+      const tGrassA = C('#72b84f'), tGrassB = C('#5b9f43'), tGrassL = C('#93c95c'), tHill = C('#4f9140'), tMoss = C('#5d8a3c');
+      const tCliff = C('#7d5a38'), tCliffD = C('#5a3f27'), tShore = C('#bca776'), tBed = C('#4a615c');
+      const turfColor = (x, z, y, ny) => {
+        const n1 = vnoise(x * 0.75, z * 0.75, 141) * 0.65 + vnoise(x * 2.1, z * 2.1, 143) * 0.35;
+        const n2 = h2(Math.floor(x * 4 + 99), Math.floor(z * 4 + 99), 147);
+        const sdf = getPondSDF(x, z);
+        if (sdf < 0.05) { // pond bed + wet rim under the water
+          const c = mixC(tShore, tBed, smooth(0.05, -0.4, sdf) * 0.9);
+          return [mulC(c, 0.88 + 0.2 * n2), L_DIRT, 0.7];
+        }
+        if (ny < 0.86) { // terrace cliff faces: packed earth, mossy where it flattens out
+          let c = mixC(tCliffD, tCliff, n1);
+          c = mixC(c, tMoss, smooth(0.62, 0.84, ny) * 0.55);
+          return [mulC(c, 0.85 + 0.28 * n2), ny < 0.68 ? L_ROCK : L_DIRT, 0.96];
+        }
+        let c = mixC(tGrassB, tGrassA, smooth(0.32, 0.68, n1));
+        c = mixC(c, tGrassL, smooth(0.66, 0.86, n1) * 0.55);
+        if (y > 0.25) c = mixC(c, tHill, clamp((y - 0.25) * 0.7, 0, 0.5));
+        if (sdf < 0.42) c = mixC(c, tShore, (1 - smooth(0.05, 0.42, sdf)) * 0.78);
+        return [mulC(c, 0.86 + 0.26 * n2), L_GRASS, 0.95];
+      };
+      const turf = new Soup();
+      const tv = (i, j) => { const o = (j * TNV + i) * 3; return [TV[o], TV[o + 1], TV[o + 2]]; };
+      const _ta = new THREE.Vector3(), _tb = new THREE.Vector3();
+      for (let j = 0; j < TNV - 1; j++) for (let i = 0; i < TNV - 1; i++) {
+        const a = tv(i, j), b = tv(i + 1, j), c = tv(i + 1, j + 1), d = tv(i, j + 1);
+        const tris = ((i + j) & 1) ? [[a, d, c], [a, c, b]] : [[a, d, b], [b, d, c]];
+        for (const t of tris) {
+          _ta.set(t[1][0] - t[0][0], t[1][1] - t[0][1], t[1][2] - t[0][2]);
+          _tb.set(t[2][0] - t[0][0], t[2][1] - t[0][1], t[2][2] - t[0][2]);
+          const ny = _ta.cross(_tb).normalize().y;
+          const m = turfColor((t[0][0] + t[1][0] + t[2][0]) / 3, (t[0][2] + t[1][2] + t[2][2]) / 3, (t[0][1] + t[1][1] + t[2][1]) / 3, ny);
+          turf.tri(t[0], t[1], t[2], m[0], m[1], m[2], { uvs: 0.55 });
+        }
+      }
+      const topMesh = new THREE.Mesh(turf.build({ groups: 1, ao: null }), terrainMat);
       topMesh.castShadow = true;
       topMesh.receiveShadow = true;
-      chunkTopSurface.add(topMesh);
+      chunkTopSurface.add(topMesh); // must stay children[0]: it is the pointer ray target
 
       // --- 8B. Thick Stratified Cutaway Cross-Section Chunks ---
-      // Stratum 1: Topsoil skirt that rises seamlessly to meet the back hills!
-      const topsoilMesh = buildSculptedStratum(
-        () => -0.62,
-        (x, z) => getContinuousTerrainHeight(x, z) - 0.03,
-        GRID_SIZE - 0.04,
-        '#6b472c', '#52341e', 0.94, 0.0, 0.985, 1
-      );
+      // Stratum 1: topsoil, its top edge meets the turf rim exactly (same 0.2 spacing, no jitter there)
+      const topLv = strataLevels(1.0, -0.62, 0.16, 0.3, 201);
+      const topsoilMesh = buildStrataChunk({
+        hw: HALF_GRID, yTopFn: getTurfHeight, yBot: -0.62, levels: topLv, seed: 201, seg: Math.round(GRID_SIZE / TCELL), wob: 0.03,
+        cols: topLv.map((_, k) => C(['#6b472c', '#5e3d25', '#73502f', '#634129'][k % 4])).concat([C('#5a3b23')]),
+        layers: topLv.map(() => L_DIRT).concat([L_DIRT]),
+        skin: { h: 0.07, col: C('#4a3020') }
+      });
       chunkTopSurface.add(topsoilMesh);
 
-      // Stratum 2: Thick Subsoil / Warm Clay Layer
-      const subsoilMesh = buildSculptedStratum(
-        () => -1.42,
-        () => -0.60,
-        GRID_SIZE - 0.24,
-        '#8c5f3d', '#6e472b', 0.92, 0.0, 0.93, 2
-      );
+      // Stratum 2: warm clay and sandstone bands
+      const clayLv = strataLevels(-0.60, -1.42, 0.12, 0.24, 202);
+      const clayPal = ['#9a6a40', '#b5814e', '#8a5c38', '#c39a66', '#a5703f'].map((h) => C(h));
+      const subsoilMesh = buildStrataChunk({
+        hw: HALF_GRID - 0.12, yTopFn: () => -0.60, yBot: -1.42, levels: clayLv, seed: 202, seg: 40, wob: 0.05, topCap: true,
+        cols: clayLv.map((_, k) => clayPal[Math.floor(h2(k, 3, 202) * clayPal.length)]).concat([clayPal[2]]),
+        layers: clayLv.map((_, k) => (h2(k, 4, 202) > 0.55 ? L_ROCK : L_DIRT)).concat([L_ROCK])
+      });
       chunkSubsoil.add(subsoilMesh);
 
-      // Stratum 3: Deep Craggy Bedrock Base
-      const bedrockMesh = buildSculptedStratum(
-        () => -2.55,
-        () => -1.40,
-        GRID_SIZE - 1.05,
-        '#636875', '#3e424f', 0.84, 0.08, 0.72, 3
-      );
+      // Stratum 3: craggy blue-grey bedrock, stepping inward toward the bottom
+      const rockLv = strataLevels(-1.40, -2.55, 0.14, 0.3, 203);
+      const rockPal = ['#6c7180', '#575c69', '#7d8291', '#4b4f5b'].map((h) => C(h));
+      const bedrockMesh = buildStrataChunk({
+        hw: HALF_GRID - 0.5, yTopFn: () => -1.40, yBot: -2.55, levels: rockLv, seed: 203, seg: 40, wob: 0.09, taper: 0.7, topCap: true,
+        cols: rockLv.map((_, k) => rockPal[(k * 3 + Math.floor(h2(k, 7, 203) * 3)) % rockPal.length]).concat([rockPal[3]]),
+        layers: rockLv.map(() => L_ROCK).concat([L_ROCK])
+      });
       chunkBedrock.add(bedrockMesh);
 
       // --- 8C. Protruding Tree Roots (Topsoil Chunk) & Embedded Stones (Subsoil/Bedrock) ---
@@ -3263,16 +3323,18 @@
         const side = i % 4;
         const along = (hash2D(i, 4, 19) - 0.5) * (GRID_SIZE - 1.0);
         let rx = 0, rz = 0;
-        const edgeR = HALF_GRID - 0.04;
+        const edgeR = HALF_GRID + 0.01;
         if (side === 0) { rx = along; rz = edgeR; }
         else if (side === 1) { rx = along; rz = -edgeR; }
         else if (side === 2) { rx = edgeR; rz = along; }
         else { rx = -edgeR; rz = along; }
-        const surfY = getContinuousTerrainHeight(rx, rz);
-        const depthY = surfY - 0.26 - hash2D(i, 5, 19) * 0.36;
+        // short roots lying along the earth wall, poking out of it, always below the turf
+        const surfY = getTurfHeight(rx, rz);
+        const depthY = surfY - 0.2 - hash2D(i, 5, 19) * 0.3;
+        const tilt = (hash2D(i, 6, 19) < 0.5 ? -1 : 1) * (1.05 + hash2D(i, 8, 19) * 0.4);
         dummy.position.set(rx, depthY, rz);
-        dummy.rotation.set((hash2D(i, 6, 19) - 0.5) * 0.55, hash2D(i, 7, 19) * 3.14, (hash2D(i, 8, 19) - 0.5) * 0.55);
-        dummy.scale.set(1, 0.8 + hash2D(i, 9, 19) * 0.9, 1);
+        dummy.rotation.set(side >= 2 ? tilt : 0, 0, side < 2 ? tilt : 0);
+        dummy.scale.set(0.8, 0.35 + hash2D(i, 9, 19) * 0.35, 0.8);
         dummy.updateMatrix();
         embedRoots.setMatrixAt(i, dummy.matrix);
       }
@@ -3459,7 +3521,7 @@
           void main() {
             vUv = uv;
             vec3 pos = position;
-            pos.y += 0.016;
+            pos.y += 0.034; // clears the turf's low-poly relief
             vec4 wp = modelMatrix * vec4(pos, 1.0);
             vWorldXZ = wp.xz;
             gl_Position = projectionMatrix * viewMatrix * wp;
@@ -5138,7 +5200,7 @@
 
           if (def.contactRadius > 0) {
             contactShadowBaseList.push({
-              x: wx, y: wy + 0.014, z: wz, r: def.contactRadius * 2.0,
+              x: wx, y: wy + 0.026, z: wz, r: def.contactRadius * 2.0,
               tier: def.type === '3d_cabin' ? 2 : (def.explodeTier || 0)
             });
           }
@@ -5186,7 +5248,7 @@
           buckets[fp.id].push({ wx: fp.wx, wy, wz: fp.wz, rotation: fp.rotation, scale: fp.scale || 1.0, spawnT: fp.spawnT ?? -100 });
           if (def.contactRadius > 0) {
             contactShadowBaseList.push({
-              x: fp.wx, y: wy + 0.014, z: fp.wz, r: def.contactRadius * 1.75 * (fp.scale || 1.0),
+              x: fp.wx, y: wy + 0.026, z: fp.wz, r: def.contactRadius * 1.75 * (fp.scale || 1.0),
               tier: def.explodeTier || 0
             });
           }

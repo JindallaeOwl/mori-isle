@@ -31,7 +31,7 @@ const send = (method, params = {}) => new Promise((r) => { const i = ++id; pendi
 
 await send('Runtime.enable');
 await send('Page.enable');
-await send('Emulation.setDeviceMetricsOverride', { width: 1000, height: 640, deviceScaleFactor: 1, mobile: false });
+await send('Emulation.setDeviceMetricsOverride', { width: +(process.env.W || 1000), height: +(process.env.H || 640), deviceScaleFactor: 1, mobile: false }); // W, H env: viewport size
 await send('Page.navigate', { url });
 
 const evaluate = async (expr) => { const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }); return r.result?.result?.value ?? r.result?.exceptionDetails?.exception?.description; };
