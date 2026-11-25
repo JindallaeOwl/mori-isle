@@ -7,7 +7,7 @@
 - **무엇:** 단일 HTML로 된 자동 진행 3D 아이소메트릭 타워 디펜스. Three.js r170. 모델, 텍스처, 소리를 모두 코드로 만든다. MIT 라이선스이므로 코드를 그대로 옮길 때는 라이선스 고지를 함께 넣는다.
 - **위치:** 사용자 PC의 `D:\Owl\cinderwatch-main` (압축본 `D:\Owl\cinderwatch-main.zip`, 원본 github.com/kevintngo/cinderwatch). 읽기만 한다. 핵심 파일은 `src/20-post.js`(렌더링·후처리), `src/10-gfx.js`(절차적 텍스처, 재질, 메쉬 빌더), `src/40-fx.js`(조명, 파티클), `src/80-audio.js`(소리), `src/90-main.js`(카메라, 루프, 자동 해상도).
 - **목표로 하는 느낌:** 저해상도 픽셀 감성인데 확대하면 미니어처 디오라마처럼 매끈하고 세밀함. 어둡고 차가운 바탕 위에 따뜻한 불빛이 주인공. 깊이 기반 틸트 시프트, 디더링, 필름 그레인 같은 아날로그 질감.
-- **이미 가져온 것:** 저해상도 렌더링 + 또렷한 업스케일, 직교 카메라 1픽셀 정렬과 디더 위치 고정, Bayer 디더, 필름 그레인, 깊이 기반 틸트 시프트, HDR 블룸 2단, 화면 기반 AO, 불빛에 물드는 안개, 자동 해상도 조절, 어두운 밤과 노이즈 깜빡임, 노이즈 불꽃 셰이더와 불티, 화면 이동·커서 위치 확대, 노이즈 기반 효과음·잔향·컴프레서·좌우 위치감, 그림자 갱신 줄이기, CDP 헤드리스 테스트 도구.
+- **이미 가져온 것:** 저해상도 렌더링 + 또렷한 업스케일, 직교 카메라 1픽셀 정렬과 디더 위치 고정, Bayer 디더, 필름 그레인, 깊이 기반 틸트 시프트, HDR 블룸 2단, 화면 기반 AO, 불빛에 물드는 안개, 자동 해상도 조절, 어두운 밤과 노이즈 깜빡임, 노이즈 불꽃 셰이더와 불티, 화면 이동·커서 위치 확대, 노이즈 기반 효과음·잔향·컴프레서·좌우 위치감, 그림자 갱신 줄이기, CDP 헤드리스 테스트 도구, 섬 조립·붕괴 연출(시작 화면과 섬 초기화. Cinderwatch는 땅 조각이 아래에서 솟지만 Mori Isle은 레고처럼 위에서 층층이 내려앉는다).
 - **일부러 안 가져온 것:** 포인트 라이트 실시간 그림자(명세서 금지, Iris Xe 부담), 4단계로 끊은 픽셀 연기(명세서는 둥근 구체 연기), 전투·몬스터·AI 자동 플레이(장르가 다름).
 - **오브젝트 제작 방식 (사용자 결정, C안):** 만드는 기술만 Cinderwatch를 따르고 생김새는 Mori Isle 고유(동화 같은 숲속 미니어처)로 만든다. 건물·울타리·수레·가로등·우물 같은 구조물은 도형 조립(`Soup`), 나무·덤불·꽃은 적층을 유지한다.
 - **차이점:** Cinderwatch는 카메라 각도가 고정이지만 Mori Isle은 좌우 회전과 상하 30°~86°를 허용한다. Cinderwatch는 일반 3D 메쉬, Mori Isle은 스프라이트 적층과 도형 조립을 섞어 쓴다. 기법을 가져올 때 이 차이를 고려한다.
@@ -26,7 +26,9 @@
 - **UI (14. HUD):** 글자를 최소로 둔다(사용자 결정). 아래는 카테고리 슬롯(`catSlots`, 호버 90ms 뒤 열림·220ms 유예 뒤 닫힘, 터치는 클릭으로 토글) + 지우개 + 회전, 오른쪽 위는 아이콘만. 이름은 호버·선택 때 `showItemName`으로 잠깐만 띄운다. 색은 CSS 변수(`--ink`, `--glow`, 시간대별 `--scrim`·`--halo`), 글꼴은 Galmuri(jsDelivr). **HUD 아이콘은 "손으로 깎은 나무 토큰"**(사용자 결정: Tiny Glade·동물의 숲처럼 일관된 코지 스큐어모피즘이되 고유하게). `4C. COZY UI TOKENS`의 `GLYPHS`(56×56, 진한 갈색 선 + 홈에 채운 차분한 색)와 `makeToken(name, {round})`로 만든다. 카테고리 슬롯은 오브젝트 그림이 아니라 카테고리 토큰. 새 아이콘도 이 방식으로만 추가한다. 트레이의 오브젝트는 크림색 종이 카드 위의 실제 3D 모델 아이콘(`renderObjectIcon` + `fitIconCanvas`, 소나무·참나무·바위·들꽃·갈대·버섯은 아직 적층 그림). 새 텍스트 배너나 상자형 패널을 늘리지 말 것. 사용자 결정: 아이콘 밑 숫자·키 표시 없음, 브라우저 `title` 툴팁 금지(아이콘 버튼은 `data-hint` 이름표, 카테고리는 이름표 없음). 4초 유휴 흐림(`ui-idle`)은 `.panel`을 제외해야 한다(아니면 닫힌 창이 보인다).
 - `CozyAudio`: 모든 효과음은 `audio.out(node, pan)` → `sfxBus`로, 배경음(바람·풍경·모닥불)은 `masterGain`으로 보낸다. 둘 다 잔향(`reverb`)과 컴프레서(`comp`)를 거친다.
 - `enhanceStandardMaterial`: 표준 재질에 바람, 높이 안개, 분해 보기, 낙하 애니메이션(`aSpawn` 인스턴스 속성)을 셰이더로 덧붙인다. 그림자용 `customDepthMaterial`도 낙하 애니메이션을 따라간다.
-- `initGame()` 안: 렌더러/렌더 타깃 → 카메라(`updateCameraTransform`) → 조명 → 후처리(`runPostPipeline`) → 섬·인스턴스 → `rebuildInstances()` → 입력 → `animate()`.
+- `initGame()` 안: 렌더러/렌더 타깃 → 카메라(`updateCameraTransform`) → 조명 → 후처리(`runPostPipeline`) → 섬·인스턴스 → `rebuildInstances()` → `islandRoot`로 묶기 → 입력 → 17. 시작 조립 → `animate()`.
+- **시작 화면과 조립 (17. STARTUP ASSEMBLY):** HTML의 `#loader`(정적 SVG 새싹 토큰, three.js 전에 보여야 해서 `makeToken` 출력을 붙여 넣음, id 접두어 `ldtk`)가 먼저 뜨고, `body.booting`이 HUD를 숨긴다. 뒤에서 완성된 섬을 3프레임 그려 셰이더·그림자를 미리 컴파일한 뒤 `onBootReady`로 토큰이 빛난다. 누르면 `beginFromLoader`가 소리를 켜고(사용자 동작 안이라 가능) `startAssembly`를 부른다. 타임라인은 `IT` 상수 하나에 모여 있다. 섬 세 층은 위치 오프셋으로 떨어지고, 오브젝트는 `spawnT`를 미래로 잡아 기존 낙하 셰이더를 그대로 쓴다. 불빛은 `introLightK(x, z, now)`(스프라이트, 포인트 라이트, 불꽃, 불티, 굴뚝 연기), 접지 그림자는 `introShadowK`로 가린다. 효과·소리는 `introFx`로 예약해서 건너뛰기(`finishIntro(true)`) 때 한꺼번에 지운다. "처음 섬으로"는 `resetIsland`(흔들림 → `islandRoot`째 낙하 → 다시 조립). 조립 중 입력은 window capture 단계의 `onIntroInput`이 막고 건너뛰기로 쓴다(휠만 통과). `#intro=0`이면 끄고, `#debug=1`이면 기본으로 꺼진다.
+- **`islandRoot`:** 섬 층, 울타리, 오두막, 불빛 후광, 연기, 불꽃, 불티, 모든 인스턴스 오브젝트의 부모. 먼지, 꽃잎, 커서, 포인트 라이트는 월드에 둔다. 섬 위에 서는 새 오브젝트 그룹을 만들면 여기에 넣는다(초기화 때 같이 떨어지도록).
 
 ## 지켜야 할 규칙 (어기면 조용히 깨짐)
 - **그림자는 필요할 때만 갱신한다** (`renderer.shadowMap.autoUpdate = false`). 그림자를 드리우는 물체를 움직이는 코드를 넣으면 반드시 `markShadowsDirty(초)`를 부른다. 지금은 `rebuildInstances`(1.0초)와 분해 보기 전환(1.4초)에서 부른다.
@@ -38,6 +40,8 @@
 - **해상도가 바뀌면 `applyResolution()`**을 부른다(깊이 텍스처는 `setSize`로 안 바뀌어서 새로 만든다).
 - **오두막**은 부품 96개로 만들어 낙하 애니메이션이 끝나면 `mergeCabinPrefab`으로 합친다. 다시 만들 때 `disposeObjectTree`로 해제한다.
 - 적층 오브젝트의 점 크기(`gl_PointSize`)는 `sharedUniforms.uPointScale`(씬 픽셀/CSS 픽셀)을 곱한다.
+- **새 불빛·불꽃 효과는 `introLightK`를 곱한다.** 안 그러면 시작 조립 때 물체보다 빛이 먼저 공중에 뜬다. 모닥불 불꽃 셰이더는 인스턴스 크기를 무시하므로 꺼진 불은 크기를 줄이지 말고 목록에서 뺀다.
+- **HUD 버튼 HTML은 빈 자리로 둔다.** 아이콘은 `setToken`/`makeToken`으로만 넣는다(옛 SVG를 넣으면 로딩 중에 비친다).
 
 ## 렌더링 파이프라인
 씬(HDR half float, 깊이 텍스처, 저해상도) → atmo(하늘 합성, AO, 불빛에 물드는 안개) → dof(깊이 기반 틸트 시프트) → bloom(1/2, 1/4) → comp(색수차, 색 보정, ACES, 비네팅, Bayer 디더) → 업스케일(픽셀 경계만 부드럽게 + 필름 그레인). 자동 해상도 조절은 `trackPerformance`.
@@ -48,18 +52,20 @@ node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/audio.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/items.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/ui.mjs
+node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1&intro=1" tools/tests/intro.mjs
 $env:SHOT='night'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1&time=night" tools/tests/screenshot.mjs
 ```
 - `tools/cdp.mjs`는 헤드리스 Chrome을 띄워 마우스·휠·키 입력, `evaluate`, 스크린샷을 제공한다. 결과 스크린샷은 `tools/shots/`(git 제외).
 - `#debug=1`이면 `window.__mori`(state, project, hit, audio, items, lights, renderables)가 생긴다. 읽기 전용 테스트 훅이다. `renderables()`로 draw call이 어디서 나오는지 나눠 볼 수 있다.
 - 헤드리스는 SwiftShader(소프트웨어 렌더링)라 몇 초에 몇 프레임뿐이다. 시간(ms) 측정은 의미 없고, draw call 수(`#fps=1`이면 `body[data-bench]`와 콘솔에 기록)로 비교한다. 기본 섬 기준 그림자 갱신 없는 프레임 59 calls(오두막 합치기 개선 전 82).
 - 시간대 전환은 천천히 섞이므로 스크린샷에는 `#time=night`처럼 시작 옵션을 쓴다(즉시 적용됨).
+- 헤드리스에서는 조립 중 한 프레임이 몇 초씩 걸려 시각이 안 맞는다. 조립 장면은 `__mori.introClock(초)`로 시계를 멈추고 `__mori.frame()`이 2 늘어난 뒤 찍는다(`intro.mjs` 참고, 결과 `tools/shots/intro-*.png`). `null`을 주면 다시 흐른다.
 - URL 옵션 전체 목록은 README 참고.
 
 ## 남은 일
 - 명세서 미완: 1픽셀 외곽선·샤픈 후처리.
-- **다음 작업: 시작 화면 개선** (사용자 요청, 다른 작업보다 먼저). 지금은 게임이 뜨기 전에 남색 빈 화면(`body` 배경)과 예전 선 아이콘 일부(분해·감상·초기화·도움말·지우개·회전)가 잠깐 보였다가 게임으로 갑자기 넘어가서 어색하다. 로딩 화면이나 페이드인(또는 둘 다)을 넣는다. 확인한 원인: HTML의 해당 버튼에 옛 SVG가 자리 표시로 남아 있고 `initGame()`의 `setToken`이 그것을 토큰으로 바꾼다. `initGame()`은 `window`의 `load` 뒤에 실행된다(three.js를 unpkg에서 받고, 텍스처·메쉬를 한 번에 만든다). 로딩 화면도 코지 토큰·최소 텍스트 방향을 따르고, 방식은 시안이나 설명으로 사용자 확인을 받는다.
-- **그다음: 오브젝트 늘리기** (목록은 사용자 확인 완료). 한 카테고리씩 만들고 스크린샷으로 확인한 뒤 커밋. 생활 소품부터 제안했고 시작 카테고리는 아직 안 정함. 디테일이 중요하다고 사용자가 강조함(부품 어긋남, 재질 구분, 불빛 반사). 구조물은 `SOUP_ITEMS`, 울타리·모닥불도 조립 방식으로 다시 만들고, 나무·덤불·꽃은 적층. 새 적층 오브젝트와 기존 적층 아이콘도 실제 모델 아이콘으로.
+- **시작 화면 후속 (사용자 답 대기):** 조립 연출에 임팩트 링(섬 층·오두막 착지 때만 바닥에 낮게 퍼지는 크림색 고리)과 불 켜질 때 픽셀 별 반짝임을 더할지. Claude 의견: 링은 큰 착지에만, 만화식 직선 임팩트 라인은 분위기와 안 맞아 반짝임으로 대신. 실제 노트북에서 조립 중 프레임(그림자를 매 프레임 갱신하는 3.6초 동안 자동 해상도가 떨어지는지)과 소리 느낌은 아직 확인 안 됨.
+- **다음: 오브젝트 늘리기** (목록은 사용자 확인 완료). 한 카테고리씩 만들고 스크린샷으로 확인한 뒤 커밋. 생활 소품부터 제안했고 시작 카테고리는 아직 안 정함. 디테일이 중요하다고 사용자가 강조함(부품 어긋남, 재질 구분, 불빛 반사). 구조물은 `SOUP_ITEMS`, 울타리·모닥불도 조립 방식으로 다시 만들고, 나무·덤불·꽃은 적층. 새 적층 오브젝트와 기존 적층 아이콘도 실제 모델 아이콘으로.
 
   | 카테고리 | 추가할 것 |
   | --- | --- |
@@ -71,5 +77,5 @@ $env:SHOT='night'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#d
 
 - 오브젝트가 많아지면 할 최적화 후보: 불빛 후광(하나당 draw call 1개) 묶기, 조립 오브젝트(종류당 1개 + 그림자 1개) 합치기.
 - 제안만 했고 결정 안 난 것: 섬 받침대의 "Mori Isle" 황동 명판(3D), 섬 배치 저장, Cinderwatch식 불빛 감쇠.
-- Cinderwatch에서 가져올 후보(사용자와 논의됨): 섬 조립·붕괴 연출(섬 초기화), 계절 테마(눈·낙엽 덮기 셰이더), 높이 텍스처 표면 요철, 감상 모드 자동 카메라, 안정성(소리 설정 기억, WebGL 컨텍스트 복구, 모션 줄이기 설정), 파일 분할 + 빌드 스크립트.
+- Cinderwatch에서 가져올 후보(사용자와 논의됨): 계절 테마(눈·낙엽 덮기 셰이더), 높이 텍스처 표면 요철, 감상 모드 자동 카메라, 안정성(소리 설정 기억, WebGL 컨텍스트 복구, 모션 줄이기 설정), 파일 분할 + 빌드 스크립트.
 - 직접 확인 필요로 남은 것: 실제 노트북 프레임(`#fps=1`, 예전 적층 비교는 `#stack=1`), 소리 느낌, 밤 밝기, WASD 이동 속도, UI 호버 손맛, 휴대폰 크기 화면.
