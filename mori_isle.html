@@ -2611,10 +2611,10 @@
       let camLookY = 0.05;
       let targetCamLookY = 0.05;
       const ISO_ELEVATION = Math.atan(Math.sin(Math.PI / 4));
-      // Free polar angle: from below the island (strata / underside) up to almost top-down
-      const ELEV_MIN = -50 * Math.PI / 180;
+      // Tilt range: sprite stacks split into visible slices at low angles, so never go near horizontal or below
+      const ELEV_MIN = 30 * Math.PI / 180;
       const ELEV_MAX = 86 * Math.PI / 180;
-      // #elev=10 starts at that tilt in degrees (-50 ~ 86, default ~35)
+      // #elev=60 starts at that tilt in degrees (30 ~ 86, default ~35)
       const START_ELEV = HASH.elev !== undefined && isFinite(+HASH.elev)
         ? THREE.MathUtils.clamp(+HASH.elev * Math.PI / 180, ELEV_MIN, ELEV_MAX) : ISO_ELEVATION;
       let camElev = START_ELEV;
@@ -4478,7 +4478,7 @@
           const dy = e.clientY - lastDragY;
           lastDragX = e.clientX;
           lastDragY = e.clientY;
-          setTargetElev(targetCamElev + dy * 0.0065); // drag down -> look from higher, drag up -> lower / underside
+          setTargetElev(targetCamElev + dy * 0.0065); // drag down -> look from higher, drag up -> lower
           if (Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY) > 5) hasMovedSignificantly = true;
           targetOrbitAngle -= dx * 0.0085;
         } else if (!isPhotoMode && !isExploded) {
