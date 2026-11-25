@@ -1866,6 +1866,74 @@
     const CABIN_STRIDE = 0.019;
     function cabinDropTotal() { return 15 * CABIN_STRIDE + DROP_FALL; }
 
+    // Merge all meshes under each cabin chunk that share a material into one mesh.
+    // Visual result is identical; draw calls drop from ~96 to ~25 per cabin (x2 with shadows).
+    const _mergeInv = new THREE.Matrix4(), _mergeM = new THREE.Matrix4(), _mergeN = new THREE.Matrix3(), _mergeV = new THREE.Vector3();
+    function mergeChunkByMaterial(chunk) {
+      chunk.updateMatrixWorld(true);
+      _mergeInv.copy(chunk.matrixWorld).invert();
+      const groups = new Map();
+      chunk.traverse((o) => {
+        if (!o.isMesh || o === chunk) return;
+        const key = o.material.uuid + (o.castShadow ? 'c' : '') + (o.receiveShadow ? 'r' : '');
+        if (!groups.has(key)) groups.set(key, { mat: o.material, cast: o.castShadow, recv: o.receiveShadow, list: [] });
+        groups.get(key).list.push(o);
+      });
+      const merged = [];
+      for (const g of groups.values()) {
+        let total = 0;
+        const parts = g.list.map((m) => {
+          const geo = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry;
+          total += geo.attributes.position.count;
+          return { m, geo };
+        });
+        const pos = new Float32Array(total * 3), nrm = new Float32Array(total * 3), uv = new Float32Array(total * 2);
+        let off = 0;
+        for (const { m, geo } of parts) {
+          _mergeM.multiplyMatrices(_mergeInv, m.matrixWorld);
+          _mergeN.getNormalMatrix(_mergeM);
+          const P = geo.attributes.position, N = geo.attributes.normal, U = geo.attributes.uv;
+          for (let i = 0; i < P.count; i++) {
+            _mergeV.fromBufferAttribute(P, i).applyMatrix4(_mergeM);
+            pos[(off + i) * 3] = _mergeV.x; pos[(off + i) * 3 + 1] = _mergeV.y; pos[(off + i) * 3 + 2] = _mergeV.z;
+            if (N) { _mergeV.fromBufferAttribute(N, i).applyMatrix3(_mergeN).normalize(); nrm[(off + i) * 3] = _mergeV.x; nrm[(off + i) * 3 + 1] = _mergeV.y; nrm[(off + i) * 3 + 2] = _mergeV.z; }
+            if (U) { uv[(off + i) * 2] = U.getX(i); uv[(off + i) * 2 + 1] = U.getY(i); }
+          }
+          off += P.count;
+          if (geo !== m.geometry) geo.dispose();
+        }
+        const mg = new THREE.BufferGeometry();
+        mg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        mg.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+        mg.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+        mg.computeBoundingSphere();
+        const mesh = new THREE.Mesh(mg, g.mat);
+        mesh.castShadow = g.cast; mesh.receiveShadow = g.recv;
+        merged.push(mesh);
+      }
+      // drop the originals (and their GPU buffers)
+      const oldGeos = new Set();
+      chunk.traverse((o) => { if (o.isMesh) oldGeos.add(o.geometry); });
+      while (chunk.children.length) chunk.remove(chunk.children[0]);
+      oldGeos.forEach((g) => g.dispose());
+      merged.forEach((m) => chunk.add(m));
+    }
+    function mergeCabinPrefab(root) {
+      const { chunkInterior, chunkWalls, chunkRoof } = root.userData;
+      [chunkInterior, chunkWalls, chunkRoof].forEach(mergeChunkByMaterial);
+      root.userData.merged = true;
+      root.userData.dropParts = null;
+    }
+    function disposeObjectTree(root) {
+      const mats = new Set();
+      root.traverse((o) => {
+        if (!o.isMesh) return;
+        o.geometry.dispose();
+        (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => mats.add(m));
+      });
+      mats.forEach((m) => m.dispose());
+    }
+
     function buildStorybookCabinPrefab() {
       const root = new THREE.Group();
       const chunkInterior = new THREE.Group(); // Floor + Bed + Rug + Fireplace + Table
@@ -2480,7 +2548,16 @@
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.shadowMap.enabled = true;
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      // The key light never moves and wind sway isn't in the depth pass, so the shadow map only
+      // changes when casters move: placement/removal, drop animations, exploded-view transitions.
+      renderer.shadowMap.autoUpdate = false;
+      renderer.shadowMap.needsUpdate = true;
+      let shadowHoldUntil = 0;
+      function markShadowsDirty(seconds = 0.05) {
+        shadowHoldUntil = Math.max(shadowHoldUntil, performance.now() * 0.001 + seconds);
+      }
       renderer.toneMapping = THREE.NoToneMapping;
+      renderer.info.autoReset = false; // count draw calls for the whole frame (all passes)
       container.appendChild(renderer.domElement);
 
       function getRTSize() {
@@ -2534,6 +2611,20 @@
       let camLookY = 0.05;
       let targetCamLookY = 0.05;
       const ISO_ELEVATION = Math.atan(Math.sin(Math.PI / 4));
+      // Free polar angle: from below the island (strata / underside) up to almost top-down
+      const ELEV_MIN = -50 * Math.PI / 180;
+      const ELEV_MAX = 86 * Math.PI / 180;
+      // #elev=10 starts at that tilt in degrees (-50 ~ 86, default ~35)
+      const START_ELEV = HASH.elev !== undefined && isFinite(+HASH.elev)
+        ? THREE.MathUtils.clamp(+HASH.elev * Math.PI / 180, ELEV_MIN, ELEV_MAX) : ISO_ELEVATION;
+      let camElev = START_ELEV;
+      let targetCamElev = START_ELEV;
+      function setTargetElev(v) { targetCamElev = THREE.MathUtils.clamp(v, ELEV_MIN, ELEV_MAX); }
+      function resetView() {
+        targetOrbitAngle = Math.round((targetOrbitAngle - Math.PI / 4) / (Math.PI / 2)) * (Math.PI / 2) + Math.PI / 4;
+        targetCamElev = ISO_ELEVATION;
+        targetCamDist = isExploded ? 51.5 : 42.5;
+      }
 
       const _cDir = new THREE.Vector3(), _cRight = new THREE.Vector3(), _cUp = new THREE.Vector3(), _cTgt = new THREE.Vector3();
       function updateCameraTransform() {
@@ -2542,7 +2633,7 @@
         camera.left = -vh * aspect / 2; camera.right = vh * aspect / 2;
         camera.top = vh / 2; camera.bottom = -vh / 2;
 
-        const e = ISO_ELEVATION, so = Math.sin(orbitAngle), co = Math.cos(orbitAngle);
+        const e = camElev, so = Math.sin(orbitAngle), co = Math.cos(orbitAngle);
         _cDir.set(Math.cos(e) * so, Math.sin(e), Math.cos(e) * co);
         _cRight.set(co, 0, -so);
         _cUp.set(-Math.sin(e) * so, Math.cos(e), -Math.sin(e) * co);
@@ -2600,7 +2691,10 @@
       for (let i = 0; i < MAX_POINT_LIGHTS; i++) {
         const pl = new THREE.PointLight('#ffaa50', 0, 5.4, 2.0);
         pl.castShadow = false;
-        pl.visible = false;
+        // Always "visible" (intensity 0 when unused): changing the number of visible lights forces
+        // every material to recompile, which hitches the frame when a lantern/campfire is placed.
+        pl.visible = true;
+        pl.userData = { active: false };
         scene.add(pl);
         pointLightPool.push(pl);
       }
@@ -2866,7 +2960,7 @@
         let k = 0;
         for (const pl of pointLightPool) {
           if (k >= NL) break;
-          if (!pl.visible || pl.intensity <= 0) continue;
+          if (!pl.userData.active || pl.intensity <= 0) continue;
           pl.getWorldPosition(mistLightPos[k]);
           mistLightCol[k].set(pl.color.r, pl.color.g, pl.color.b).multiplyScalar(pl.intensity * 0.09);
           k++;
@@ -2975,7 +3069,10 @@
       const fpsEl = HASH.fps === '1' ? Object.assign(document.createElement('div'), {
         style: 'position:fixed;left:8px;bottom:8px;z-index:99;font:11px monospace;color:#fff;background:rgba(0,0,0,.55);padding:3px 6px;border-radius:4px;pointer-events:none'
       }) : null;
-      if (fpsEl) document.body.appendChild(fpsEl);
+      if (fpsEl) {
+        document.body.appendChild(fpsEl);
+        window.addEventListener('error', (ev) => { document.body.dataset.bench = (document.body.dataset.bench || '') + '[error] ' + ev.message + ' @' + ev.lineno + ' '; });
+      }
       // Adaptive resolution: drop internal resolution when frames run long, recover when there's headroom
       const perf = { acc: 0, frames: 0, slow: 0, fast: 0, hold: 0, back: 12 };
       function trackPerformance(rawDt) {
@@ -2983,7 +3080,11 @@
         perf.acc += rawDt; perf.frames++;
         if (perf.acc < 2) return;
         const ms = perf.acc / perf.frames * 1000;
-        if (fpsEl) fpsEl.textContent = (1000 / ms).toFixed(0) + ' fps  ' + rtSize.w + 'x' + rtSize.h + '  q' + LOWRES.quality.toFixed(2) + (POST.lite ? ' lite' : '') + '  calls ' + renderer.info.render.calls;
+        if (fpsEl) {
+          fpsEl.textContent = (1000 / ms).toFixed(0) + ' fps  ' + ms.toFixed(1) + 'ms  ' + rtSize.w + 'x' + rtSize.h + '  q' + LOWRES.quality.toFixed(2) + (POST.lite ? ' lite' : '')
+            + '  calls ' + renderer.info.render.calls + '  tris ' + (renderer.info.render.triangles / 1000).toFixed(0) + 'k';
+          console.log('[mori-perf] ' + fpsEl.textContent);
+        }
         if (ms > 22.5) { perf.slow++; perf.fast = 0; } else { perf.slow = 0; perf.fast = ms < 18.6 ? perf.fast + 1 : 0; }
         perf.hold -= perf.acc;
         if (LOWRES.enabled && LOWRES.adaptive) {
@@ -3074,13 +3175,19 @@
       let activeCabins = []; // { mesh, baseX, baseY, baseZ, rotY }
 
       const cabinGhostPrefab = buildStorybookCabinPrefab();
+      const cabinGhostMat = new THREE.MeshBasicMaterial({ color: '#98ffb8', transparent: true, opacity: 0.42, depthWrite: false });
+      const cabinPrefabMats = new Set();
       cabinGhostPrefab.traverse((child) => {
         if (child.isMesh) {
-          child.material = new THREE.MeshBasicMaterial({ color: '#98ffb8', transparent: true, opacity: 0.42, depthWrite: false });
+          cabinPrefabMats.add(child.material);
+          child.material = cabinGhostMat; // one shared material -> merges into a single mesh per chunk
           child.castShadow = false;
+          child.receiveShadow = false;
         }
       });
+      cabinPrefabMats.forEach((m) => m.dispose());
       cabinGhostPrefab.visible = false;
+      mergeCabinPrefab(cabinGhostPrefab);
       scene.add(cabinGhostPrefab);
 
       const pathGhost = new THREE.Mesh(
@@ -3650,7 +3757,9 @@
         ITEM_DEFS.forEach((d) => { if (d.type === 'stack') buckets[d.id] = []; });
 
         while (cabinGroupContainer.children.length > 0) {
-          cabinGroupContainer.remove(cabinGroupContainer.children[0]);
+          const old = cabinGroupContainer.children[0];
+          cabinGroupContainer.remove(old);
+          disposeObjectTree(old);
         }
         while (glowGroup.children.length > 0) {
           glowGroup.remove(glowGroup.children[0]);
@@ -3660,11 +3769,13 @@
         contactShadowBaseList = [];
 
         let plIndex = 0;
-        pointLightPool.forEach((pl) => { pl.visible = false; pl.intensity = 0; });
+        pointLightPool.forEach((pl) => { pl.userData = { active: false }; pl.intensity = 0; });
 
         let pathCenterIdx = 0, pathConnIdx = 0, pathCobbleIdx = 0;
         let fencePostIdx = 0, fenceRailIdx = 0;
         let crateIdx = 0;
+
+        markShadowsDirty(1.0); // covers the stacked drop + cabin drop & squash
 
         // 1. Process Grid-Snapped Items
         placedItems.forEach((entry) => {
@@ -3782,9 +3893,9 @@
                 flicker: !!def.glow.flicker,
                 seed: hash2D(entry.gx, entry.gz, 15) * 20,
                 isCabin: def.type === '3d_cabin',
-                tier: def.explodeTier || 0
+                tier: def.explodeTier || 0,
+                active: true
               };
-              pl.visible = true;
             }
           }
         });
@@ -3818,6 +3929,7 @@
             mesh.userData.spawnAttr.array[i] = item.spawnT;
           }
           mesh.count = Math.min(list.length, MAX_INSTANCES);
+          mesh.visible = mesh.count > 0; // an empty InstancedMesh still costs a draw call (x2 with shadows)
           mesh.instanceMatrix.needsUpdate = true;
           mesh.userData.spawnAttr.needsUpdate = true;
         });
@@ -3828,6 +3940,7 @@
         fencePostInst.count = fencePostIdx; fencePostInst.instanceMatrix.needsUpdate = true;
         fenceRailInst.count = fenceRailIdx; fenceRailInst.instanceMatrix.needsUpdate = true;
         crateClutterInst.count = crateIdx; crateClutterInst.instanceMatrix.needsUpdate = true;
+        for (const im of [pathCenterInst, pathConnInst, pathCobbleInst, fencePostInst, fenceRailInst, crateClutterInst]) im.visible = im.count > 0;
 
         // 3. Clustered Ghibli-Style Grass Tufts (Large + 2~3 Med/Small Clumps with Tile Edge Padding!)
         let grassIdx = 0;
@@ -4145,6 +4258,7 @@
       function toggleExplodedView() {
         isExploded = !isExploded;
         explodeToggleTime = performance.now() * 0.001;
+        markShadowsDirty(1.4); // stagger + ease-out-back settle
         btnExplodeTop.classList.toggle('active', isExploded);
         explodeBtnText.textContent = isExploded ? '디오라마 합치기' : '디오라마 분해 보기';
         targetCamDist = isExploded ? 51.5 : 42.5;
@@ -4324,7 +4438,7 @@
 
       let isOrbiting = false;
       let orbitButton = -1;
-      let dragStartX = 0, dragStartY = 0, lastDragX = 0, dragStartTime = 0;
+      let dragStartX = 0, dragStartY = 0, lastDragX = 0, lastDragY = 0, dragStartTime = 0;
       let hasMovedSignificantly = false;
 
       renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -4335,7 +4449,7 @@
           isOrbiting = true;
           orbitButton = e.button;
           dragStartX = lastDragX = e.clientX;
-          dragStartY = e.clientY;
+          dragStartY = lastDragY = e.clientY;
           dragStartTime = performance.now();
           hasMovedSignificantly = false;
           container.classList.add('dragging');
@@ -4344,7 +4458,7 @@
             isOrbiting = true;
             orbitButton = 0;
             dragStartX = lastDragX = e.clientX;
-            dragStartY = e.clientY;
+            dragStartY = lastDragY = e.clientY;
             hasMovedSignificantly = false;
             container.classList.add('dragging');
           } else {
@@ -4361,7 +4475,10 @@
       window.addEventListener('pointermove', (e) => {
         if (isOrbiting) {
           const dx = e.clientX - lastDragX;
+          const dy = e.clientY - lastDragY;
           lastDragX = e.clientX;
+          lastDragY = e.clientY;
+          setTargetElev(targetCamElev + dy * 0.0065); // drag down -> look from higher, drag up -> lower / underside
           if (Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY) > 5) hasMovedSignificantly = true;
           targetOrbitAngle -= dx * 0.0085;
         } else if (!isPhotoMode && !isExploded) {
@@ -4390,15 +4507,20 @@
 
       renderer.domElement.addEventListener('wheel', (e) => {
         e.preventDefault();
-        targetCamDist = THREE.MathUtils.clamp(targetCamDist + e.deltaY * 0.025, 16.0, 62.0);
+        const unit = e.deltaMode === 1 ? 33 : (e.deltaMode === 2 ? 400 : 1); // lines / pages -> pixels
+        const dy = e.deltaY * unit, dx = e.deltaX * unit;
+        // pinch on a laptop trackpad arrives as ctrl+wheel with small deltas
+        targetCamDist = THREE.MathUtils.clamp(targetCamDist * Math.exp(dy * (e.ctrlKey ? 0.01 : 0.0009)), 16.0, 62.0);
+        if (!e.ctrlKey && Math.abs(dx) > 0.5) targetOrbitAngle -= dx * 0.0045; // two-finger sideways swipe orbits
       }, { passive: false });
 
-      let prevPinchDist = null, prevTwoFingerX = null;
+      let prevPinchDist = null, prevTwoFingerX = null, prevTwoFingerY = null;
       renderer.domElement.addEventListener('touchstart', (e) => {
         if (e.touches.length === 2) {
           const t0 = e.touches[0], t1 = e.touches[1];
           prevPinchDist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
           prevTwoFingerX = (t0.clientX + t1.clientX) * 0.5;
+          prevTwoFingerY = (t0.clientY + t1.clientY) * 0.5;
         }
       }, { passive: true });
       renderer.domElement.addEventListener('touchmove', (e) => {
@@ -4406,15 +4528,25 @@
           const t0 = e.touches[0], t1 = e.touches[1];
           const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
           const midX = (t0.clientX + t1.clientX) * 0.5;
+          const midY = (t0.clientY + t1.clientY) * 0.5;
           targetCamDist = THREE.MathUtils.clamp(targetCamDist - (dist - prevPinchDist) * 0.08, 16.0, 62.0);
           targetOrbitAngle -= (midX - prevTwoFingerX) * 0.01;
+          setTargetElev(targetCamElev + (midY - prevTwoFingerY) * 0.008);
           prevPinchDist = dist;
           prevTwoFingerX = midX;
+          prevTwoFingerY = midY;
         }
       }, { passive: true });
-      renderer.domElement.addEventListener('touchend', () => { prevPinchDist = null; prevTwoFingerX = null; });
+      renderer.domElement.addEventListener('touchend', () => { prevPinchDist = null; prevTwoFingerX = null; prevTwoFingerY = null; });
 
       window.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+          targetOrbitAngle += (e.key === 'ArrowLeft' ? 1 : -1) * 0.12; e.preventDefault(); return;
+        }
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+          setTargetElev(targetCamElev + (e.key === 'ArrowUp' ? 1 : -1) * 0.09); e.preventDefault(); return;
+        }
+        if (e.key === 'f' || e.key === 'F') { resetView(); return; }
         if (e.key === 'Escape') {
           if (isPhotoMode) setPhotoMode(false);
           resetPopover.classList.remove('open');
@@ -4480,6 +4612,7 @@
 
         // Smooth camera orbit, zoom & look height
         orbitAngle += (targetOrbitAngle - orbitAngle) * Math.min(1, dt * 10);
+        camElev += (targetCamElev - camElev) * Math.min(1, dt * 10);
         camDist += (targetCamDist - camDist) * Math.min(1, dt * 8);
         camLookY += (targetCamLookY - camLookY) * Math.min(1, dt * 8);
         updateCameraTransform();
@@ -4574,14 +4707,16 @@
             }
             const sxz = 1 + (1 - sy) * 0.45;
             cb.mesh.scale.set(sxz, sy, sxz);
-            if (done) { ud.dropDone = true; cb.mesh.scale.set(1, 1, 1); }
+            if (done) { ud.dropDone = true; cb.mesh.scale.set(1, 1, 1); mergeCabinPrefab(cb.mesh); markShadowsDirty(); }
           }
         }
 
         // 4. Height-Proportional Contact Shadows (shift along key light & soften alpha as layers float!)
         const shadowFade = THREE.MathUtils.clamp(1.0 - pMid * 0.58, 0.32, 1.0);
         csMat.opacity = shadowFade;
-        for (let i = 0; i < contactShadowBaseList.length; i++) {
+        const csChanged = pMid !== csLast.pMid || pProps !== csLast.pProps || contactShadowBaseList !== csLast.list;
+        csLast.pMid = pMid; csLast.pProps = pProps; csLast.list = contactShadowBaseList;
+        for (let i = 0; csChanged && i < contactShadowBaseList.length; i++) {
           const cs = contactShadowBaseList[i];
           const lift = cs.tier === 2 ? pMid * 1.4 : (cs.tier === 1 ? pMid * 1.1 : pProps * 0.42);
           animDummy.position.set(cs.x - lift * 0.34, cs.y, cs.z - lift * 0.26);
@@ -4592,7 +4727,7 @@
           contactShadowInst.setMatrixAt(i, animDummy.matrix);
         }
         contactShadowInst.count = contactShadowBaseList.length;
-        contactShadowInst.instanceMatrix.needsUpdate = true;
+        if (csChanged) contactShadowInst.instanceMatrix.needsUpdate = true;
 
         // 5. Smooth 3-Point Lighting & Atmosphere interpolation
         const lr = Math.min(1, dt * 2.5);
@@ -4654,7 +4789,7 @@
         }
         for (let i = 0; i < pointLightPool.length; i++) {
           const pl = pointLightPool[i];
-          if (!pl.visible) continue;
+          if (!pl.userData.active) continue;
           const ud = pl.userData;
           const flick = ud.flicker
             ? (0.80 + 0.20 * Math.sin(elapsed * 10.5 + ud.seed))
@@ -4715,6 +4850,8 @@
           }
         }
 
+        renderer.info.reset();
+        if (performance.now() * 0.001 <= shadowHoldUntil || HASH.noopt === '1') renderer.shadowMap.needsUpdate = true;
         // Pass 1: Render 3D scene to WebGLRenderTarget
         renderer.setRenderTarget(renderTarget);
         renderer.setClearColor(0x000000, 0);
@@ -4729,10 +4866,24 @@
         renderer.setRenderTarget(null);
         renderer.render(upScene, postCamera);
         trackPerformance(rawFrameDt);
+        // #fps=1 also writes a draw-call snapshot (frame 12 and an idle frame 150) to <body data-bench> and the console
+        if (fpsEl && (++benchFrame === 3 || benchFrame === 150)) {
+          let cabinMeshes = 0, sceneMeshes = 0, casters = 0;
+          cabinGroupContainer.traverse((o) => { if (o.isMesh) cabinMeshes++; });
+          scene.traverse((o) => { if (o.isMesh && o.visible) { sceneMeshes++; if (o.castShadow) casters++; } });
+          const line = '[f' + benchFrame + '] calls ' + renderer.info.render.calls + ' tris ' + renderer.info.render.triangles
+            + ' programs ' + renderer.info.programs.length + ' geos ' + renderer.info.memory.geometries
+            + ' | meshes ' + sceneMeshes + ' casters ' + casters + ' cabinMeshes ' + cabinMeshes;
+          document.body.dataset.bench = (document.body.dataset.bench || '') + line + ' ';
+          console.log('[mori-bench] ' + line);
+        }
       }
+      let benchFrame = 0;
+      const csLast = { pMid: -1, pProps: -1, list: null };
 
       // #time=golden / #time=night starts at that time of day
       if (HASH.time && TIME_ORDER.includes(HASH.time)) setTimeOfDay(TIME_ORDER.indexOf(HASH.time));
+      if (HASH.explode === '1') setTimeout(toggleExplodedView, 600); // #explode=1 opens the exploded view
 
       requestAnimationFrame(animate);
     }
