@@ -44,4 +44,10 @@ export default async ({ wait, evaluate, mouse, key, log }) => {
   ok('H opens help', await J(`document.getElementById('help-panel').classList.contains('open')`));
   await key('Escape'); await wait(300);
   ok('Esc closes help', !(await J(`document.getElementById('help-panel').classList.contains('open')`)));
+
+  // idle: the HUD fades back, but closed panels must stay invisible
+  await wait(6000);
+  const idle = await J(`({ idle: document.body.classList.contains('ui-idle'), dock: +getComputedStyle(document.getElementById('hud-dock')).opacity, help: +getComputedStyle(document.getElementById('help-panel')).opacity, reset: +getComputedStyle(document.getElementById('reset-popover')).opacity })`);
+  ok('idle fades the dock', idle.idle && idle.dock < 0.5, JSON.stringify(idle));
+  ok('closed panels stay hidden when idle', idle.help === 0 && idle.reset === 0, JSON.stringify(idle));
 };

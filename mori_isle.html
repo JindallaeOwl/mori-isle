@@ -97,7 +97,8 @@
     body.photo-mode #sys { transform: translateY(-16px); }
 
     /* untouched for a while: the UI steps back so the diorama is the only thing on screen */
-    body.ui-idle:not(.photo-mode) .ui-layer { opacity: 0.32; }
+    /* panels are excluded: this rule would override their closed state (opacity 0) and show them */
+    body.ui-idle:not(.photo-mode) .ui-layer:not(.panel) { opacity: 0.32; }
 
     #hud-scrim {
       position: fixed;
