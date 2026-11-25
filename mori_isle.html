@@ -755,24 +755,24 @@
         dotColor: '#8ea8ff',
         skyTop: new THREE.Color('#090e21'),
         skyBottom: new THREE.Color('#1d2a4f'),
-        keyColor: new THREE.Color('#86a6e6'),
-        keyIntensity: 1.1,
-        fillColor: new THREE.Color('#2d4175'),
-        fillIntensity: 0.52,
-        rimColor: new THREE.Color('#9ab8ff'),
-        rimIntensity: 0.95,
-        hemiSky: new THREE.Color('#354b82'),
-        hemiGround: new THREE.Color('#141724'),
-        hemiIntensity: 0.44,
-        fogColor: new THREE.Color('#273b66'),
+        keyColor: new THREE.Color('#7a96dc'),  // cold moonlight
+        keyIntensity: 0.8,
+        fillColor: new THREE.Color('#24365f'),
+        fillIntensity: 0.3,
+        rimColor: new THREE.Color('#8aa8f0'),
+        rimIntensity: 0.62,
+        hemiSky: new THREE.Color('#26375f'),
+        hemiGround: new THREE.Color('#0c0e17'),
+        hemiIntensity: 0.38,
+        fogColor: new THREE.Color('#1c2a4c'),
         fogDensity: 0.54,
         waterDeep: new THREE.Color('#0d1a38'),
         waterShallow: new THREE.Color('#1f3b6b'),
         waterFoam: new THREE.Color('#6488bd'),
-        gradeTint: new THREE.Color('#d2e0ff'),
+        gradeTint: new THREE.Color('#c6d6ff'),
         gradeWarmth: -0.04,
         nightFactor: 1.0,
-        pointIntensity: 4.2
+        pointIntensity: 6.0  // warm lamps/fires become the main light at night
       }
     };
     const TIME_ORDER = ['day', 'golden', 'night'];
@@ -780,6 +780,16 @@
     /* =========================================================================
        2. DETERMINISTIC HASH, EASING & SHARED UNIFORMS
        ========================================================================= */
+    // Smooth 1D value noise in [-1, 1] (two octaves of this give a natural flame flicker)
+    function noise1(x, seed = 0) {
+      const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f);
+      const a = Math.sin((i + seed * 13.1) * 127.1) * 43758.5453, b = Math.sin((i + 1 + seed * 13.1) * 127.1) * 43758.5453;
+      return ((a - Math.floor(a)) * (1 - u) + (b - Math.floor(b)) * u) * 2 - 1;
+    }
+    function fireFlicker(t, seed) {
+      return 0.86 + 0.1 * noise1(t * 6.3, seed) + 0.06 * noise1(t * 17.0, seed + 1);
+    }
+
     function hash2D(x, y, seed = 0) {
       const n = Math.sin(x * 127.1 + y * 311.7 + seed * 74.7) * 43758.5453123;
       return n - Math.floor(n);
@@ -1440,11 +1450,12 @@
               px(ctx, cx + i, cy - i * 0.4, '#4d2e1b');
             }
           }
-          if (layer >= 2 && layer <= 13) {
-            const r = Math.max(0.7, 3.2 - (layer - 2) * 0.25);
-            const col = layer < 5 ? '#ff5722' : (layer < 9 ? '#ff9800' : '#ffeb6b');
-            fillDisc(ctx, cx + Math.sin(layer * 0.9) * 0.5, cy, r, col);
-            fillDisc(emCtx, cx + Math.sin(layer * 0.9) * 0.5, cy, r, col);
+          if (layer >= 2 && layer <= 5) {
+            // glowing coal bed (the flame itself is an animated billboard: see CAMPFIRE FLAMES)
+            const r = 3.0 - (layer - 2) * 0.45;
+            const col = layer < 4 ? '#ff5722' : '#ff9800';
+            fillDisc(ctx, cx, cy, r, col);
+            fillDisc(emCtx, cx, cy, r, col);
           }
         }
       },
@@ -3602,6 +3613,137 @@
           dustLife[i] = 1.0;
         }
       }
+      // --- CAMPFIRE FLAMES (noise-driven billboard shader) & RISING EMBERS ---
+      let campfireSpots = []; // filled by rebuildInstances: { x, y, z, seed }
+      const MAX_FIRES = 16;
+      const flameGeo = new THREE.PlaneGeometry(1, 1);
+      flameGeo.translate(0, 0.5, 0); // base of the flame sits on the coals
+      const flameSeedAttr = new THREE.InstancedBufferAttribute(new Float32Array(MAX_FIRES), 1);
+      flameGeo.setAttribute('aSeed', flameSeedAttr);
+      const flameMat = new THREE.ShaderMaterial({
+        uniforms: { uTime: sharedUniforms.uTime, uNightFactor: sharedUniforms.uNightFactor, uSize: { value: new THREE.Vector2(0.36, 0.56) } },
+        vertexShader: `
+          attribute float aSeed;
+          uniform vec2 uSize;
+          varying vec2 vUv; varying float vSeed;
+          void main() {
+            vUv = uv; vSeed = aSeed;
+            vec4 mv = viewMatrix * modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+            mv.xy += position.xy * uSize; // camera-facing
+            gl_Position = projectionMatrix * mv;
+          }
+        `,
+        fragmentShader: `
+          uniform float uTime; uniform float uNightFactor;
+          varying vec2 vUv; varying float vSeed;
+          float hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+          float noise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+            return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y); }
+          void main() {
+            vec2 p = vec2(vUv.x * 2.0 - 1.0, vUv.y);
+            float y = p.y, t = uTime * 1.5 + vSeed * 17.0;
+            float n1 = noise(vec2(p.x * 2.6 + vSeed * 7.0, y * 3.2 - t * 2.3));
+            float n2 = noise(vec2(p.x * 5.5 - vSeed * 3.0, y * 6.0 - t * 3.9));
+            float x = p.x + (n1 - 0.5) * 0.55 * y;
+            float w = mix(0.66, 0.02, pow(y, 0.85));
+            float body = 1.0 - smoothstep(w * 0.35, w, abs(x));
+            float d = body * (1.08 - y) + (n1 * 0.62 + n2 * 0.38 - 0.5) * (0.28 + 0.6 * y) - smoothstep(0.0, 0.07, 0.07 - y) * 0.6;
+            float a = smoothstep(0.1, 0.16, d);
+            if (a < 0.01) discard;
+            vec3 col = mix(vec3(1.0, 0.24, 0.03), vec3(1.0, 0.56, 0.1), smoothstep(0.26, 0.3, d));
+            col = mix(col, vec3(1.0, 0.86, 0.42), smoothstep(0.46, 0.52, d));
+            col = mix(col, vec3(1.15, 1.05, 0.8), smoothstep(0.7, 0.78, d));
+            float heat = mix(1.5, 2.8, uNightFactor); // HDR so bloom picks it up
+            gl_FragColor = vec4(col * heat * a, 1.0);
+          }
+        `,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+      });
+      const flameInst = new THREE.InstancedMesh(flameGeo, flameMat, MAX_FIRES);
+      flameInst.count = 0;
+      flameInst.frustumCulled = false;
+      flameInst.visible = false;
+      scene.add(flameInst);
+
+      const EMBER_COUNT = 64;
+      const emberPos = new Float32Array(EMBER_COUNT * 3), emberLife = new Float32Array(EMBER_COUNT), emberVel = new Float32Array(EMBER_COUNT * 3), emberSeed = new Float32Array(EMBER_COUNT);
+      const emberGeo = new THREE.BufferGeometry();
+      emberGeo.setAttribute('position', new THREE.BufferAttribute(emberPos, 3));
+      emberGeo.setAttribute('aLife', new THREE.BufferAttribute(emberLife, 1));
+      const emberMat = new THREE.ShaderMaterial({
+        uniforms: { uPx: sharedUniforms.uPointScale, uNightFactor: sharedUniforms.uNightFactor },
+        vertexShader: `
+          attribute float aLife; uniform float uPx; varying float vLife;
+          void main() {
+            vLife = aLife;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            gl_PointSize = aLife > 0.0 ? max(1.0, floor(2.4 * uPx + 0.5)) : 0.0;
+          }`,
+        fragmentShader: `
+          uniform float uNightFactor; varying float vLife;
+          void main() {
+            if (vLife <= 0.0) discard;
+            vec3 c = mix(vec3(1.0, 0.35, 0.06), vec3(1.0, 0.8, 0.35), vLife);
+            gl_FragColor = vec4(c * mix(1.4, 2.6, uNightFactor) * vLife, 1.0);
+          }`,
+        transparent: true, depthWrite: false, blending: THREE.AdditiveBlending
+      });
+      const emberPoints = new THREE.Points(emberGeo, emberMat);
+      emberPoints.frustumCulled = false;
+      scene.add(emberPoints);
+      let emberCursor = 0, emberAcc = 0, emberWasActive = false;
+
+      function updateCampfireFx(dt, t, lift) {
+        const n = Math.min(campfireSpots.length, MAX_FIRES);
+        flameInst.count = n;
+        flameInst.visible = n > 0;
+        for (let i = 0; i < n; i++) {
+          const f = campfireSpots[i];
+          dummyObj.position.set(f.x, f.y + lift + 0.07, f.z);
+          dummyObj.rotation.set(0, 0, 0);
+          const k = 0.92 + 0.12 * fireFlicker(t, f.seed);
+          dummyObj.scale.set(k, k, k);
+          dummyObj.updateMatrix();
+          flameInst.setMatrixAt(i, dummyObj.matrix);
+          flameSeedAttr.array[i] = f.seed;
+        }
+        if (n) { flameInst.instanceMatrix.needsUpdate = true; flameSeedAttr.needsUpdate = true; }
+
+        // spawn ~9 embers per second per fire
+        emberAcc += dt * 9 * n;
+        while (emberAcc >= 1 && n) {
+          emberAcc -= 1;
+          const f = campfireSpots[Math.floor(Math.random() * n)];
+          const i = emberCursor; emberCursor = (emberCursor + 1) % EMBER_COUNT;
+          emberPos[i * 3] = f.x + (Math.random() - 0.5) * 0.16;
+          emberPos[i * 3 + 1] = f.y + lift + 0.15 + Math.random() * 0.12;
+          emberPos[i * 3 + 2] = f.z + (Math.random() - 0.5) * 0.16;
+          emberVel[i * 3] = (Math.random() - 0.5) * 0.25;
+          emberVel[i * 3 + 1] = 0.45 + Math.random() * 0.45;
+          emberVel[i * 3 + 2] = (Math.random() - 0.5) * 0.25;
+          emberSeed[i] = Math.random() * 100;
+          emberLife[i] = 1.0;
+        }
+        let any = false;
+        for (let i = 0; i < EMBER_COUNT; i++) {
+          if (emberLife[i] <= 0) continue;
+          any = true;
+          emberLife[i] -= dt * 0.75;
+          const s = emberSeed[i];
+          emberPos[i * 3] += (emberVel[i * 3] + Math.sin(t * 3.1 + s) * 0.18) * dt;
+          emberPos[i * 3 + 1] += emberVel[i * 3 + 1] * dt;
+          emberPos[i * 3 + 2] += (emberVel[i * 3 + 2] + Math.cos(t * 2.7 + s) * 0.18) * dt;
+          emberVel[i * 3 + 1] *= 1 - dt * 0.6;
+        }
+        if (any || emberWasActive) {
+          emberGeo.attributes.position.needsUpdate = true;
+          emberGeo.attributes.aLife.needsUpdate = true;
+        }
+        emberWasActive = any;
+      }
+
       function updateDust(dt) {
         let any = false;
         for (let i = 0; i < DUST_COUNT; i++) {
@@ -3766,6 +3908,7 @@
         }
         activeCabins = [];
         activeGlowSprites = [];
+        campfireSpots = [];
         contactShadowBaseList = [];
 
         let plIndex = 0;
@@ -3868,6 +4011,7 @@
             });
           }
 
+          if (entry.id === 'campfire') campfireSpots.push({ x: wx, y: wy, z: wz, seed: hash2D(entry.gx, entry.gz, 9) * 10 });
           if (def.glow) {
             const spMat = new THREE.SpriteMaterial({
               map: glowTex, color: def.glow.color, transparent: true, opacity: 0,
@@ -4779,8 +4923,8 @@
         for (let i = 0; i < activeGlowSprites.length; i++) {
           const g = activeGlowSprites[i];
           const flick = g.flicker
-            ? (0.82 + 0.18 * Math.sin(elapsed * 9.5 + g.seed) * Math.cos(elapsed * 5.3 + g.seed))
-            : (0.92 + 0.08 * Math.sin(elapsed * 3.8 + g.seed));
+            ? fireFlicker(elapsed, g.seed)
+            : (0.95 + 0.05 * noise1(elapsed * 1.7, g.seed));
           g.sprite.material.opacity = glowPower * 0.72 * flick;
           const liftY = g.isCabin ? pMid * 1.68 : (g.tier === 1 ? pMid * 1.28 : pProps * 0.42);
           g.sprite.position.y = g.baseY + liftY;
@@ -4792,12 +4936,14 @@
           if (!pl.userData.active) continue;
           const ud = pl.userData;
           const flick = ud.flicker
-            ? (0.80 + 0.20 * Math.sin(elapsed * 10.5 + ud.seed))
-            : (0.95 + 0.05 * Math.sin(elapsed * 3.2 + ud.seed));
+            ? fireFlicker(elapsed, ud.seed)
+            : (0.95 + 0.05 * noise1(elapsed * 1.7, ud.seed));
           pl.intensity = curAtmo.pointIntensity * ud.mult * flick;
           const plLift = ud.isCabin ? pMid * 1.68 : (ud.tier === 1 ? pMid * 1.28 : pProps * 0.42);
           pl.position.y = ud.baseY + plLift;
         }
+
+        updateCampfireFx(dt, elapsed, pProps * 0.42);
 
         // 7. Fluffy Spherical Chimney Smoke (Real-time tracked to Exploding Roof/Chimney!)
         const puffsPerChimney = 8;
@@ -4882,7 +5028,14 @@
       const csLast = { pMid: -1, pProps: -1, list: null };
 
       // #time=golden / #time=night starts at that time of day
-      if (HASH.time && TIME_ORDER.includes(HASH.time)) setTimeOfDay(TIME_ORDER.indexOf(HASH.time));
+      if (HASH.time && TIME_ORDER.includes(HASH.time)) {
+        setTimeOfDay(TIME_ORDER.indexOf(HASH.time));
+        // start already there instead of blending from day
+        for (const k in curAtmo) {
+          if (curAtmo[k] && curAtmo[k].isColor) curAtmo[k].copy(targetAtmo[k]);
+          else if (typeof targetAtmo[k] === 'number') curAtmo[k] = targetAtmo[k];
+        }
+      }
       if (HASH.explode === '1') setTimeout(toggleExplodedView, 600); // #explode=1 opens the exploded view
 
       requestAnimationFrame(animate);
