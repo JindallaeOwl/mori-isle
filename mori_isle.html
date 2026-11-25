@@ -841,9 +841,56 @@
         if (this.ctx) return;
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
         this.ctx = new AudioCtx();
-        this.masterGain = this.ctx.createGain();
+        const ctx = this.ctx;
+
+        // Output: everything ends in a gentle compressor so stacked clicks / chimes never clip
+        this.comp = ctx.createDynamicsCompressor();
+        this.comp.threshold.value = -18; this.comp.knee.value = 12; this.comp.ratio.value = 3.5;
+        this.comp.attack.value = 0.004; this.comp.release.value = 0.18;
+        this.comp.connect(ctx.destination);
+
+        // Small-room reverb from a generated impulse (decaying stereo noise), shared by sfx and chimes
+        this.reverb = ctx.createConvolver();
+        this.reverb.buffer = this.makeImpulse(1.6, 3.2);
+        this.revReturn = ctx.createGain(); this.revReturn.gain.value = 0.22;
+        this.reverb.connect(this.revReturn); this.revReturn.connect(this.comp);
+
+        // Ambience (wind, chimes): master on/off fader
+        this.masterGain = ctx.createGain();
         this.masterGain.gain.value = 0.0001;
-        this.masterGain.connect(this.ctx.destination);
+        this.masterGain.connect(this.comp);
+        const ambSend = ctx.createGain(); ambSend.gain.value = 0.5;
+        this.masterGain.connect(ambSend); ambSend.connect(this.reverb);
+
+        // Sound effects bus (same level the old masterGain gave them), with a reverb send
+        this.sfxBus = ctx.createGain(); this.sfxBus.gain.value = 0.42;
+        this.sfxBus.connect(this.comp);
+        const sfxSend = ctx.createGain(); sfxSend.gain.value = 0.35;
+        this.sfxBus.connect(sfxSend); sfxSend.connect(this.reverb);
+
+        // Shared white noise for clicks and crackles
+        const wl = ctx.sampleRate;
+        this.white = ctx.createBuffer(1, wl, ctx.sampleRate);
+        const wd = this.white.getChannelData(0);
+        for (let i = 0; i < wl; i++) wd[i] = Math.random() * 2 - 1;
+
+        // Campfire bed: brown-ish rumble whose level follows nearby fires (see setFire / updateFire)
+        const bl = ctx.sampleRate * 2, brown = ctx.createBuffer(1, bl, ctx.sampleRate), bd = brown.getChannelData(0);
+        let last = 0;
+        for (let i = 0; i < bl; i++) { last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02; bd[i] = last * 3.5; }
+        const rumble = ctx.createBufferSource(); rumble.buffer = brown; rumble.loop = true;
+        const rumbleLP = ctx.createBiquadFilter(); rumbleLP.type = 'lowpass'; rumbleLP.frequency.value = 520;
+        this.fireGain = ctx.createGain(); this.fireGain.gain.value = 0;
+        this.firePan = ctx.createStereoPanner ? ctx.createStereoPanner() : ctx.createGain();
+        rumble.connect(rumbleLP); rumbleLP.connect(this.fireGain); this.fireGain.connect(this.firePan); this.firePan.connect(this.masterGain);
+        rumble.start();
+        this.fireLevel = 0; this.firePanValue = 0;
+
+        // Pause audio while the tab is hidden
+        document.addEventListener('visibilitychange', () => {
+          if (!this.ctx) return;
+          if (document.hidden) this.ctx.suspend(); else if (this.enabled) this.ctx.resume();
+        });
 
         // Soft pink-ish filtered breeze
         const bufferSize = this.ctx.sampleRate * 3;
@@ -883,6 +930,71 @@
         noise.start();
       }
 
+      makeImpulse(seconds, decay) {
+        const ctx = this.ctx, len = Math.floor(ctx.sampleRate * seconds), buf = ctx.createBuffer(2, len, ctx.sampleRate);
+        for (let c = 0; c < 2; c++) {
+          const d = buf.getChannelData(c);
+          for (let i = 0; i < len; i++) {
+            const t = i / len;
+            d[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, decay) * (i < 90 ? i / 90 : 1); // soft onset, exponential-ish tail
+          }
+        }
+        return buf;
+      }
+
+      // route a node into the sfx bus with stereo position (-1 left .. 1 right)
+      out(node, pan = 0) {
+        if (this.ctx.createStereoPanner && pan) {
+          const pn = this.ctx.createStereoPanner();
+          pn.pan.value = Math.max(-1, Math.min(1, pan));
+          node.connect(pn); pn.connect(this.sfxBus);
+        } else node.connect(this.sfxBus);
+      }
+
+      // short filtered noise burst: the "wood" in a wooden click / crackle pop
+      noiseHit(t, { freq = 1800, q = 3.5, vol = 0.1, decay = 0.035, type = 'bandpass', pan = 0, dest = null } = {}) {
+        const ctx = this.ctx;
+        const src = ctx.createBufferSource(); src.buffer = this.white;
+        const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.linearRampToValueAtTime(vol, t + 0.0015);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+        src.connect(f); f.connect(g);
+        if (dest) {
+          if (this.ctx.createStereoPanner && pan) { const pn = ctx.createStereoPanner(); pn.pan.value = pan; g.connect(pn); pn.connect(dest); }
+          else g.connect(dest);
+        } else this.out(g, pan);
+        src.start(t, Math.random() * 0.8); src.stop(t + decay + 0.02);
+      }
+
+      // Campfire ambience: level 0..1 from nearby fires + zoom, pan from screen position
+      setFire(level, pan) {
+        if (!this.ctx) return;
+        this.fireLevel = level; this.firePanValue = pan;
+        const now = this.ctx.currentTime;
+        this.fireGain.gain.setTargetAtTime(this.enabled ? level * 0.09 : 0, now, 0.4);
+        if (this.firePan.pan) this.firePan.pan.setTargetAtTime(pan, now, 0.3);
+      }
+      updateFire(dt) {
+        if (!this.ctx || !this.enabled || this.fireLevel < 0.02 || document.hidden) return;
+        // crackle pops: random rate, random brightness, a few big snaps
+        let expected = dt * 9 * this.fireLevel;
+        const now = this.ctx.currentTime;
+        while (expected > 0) {
+          if (Math.random() < Math.min(1, expected)) {
+            const big = Math.random() < 0.12;
+            this.noiseHit(now + Math.random() * dt, {
+              type: 'highpass', freq: big ? 900 : 1600 + Math.random() * 2600, q: 0.7,
+              vol: (big ? 0.11 : 0.035 + Math.random() * 0.04) * this.fireLevel,
+              decay: big ? 0.05 : 0.012 + Math.random() * 0.02,
+              pan: this.firePanValue + (Math.random() - 0.5) * 0.2, dest: this.masterGain
+            });
+          }
+          expected -= 1;
+        }
+      }
+
       ensureSfxContext() {
         this.init();
         if (this.ctx.state === 'suspended') this.ctx.resume();
@@ -894,6 +1006,7 @@
         const now = this.ctx.currentTime;
         this.masterGain.gain.cancelScheduledValues(now);
         this.masterGain.gain.setTargetAtTime(this.enabled ? 0.42 : 0.0001, now, 0.25);
+        this.setFire(this.fireLevel, this.firePanValue);
 
         if (this.enabled) {
           this.scheduleChime();
@@ -930,7 +1043,7 @@
         gain.gain.linearRampToValueAtTime(0.085, now + 0.04);
         gain.gain.exponentialRampToValueAtTime(0.0001, now + 2.7);
         osc.connect(gain);
-        gain.connect(this.masterGain);
+        gain.connect(this.masterGain); // chime lives on the ambience fader (+ reverb send)
         osc.start(now);
         osc.stop(now + 2.8);
       }
@@ -938,8 +1051,8 @@
       // Cascading wooden-block / card-fanning SFX synced to Exploded View stagger!
       playExplodeCascade(opening) {
         this.ensureSfxContext();
-        const outNode = this.enabled ? this.masterGain : this.ctx.destination;
-        const baseVol = this.enabled ? 0.22 : 0.09;
+        const quiet = !this.enabled; // UI feedback stays audible (softly) even with ambience off
+        const baseVol = quiet ? 0.09 : 0.22;
         const steps = 8;
         const now = this.ctx.currentTime;
 
@@ -959,17 +1072,19 @@
           gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.085);
 
           osc.connect(gain);
-          gain.connect(outNode);
+          if (quiet) gain.connect(this.comp); else this.out(gain);
           osc.start(t);
           osc.stop(t + 0.095);
+          this.noiseHit(t, { freq: 1400 + frac * 1400, q: 4, vol: baseVol * 0.5, decay: 0.03, dest: quiet ? this.comp : null });
         }
       }
 
       // LEGO-style stacking clicks: one per landing group, pitch 1.0 -> 1.3
-      playStackClicks(times) {
+      playStackClicks(times, pan = 0) {
         this.ensureSfxContext();
-        const outNode = this.enabled ? this.masterGain : this.ctx.destination;
-        const vol = this.enabled ? 0.16 : 0.07;
+        const quiet = !this.enabled;
+        const send = (node) => { if (quiet) node.connect(this.comp); else this.out(node, pan); };
+        const vol = quiet ? 0.07 : 0.16;
         const now = this.ctx.currentTime;
         const n = times.length;
         times.forEach((dt, i) => {
@@ -984,8 +1099,10 @@
           gain.gain.setValueAtTime(0.0001, t);
           gain.gain.linearRampToValueAtTime(vol * (i === 0 || i === n - 1 ? 1.0 : 0.7), t + 0.003);
           gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
-          osc.connect(gain); gain.connect(outNode);
+          osc.connect(gain); send(gain);
           osc.start(t); osc.stop(t + 0.06);
+          // the wooden "tok": band-passed noise rising with the tone
+          this.noiseHit(t, { freq: 1700 * pitch, q: 3.2, vol: vol * 0.9 * (i === n - 1 ? 1.2 : 1), decay: 0.032, pan, dest: quiet ? this.comp : null });
         });
         // soft wooden thump on the final landing
         const tEnd = now + times[n - 1];
@@ -997,7 +1114,7 @@
         tg.gain.setValueAtTime(0.0001, tEnd);
         tg.gain.linearRampToValueAtTime(vol * 1.1, tEnd + 0.005);
         tg.gain.exponentialRampToValueAtTime(0.0001, tEnd + 0.11);
-        th.connect(tg); tg.connect(outNode);
+        th.connect(tg); send(tg);
         th.start(tEnd); th.stop(tEnd + 0.12);
       }
 
@@ -1013,7 +1130,7 @@
         gain.gain.linearRampToValueAtTime(0.16, now + 0.012);
         gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
         osc.connect(gain);
-        gain.connect(this.masterGain);
+        this.out(gain);
         osc.start(now);
         osc.stop(now + 0.13);
       }
@@ -1030,7 +1147,7 @@
         gain.gain.linearRampToValueAtTime(0.13, now + 0.01);
         gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.11);
         osc.connect(gain);
-        gain.connect(this.masterGain);
+        this.out(gain);
         osc.start(now);
         osc.stop(now + 0.12);
       }
@@ -1047,7 +1164,7 @@
         gain.gain.linearRampToValueAtTime(0.08, now + 0.008);
         gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.06);
         osc.connect(gain);
-        gain.connect(this.masterGain);
+        this.out(gain);
         osc.start(now);
         osc.stop(now + 0.07);
       }
@@ -1063,7 +1180,7 @@
         gain.gain.linearRampToValueAtTime(0.07, now + 0.01);
         gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.14);
         osc.connect(gain);
-        gain.connect(this.masterGain);
+        this.out(gain);
         osc.start(now);
         osc.stop(now + 0.15);
       }
@@ -3802,6 +3919,9 @@
         }
       }
 
+      const _panV = new THREE.Vector3();
+      function screenPan(x, y, z) { _panV.set(x, y, z).project(camera); return THREE.MathUtils.clamp(_panV.x, -1, 1) * 0.7; }
+
       function triggerPlaceJuice(def, x, y, z) {
         let total, groups;
         if (def.type === 'stack') {
@@ -3823,7 +3943,7 @@
         for (let i = 0; i < clicks; i++) {
           times.push(DROP_FALL + (clicks > 1 ? i / (clicks - 1) : 0) * Math.max(0, total - DROP_FALL));
         }
-        audio.playStackClicks(times);
+        audio.playStackClicks(times, screenPan(x, y, z));
       }
 
       /* ---- COLLISION VALIDATION (PREVENTS UNREALISTIC CLIPPING / OVERLAP) ---- */
@@ -4994,6 +5114,17 @@
         }
 
         updateCampfireFx(dt, elapsed, pProps * 0.42);
+        // campfire crackle: louder when zoomed in and when a fire is near the view center
+        fireAudioTimer -= dt;
+        if (fireAudioTimer <= 0 && audio.ctx) {
+          fireAudioTimer = 0.25;
+          let best = null, bestD = Infinity;
+          for (const f of campfireSpots) { const d = Math.hypot(f.x - camPan.x, f.z - camPan.y); if (d < bestD) { bestD = d; best = f; } }
+          const zoomK = THREE.MathUtils.clamp((62 - camDist) / 46, 0, 1) * 0.75 + 0.25;
+          const level = best ? THREE.MathUtils.clamp(1.1 - bestD / 9, 0, 1) * zoomK * Math.min(1, 0.7 + 0.15 * campfireSpots.length) : 0;
+          audio.setFire(level, best ? screenPan(best.x, best.y, best.z) : 0);
+        }
+        audio.updateFire(dt);
 
         // 7. Fluffy Spherical Chimney Smoke (Real-time tracked to Exploding Roof/Chimney!)
         const puffsPerChimney = 8;
@@ -5075,6 +5206,7 @@
         }
       }
       let benchFrame = 0;
+      let fireAudioTimer = 0;
       const csLast = { pMid: -1, pProps: -1, list: null };
 
       // #debug=1: read-only state hook for automated tests (headless Chrome)
@@ -5089,7 +5221,8 @@
           // world point -> CSS pixel position on screen
           project: (x, y, z) => { _pv.set(x, y, z).project(camera); return [(_pv.x + 1) / 2 * window.innerWidth, (1 - _pv.y) / 2 * window.innerHeight]; },
           // CSS pixel -> ground hit (or null)
-          hit: (cx, cy) => { const h = getHitUnderClient(cx, cy); return h ? { wx: h.wx, wz: h.wz } : null; }
+          hit: (cx, cy) => { const h = getHitUnderClient(cx, cy); return h ? { wx: h.wx, wz: h.wz } : null; },
+          audio
         };
       }
 
