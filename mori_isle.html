@@ -2631,7 +2631,37 @@
       let camElev = START_ELEV;
       let targetCamElev = START_ELEV;
       function setTargetElev(v) { targetCamElev = THREE.MathUtils.clamp(v, ELEV_MIN, ELEV_MAX); }
+      // Pan: the point the camera looks at, moved across the island (x, z)
+      const PAN_LIMIT = 6.5;
+      const camPan = new THREE.Vector2(), targetPan = new THREE.Vector2();
+      function clampPan() { if (targetPan.length() > PAN_LIMIT) targetPan.setLength(PAN_LIMIT); }
+      function viewHeightAt(dist) { return 2 * dist * Math.tan(CAM_FOV_EQUIV / 2); }
+      // screen-space move -> ground-plane move (grab-the-world feel)
+      function panByScreen(dxPx, dyPx) {
+        const upp = viewHeightAt(camDist) / Math.max(window.innerHeight, 1);
+        const so = Math.sin(orbitAngle), co = Math.cos(orbitAngle), se = Math.max(Math.sin(camElev), 0.2);
+        const a = -dxPx * upp, b = dyPx * upp / se;     // right / away components
+        targetPan.x += co * a - so * b;
+        targetPan.y += -so * a - co * b;
+        clampPan();
+      }
+      // zoom keeping the ground point under the cursor fixed
+      function zoomAt(factor, clientX, clientY) {
+        const d0 = targetCamDist, d1 = THREE.MathUtils.clamp(d0 * factor, 16.0, 62.0);
+        if (d1 === d0) return;
+        const k = 1 - d1 / d0;
+        const upp = viewHeightAt(d0) / Math.max(window.innerHeight, 1);
+        const so = Math.sin(orbitAngle), co = Math.cos(orbitAngle), se = Math.max(Math.sin(targetCamElev), 0.2);
+        const a = (clientX - window.innerWidth / 2) * upp * k;
+        const b = -(clientY - window.innerHeight / 2) * upp * k / se;
+        targetPan.x += co * a - so * b;
+        targetPan.y += -so * a - co * b;
+        clampPan();
+        targetCamDist = d1;
+      }
+
       function resetView() {
+        targetPan.set(0, 0);
         targetOrbitAngle = Math.round((targetOrbitAngle - Math.PI / 4) / (Math.PI / 2)) * (Math.PI / 2) + Math.PI / 4;
         targetCamElev = ISO_ELEVATION;
         targetCamDist = isExploded ? 51.5 : 42.5;
@@ -2649,7 +2679,7 @@
         _cRight.set(co, 0, -so);
         _cUp.set(-Math.sin(e) * so, Math.cos(e), -Math.sin(e) * co);
 
-        _cTgt.set(0, camLookY - 0.35, 0)
+        _cTgt.set(camPan.x, camLookY - 0.35, camPan.y)
           .addScaledVector(_cRight, camShake.x)
           .addScaledVector(_cUp, camShake.y);
 
@@ -4581,6 +4611,7 @@
       }
 
       let isOrbiting = false;
+      let isPanning = false;
       let orbitButton = -1;
       let dragStartX = 0, dragStartY = 0, lastDragX = 0, lastDragY = 0, dragStartTime = 0;
       let hasMovedSignificantly = false;
@@ -4592,6 +4623,7 @@
         if (e.button === 1 || e.button === 2) {
           isOrbiting = true;
           orbitButton = e.button;
+          isPanning = e.button === 1 || e.shiftKey; // middle drag or shift + right drag pans
           dragStartX = lastDragX = e.clientX;
           dragStartY = lastDragY = e.clientY;
           dragStartTime = performance.now();
@@ -4622,9 +4654,13 @@
           const dy = e.clientY - lastDragY;
           lastDragX = e.clientX;
           lastDragY = e.clientY;
-          setTargetElev(targetCamElev + dy * 0.0065); // drag down -> look from higher, drag up -> lower
           if (Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY) > 5) hasMovedSignificantly = true;
-          targetOrbitAngle -= dx * 0.0085;
+          if (isPanning) {
+            panByScreen(dx, dy);
+          } else {
+            setTargetElev(targetCamElev + dy * 0.0065); // drag down -> look from higher, drag up -> lower
+            targetOrbitAngle -= dx * 0.0085;
+          }
         } else if (!isPhotoMode && !isExploded) {
           const hit = getHitUnderClient(e.clientX, e.clientY);
           hoveredHit = hit;
@@ -4639,11 +4675,12 @@
 
       window.addEventListener('pointerup', (e) => {
         if (isOrbiting && e.button === orbitButton) {
-          if (orbitButton === 2 && !hasMovedSignificantly && performance.now() - dragStartTime < 350 && !isPhotoMode && !isExploded) {
+          if (orbitButton === 2 && !isPanning && !hasMovedSignificantly && performance.now() - dragStartTime < 350 && !isPhotoMode && !isExploded) {
             const hit = getHitUnderClient(e.clientX, e.clientY);
             if (hit) removeAtHit(hit);
           }
           isOrbiting = false;
+          isPanning = false;
           orbitButton = -1;
           container.classList.remove('dragging');
         }
@@ -4654,9 +4691,15 @@
         const unit = e.deltaMode === 1 ? 33 : (e.deltaMode === 2 ? 400 : 1); // lines / pages -> pixels
         const dy = e.deltaY * unit, dx = e.deltaX * unit;
         // pinch on a laptop trackpad arrives as ctrl+wheel with small deltas
-        targetCamDist = THREE.MathUtils.clamp(targetCamDist * Math.exp(dy * (e.ctrlKey ? 0.01 : 0.0009)), 16.0, 62.0);
+        zoomAt(Math.exp(dy * (e.ctrlKey ? 0.01 : 0.0009)), e.clientX, e.clientY);
         if (!e.ctrlKey && Math.abs(dx) > 0.5) targetOrbitAngle -= dx * 0.0045; // two-finger sideways swipe orbits
       }, { passive: false });
+
+      renderer.domElement.addEventListener('dblclick', (e) => {
+        if (!isPhotoMode && !isExploded) return; // in build mode a click places objects
+        if (targetCamDist > 26) zoomAt(20 / targetCamDist, e.clientX, e.clientY);
+        else resetView();
+      });
 
       let prevPinchDist = null, prevTwoFingerX = null, prevTwoFingerY = null;
       renderer.domElement.addEventListener('touchstart', (e) => {
@@ -4691,6 +4734,12 @@
           setTargetElev(targetCamElev + (e.key === 'ArrowUp' ? 1 : -1) * 0.09); e.preventDefault(); return;
         }
         if (e.key === 'f' || e.key === 'F') { resetView(); return; }
+        const panKey = { w: [0, -1], s: [0, 1], a: [-1, 0], d: [1, 0] }[e.key.toLowerCase()];
+        if (panKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          const step = 70; // screen px per press
+          panByScreen(-panKey[0] * step, -panKey[1] * step);
+          return;
+        }
         if (e.key === 'Escape') {
           if (isPhotoMode) setPhotoMode(false);
           resetPopover.classList.remove('open');
@@ -4759,6 +4808,7 @@
         camElev += (targetCamElev - camElev) * Math.min(1, dt * 10);
         camDist += (targetCamDist - camDist) * Math.min(1, dt * 8);
         camLookY += (targetCamLookY - camLookY) * Math.min(1, dt * 8);
+        camPan.lerp(targetPan, Math.min(1, dt * 8)); // same rate as zoom so zoom-to-cursor stays anchored
         updateCameraTransform();
         runPendingFx(elapsed);
         updateDust(dt);
@@ -5026,6 +5076,22 @@
       }
       let benchFrame = 0;
       const csLast = { pMid: -1, pProps: -1, list: null };
+
+      // #debug=1: read-only state hook for automated tests (headless Chrome)
+      if (HASH.debug === '1') {
+        const _pv = new THREE.Vector3();
+        window.__mori = {
+          state: () => ({
+            pan: [camPan.x, camPan.y], targetPan: [targetPan.x, targetPan.y],
+            dist: camDist, targetDist: targetCamDist, elev: camElev * 180 / Math.PI, orbit: orbitAngle,
+            placed: placedItems.size, free: freeProps.length, photo: isPhotoMode, exploded: isExploded
+          }),
+          // world point -> CSS pixel position on screen
+          project: (x, y, z) => { _pv.set(x, y, z).project(camera); return [(_pv.x + 1) / 2 * window.innerWidth, (1 - _pv.y) / 2 * window.innerHeight]; },
+          // CSS pixel -> ground hit (or null)
+          hit: (cx, cy) => { const h = getHitUnderClient(cx, cy); return h ? { wx: h.wx, wz: h.wz } : null; }
+        };
+      }
 
       // #time=golden / #time=night starts at that time of day
       if (HASH.time && TIME_ORDER.includes(HASH.time)) {
