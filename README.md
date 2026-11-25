@@ -34,6 +34,7 @@ python -m http.server 8765
 | `noao=1` / `nodof=1` / `nobloom=1` | AO / 깊이 블러 / 블룸 끄기 (성능·화면 비교용) |
 | `noopt=1` | 그림자를 매 프레임 다시 그림 (최적화 전후 비교용) |
 | `debug=1` | 자동 테스트용 읽기 전용 상태 훅 `window.__mori` 켜기 |
+| `stack=1` | 가로등·벤치를 예전 적층 버전으로 보기 (조립 방식과 비교용) |
 
 ## 조작법
 
@@ -79,6 +80,8 @@ python -m http.server 8765
 | `3d.md` | 명세서 |
 
 그림과 소리 파일 없이 모델, 텍스처, 효과음을 코드로 만듭니다. 기술 스택은 Three.js 0.160과 Web Audio API입니다.
+
+가로등·벤치 같은 구조물은 [Cinderwatch](https://github.com/kevintngo/cinderwatch)(MIT 라이선스, Copyright (c) 2026 kevintngo)의 도형 조립 방식과 재질·요철 셰이더를 옮겨 만들었습니다. 라이선스 전문은 `mori_isle.html`의 해당 코드 위에 있습니다.
 
 ## 렌더링 방식
 

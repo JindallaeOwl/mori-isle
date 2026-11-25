@@ -5,10 +5,11 @@
 ## 참고 게임: Cinderwatch
 표현 방식, 그래픽, 이펙트, 분위기의 기준으로 **Cinderwatch**를 참고하고 있다. 사용자는 "이 게임처럼" 만들고 싶어 한다.
 - **무엇:** 단일 HTML로 된 자동 진행 3D 아이소메트릭 타워 디펜스. Three.js r170. 모델, 텍스처, 소리를 모두 코드로 만든다. MIT 라이선스이므로 코드를 그대로 옮길 때는 라이선스 고지를 함께 넣는다.
-- **위치:** 사용자 PC의 `D:\Download\cinderwatch-main.zip` (원본 github.com/kevintngo/cinderwatch). 볼 때는 임시 폴더에 풀어서 읽기만 한다. 핵심 파일은 `src/20-post.js`(렌더링·후처리), `src/10-gfx.js`(절차적 텍스처, 재질, 메쉬 빌더), `src/40-fx.js`(조명, 파티클), `src/80-audio.js`(소리), `src/90-main.js`(카메라, 루프, 자동 해상도).
+- **위치:** 사용자 PC의 `D:\Owl\cinderwatch-main` (압축본 `D:\Owl\cinderwatch-main.zip`, 원본 github.com/kevintngo/cinderwatch). 읽기만 한다. 핵심 파일은 `src/20-post.js`(렌더링·후처리), `src/10-gfx.js`(절차적 텍스처, 재질, 메쉬 빌더), `src/40-fx.js`(조명, 파티클), `src/80-audio.js`(소리), `src/90-main.js`(카메라, 루프, 자동 해상도).
 - **목표로 하는 느낌:** 저해상도 픽셀 감성인데 확대하면 미니어처 디오라마처럼 매끈하고 세밀함. 어둡고 차가운 바탕 위에 따뜻한 불빛이 주인공. 깊이 기반 틸트 시프트, 디더링, 필름 그레인 같은 아날로그 질감.
 - **이미 가져온 것:** 저해상도 렌더링 + 또렷한 업스케일, 직교 카메라 1픽셀 정렬과 디더 위치 고정, Bayer 디더, 필름 그레인, 깊이 기반 틸트 시프트, HDR 블룸 2단, 화면 기반 AO, 불빛에 물드는 안개, 자동 해상도 조절, 어두운 밤과 노이즈 깜빡임, 노이즈 불꽃 셰이더와 불티, 화면 이동·커서 위치 확대, 노이즈 기반 효과음·잔향·컴프레서·좌우 위치감, 그림자 갱신 줄이기, CDP 헤드리스 테스트 도구.
 - **일부러 안 가져온 것:** 포인트 라이트 실시간 그림자(명세서 금지, Iris Xe 부담), 4단계로 끊은 픽셀 연기(명세서는 둥근 구체 연기), 전투·몬스터·AI 자동 플레이(장르가 다름).
+- **오브젝트 제작 방식 (사용자 결정, C안):** 만드는 기술만 Cinderwatch를 따르고 생김새는 Mori Isle 고유(동화 같은 숲속 미니어처)로 만든다. 건물·울타리·수레·가로등·우물 같은 구조물은 도형 조립(`Soup`), 나무·덤불·꽃은 적층을 유지한다.
 - **차이점:** Cinderwatch는 카메라 각도가 고정이지만 Mori Isle은 좌우 회전과 상하 30°~86°를 허용한다. Cinderwatch는 일반 3D 메쉬, Mori Isle은 스프라이트 적층이다. 기법을 가져올 때 이 차이를 고려한다.
 - 아직 안 가져온 후보는 아래 "남은 일"에 있다.
 
@@ -20,6 +21,8 @@
 
 ## 코드 구조 (mori_isle.html)
 - 상단 상수: `HASH`(URL 옵션), `LOWRES`(저해상도 설정), `ATMOSPHERES`(낮·노을·밤), `ITEM_DEFS`(오브젝트 정의, `drawSlice`로 적층 레이어를 그림).
+- **4B. SOUP MESH KIT** (Cinderwatch에서 옮김, MIT 고지 포함): `Soup`으로 도형을 조립하고, 꼭짓점마다 `aSurf`(재질 종류, 거칠기, 흔들림, 발광)를 넣는다. 재질은 64×64 텍스처 11장 묶음(`L_WOOD`, `L_METAL` 등) + 요철 셰이더 하나를 공유한다. `add()` 한 번이 부품 하나이고, 부품을 높이순으로 묶어 `aLayerH`에 넣기 때문에 적층과 같은 낙하·분해 셰이더가 그대로 동작한다. 하위 조립품은 `merge()`로 붙이면 한 덩어리로 떨어진다.
+- **조립 오브젝트 추가:** `SOUP_ITEMS`에 `type: 'soup'`, `build(S, rng)`로 정의하고 같은 id의 `ITEM_DEFS` 항목을 대체한다. 아이콘은 실제 모델을 찍어 만든다(`renderSoupIcon`). 불빛이 칸 중앙에 있지 않으면 `glow.offsetX/offsetZ`를 준다. 색은 `MCOL`, 금속은 `metalness` 대신 낮은 거칠기(0.3~0.5)로 반사를 낸다.
 - `CozyAudio`: 모든 효과음은 `audio.out(node, pan)` → `sfxBus`로, 배경음(바람·풍경·모닥불)은 `masterGain`으로 보낸다. 둘 다 잔향(`reverb`)과 컴프레서(`comp`)를 거친다.
 - `enhanceStandardMaterial`: 표준 재질에 바람, 높이 안개, 분해 보기, 낙하 애니메이션(`aSpawn` 인스턴스 속성)을 셰이더로 덧붙인다. 그림자용 `customDepthMaterial`도 낙하 애니메이션을 따라간다.
 - `initGame()` 안: 렌더러/렌더 타깃 → 카메라(`updateCameraTransform`) → 조명 → 후처리(`runPostPipeline`) → 섬·인스턴스 → `rebuildInstances()` → 입력 → `animate()`.

@@ -1379,6 +1379,438 @@
     }
 
     /* =========================================================================
+       4B. SOUP MESH KIT (built-from-primitives props with a shared detail material)
+           Ported from Cinderwatch (src/00-util.js, src/10-gfx.js):
+           https://github.com/kevintngo/cinderwatch
+           MIT License, Copyright (c) 2026 kevintngo
+           Permission is hereby granted, free of charge, to any person obtaining a copy
+           of this software and associated documentation files (the "Software"), to deal
+           in the Software without restriction, including without limitation the rights
+           to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+           copies of the Software, and to permit persons to whom the Software is
+           furnished to do so, subject to the following conditions:
+           The above copyright notice and this permission notice shall be included in all
+           copies or substantial portions of the Software.
+           THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+           IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+           FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+           AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+           LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+           OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+           SOFTWARE.
+       Mori changes: every add() is a "part"; parts are grouped bottom-up so the
+       stacked drop / exploded view shaders animate them like sprite-stack layers.
+       ========================================================================= */
+    const PI = Math.PI, TAU = Math.PI * 2, HPI = Math.PI / 2;
+    const clamp = (x, a, b) => x < a ? a : (x > b ? b : x);
+    const lerp = (a, b, t) => a + (b - a) * t;
+    const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+    function makeRng(seed) {
+      let s = (seed >>> 0) || 1;
+      const f = () => { s = s + 0x6D2B79F5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+      f.range = (a, b) => a + (b - a) * f();
+      f.int = (a, b) => Math.floor(a + (b - a + 1) * f());
+      f.sign = () => f() < .5 ? -1 : 1;
+      return f;
+    }
+    function h2(x, y, s) {
+      let h = (Math.imul(x | 0, 0x27d4eb2d) ^ Math.imul(y | 0, 0x165667b1) ^ Math.imul(s | 0, 0x9e3779b1)) | 0;
+      h = Math.imul(h ^ (h >>> 15), 0x85ebca6b); h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+      return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+    }
+    function vnoise(x, y, s = 0) {
+      const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+      const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+      const a = h2(xi, yi, s), b = h2(xi + 1, yi, s), c = h2(xi, yi + 1, s), d = h2(xi + 1, yi + 1, s);
+      return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+    }
+    function pnoise2(x, y, perX, perY, s = 0) {
+      const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+      const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+      const mx = k => ((k % perX) + perX) % perX, my = k => ((k % perY) + perY) % perY;
+      const a = h2(mx(xi), my(yi), s), b = h2(mx(xi + 1), my(yi), s), c = h2(mx(xi), my(yi + 1), s), d = h2(mx(xi + 1), my(yi + 1), s);
+      return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+    }
+    function pfbm(x, y, per, s = 0, oct = 3) {
+      let a = .5, f = 1, sum = 0, n = 0;
+      for (let i = 0; i < oct; i++) { sum += a * pnoise2(x * f, y * f, per * f, per * f, s + i * 31); n += a; a *= .5; f *= 2; }
+      return sum / n;
+    }
+    const dist2 = (ax, az, bx, bz) => { const dx = ax - bx, dz = az - bz; return dx * dx + dz * dz; };
+    const _tc = new THREE.Color();
+    function C(hex, mul = 1) { _tc.set(hex); return [_tc.r * mul, _tc.g * mul, _tc.b * mul]; }
+    function mixC(a, b, t) { return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)]; }
+    function mulC(a, k) { return [a[0] * k, a[1] * k, a[2] * k]; }
+
+    // --- Detail texture array: albedo (rgb) + height (a), 64x64 per surface type ---
+    const L_DIRT = 0, L_ROCK = 1, L_MASON = 2, L_WOOD = 3, L_COBBLE = 4, L_METAL = 5, L_SLATE = 6, L_CLOTH = 7, L_PLAIN = 8, L_PLASTER = 9, L_THATCH = 10;
+    const TEX_LAYERS = 11, TEX_N = 64;
+    function makeDetailTextures() {
+      const N = TEX_N, data = new Uint8Array(N * N * 4 * TEX_LAYERS);
+      const put = (layer, x, y, r, g, b, h) => {
+        const i = ((layer * N + y) * N + x) * 4;
+        data[i] = clamp(r * 127.5, 0, 255); data[i + 1] = clamp(g * 127.5, 0, 255); data[i + 2] = clamp(b * 127.5, 0, 255); data[i + 3] = clamp(h * 255, 0, 255);
+      };
+      const CG = 8, CS = N / CG, sites = [];
+      for (let j = 0; j < CG; j++) for (let i = 0; i < CG; i++) sites.push([(i + .2 + .6 * h2(i, j, 11)) * CS, (j + .2 + .6 * h2(i, j, 12)) * CS, h2(i, j, 13), h2(i, j, 14)]);
+      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+        {
+          const n = pfbm(x / 8, y / 8, 8, 1, 4), sp = h2(x, y, 3), n2 = pfbm(x / 16, y / 16, 4, 5, 2);
+          let m = .78 + .34 * n + (n2 - .5) * .2, h = .35 + .35 * n;
+          if (sp > .985) { m += .14; h += .4; } else if (sp < .03) { m -= .1; h -= .12; }
+          put(L_DIRT, x, y, m * 1.02, m, m * .97, h);
+        }
+        {
+          const n = pfbm(x / 8, y / 8, 8, 21, 4), n2 = pfbm(x / 16, y / 16, 4, 23, 3), n3 = pfbm(x / 16 + 9, y / 16 + 3, 4, 27, 3);
+          const crack = (Math.abs(n2 - .5) < .022 || Math.abs(n3 - .52) < .016) ? 1 : 0;
+          const strata = Math.sin((y + n2 * 26) * TAU / 16) * .05;
+          const m = .74 + .42 * n + strata - crack * .34 + (h2(x, y, 29) - .5) * .08, h = .3 + .6 * n - crack * .4;
+          put(L_ROCK, x, y, m, m, m * 1.03, h);
+        }
+        {
+          const row = Math.floor(y / 8), ox = (row & 1) ? 8 : 0, bx = Math.floor((x + ox) / 16), lx = (x + ox) % 16, ly = y % 8;
+          const id = h2(bx % 4, row, 31), id2 = h2(bx % 4, row, 32);
+          const mortar = (ly === 0 || lx === 0);
+          const n = pnoise2(x / 2, y / 2, 32, 32, 33) - .5;
+          let m = .8 + .32 * id + n * .2, h = .66 + .2 * id2 + n * .15;
+          if (id2 > .86) { m -= .12; h -= .22; }
+          if (ly === 1 || lx === 1) { m += .09; }
+          if (ly === 7 || lx === 15) { m -= .1; }
+          let r = m * (1 + (id - .5) * .06), g = m, b = m * (1 - (id - .5) * .08);
+          if (mortar) { r = g = b = .46 + n * .1; h = .12; }
+          put(L_MASON, x, y, r, g, b, h);
+        }
+        {
+          const pl = Math.floor(x / 8), lx = x % 8, id = h2(pl, 0, 41);
+          const grain = pnoise2(x * 1.25, y / 7, 80, 9, 42 + pl), g2 = pnoise2(x * 2.5, y / 3, 160, 21, 44);
+          let m = .8 + .28 * id + (grain - .5) * .34 + (g2 - .5) * .12, h = .55 + grain * .25;
+          const joint = Math.floor(8 + id * 48);
+          if (lx === 0 || y === joint) { m = .42; h = .1; }
+          else if (lx === 1) m += .06; else if (lx === 7) m -= .08;
+          if ((y === (joint + 3) % N || y === (joint + N - 3) % N) && (lx === 2 || lx === 6)) { m = .38; h = .8; }
+          const knot = Math.sqrt(dist2(lx, y, 4, (joint + 29) % N)); if (knot < 5 && id > .5) { m -= .2 * (1 - knot / 5); }
+          put(L_WOOD, x, y, m * 1.03, m, m * .95, h);
+        }
+        {
+          let d1 = 1e9, d2 = 1e9, s1 = null;
+          for (const s of sites) {
+            let dx = Math.abs(x + .5 - s[0]), dy = Math.abs(y + .5 - s[1]); if (dx > N / 2) dx = N - dx; if (dy > N / 2) dy = N - dy;
+            const d = Math.sqrt(dx * dx * .85 + dy * dy * 1.15);
+            if (d < d1) { d2 = d1; d1 = d; s1 = s; } else if (d < d2) d2 = d;
+          }
+          const edge = d2 - d1, n = pnoise2(x / 2, y / 2, 32, 32, 51) - .5;
+          let m, h, r, g, b;
+          if (edge < 1.15) { m = .36 + n * .1; h = .04; r = m * 1.04; g = m; b = m * .95; }
+          else {
+            const dome = smooth(1.15, 4.2, edge);
+            m = .7 + .42 * s1[2] + n * .16 + dome * .1; h = .25 + .7 * dome + n * .1;
+            const warm = (s1[3] - .5) * .12; r = m * (1 + warm); g = m; b = m * (1 - warm);
+            if (s1[2] > .9) { r *= .8; g *= .8; b *= .82; h *= .7; }
+          }
+          put(L_COBBLE, x, y, r, g, b, h);
+        }
+        {
+          const st = pnoise2(x / 3, y * 1.5, 21, 96, 61) - .5, rust = pfbm(x / 16, y / 16, 4, 63, 3), pit = h2(x, y, 65);
+          let m = .92 + st * .22, r = m, g = m, b = m * 1.03, h = .5 + st * .12;
+          if (rust > .58) { const k = smooth(.58, .72, rust); r = lerp(r, m * 1.05, k); g = lerp(g, m * .74, k); b = lerp(b, m * .55, k); h -= .08 * k; }
+          if (pit < .03) { r *= .7; g *= .7; b *= .7; h -= .2; }
+          if ((x % 16 === 2 || x % 16 === 13) && (y % 16 === 2 || y % 16 === 13)) { r *= 1.25; g *= 1.25; b *= 1.25; h = 1; }
+          put(L_METAL, x, y, r, g, b, h);
+        }
+        {
+          const row = Math.floor(y / 8), ox = (row & 1) ? 4 : 0, bx = Math.floor((x + ox) / 8), lx = (x + ox) % 8, ly = y % 8;
+          const id = h2(bx % 8, row, 71), n = pnoise2(x / 2, y / 2, 32, 32, 73) - .5;
+          let m = .78 + .34 * id + n * .14, h = .3 + .55 * (ly / 7);
+          if (ly === 7) { m += .1; } if (ly === 0) { m -= .3; h = .1; } if (lx === 0) { m -= .2; h -= .2; }
+          put(L_SLATE, x, y, m * .98, m, m * 1.05, h);
+        }
+        {
+          const w = ((x + y) & 1) ? 1.05 : .95, n = pfbm(x / 16, y / 16, 4, 81, 3), st = pfbm(x / 8 + 3, y / 8, 8, 83, 2);
+          let m = w * (.84 + .3 * n); if (st > .66) m *= .78;
+          put(L_CLOTH, x, y, m, m, m, .5 + (w - 1) * .8);
+        }
+        { const n = pnoise2(x / 2, y / 2, 32, 32, 91) - .5; put(L_PLAIN, x, y, 1 + n * .07, 1 + n * .07, 1 + n * .07, .5 + n * .1); }
+        {
+          const st = pnoise2(x / 2, y / 6, 32, 11, 95) - .5, pit = h2(x, y, 97);
+          let m = .96 + st * .2; if (pit < .04) m -= .22;
+          put(L_PLASTER, x, y, m * 1.02, m, m * .94, .5 + st * .25);
+        }
+        {
+          const st = pnoise2(x * 1.6, y / 5, 103, 13, 101), row = (y % 16);
+          let m = .76 + .42 * st; if (row === 0) m -= .3; if (row === 1) m += .08;
+          put(L_THATCH, x, y, m * 1.04, m, m * .88, .3 + st * .5 + (row / 16) * .2);
+        }
+      }
+      const mk = (linear) => {
+        const t = new THREE.DataArrayTexture(data, N, N, TEX_LAYERS);
+        t.format = THREE.RGBAFormat; t.type = THREE.UnsignedByteType; t.wrapS = t.wrapT = THREE.RepeatWrapping;
+        t.magFilter = linear ? THREE.LinearFilter : THREE.NearestFilter; t.minFilter = THREE.LinearMipmapLinearFilter;
+        t.generateMipmaps = true; t.colorSpace = THREE.NoColorSpace; t.needsUpdate = true; return t;
+      };
+      return { albedo: mk(false), height: mk(true) };
+    }
+
+    const SOUP_U = { uTexA: { value: null }, uTexH: { value: null }, uBump: { value: 0.055 } };
+    function ensureSoupTextures() {
+      if (SOUP_U.uTexA.value) return;
+      const t = makeDetailTextures();
+      SOUP_U.uTexA.value = t.albedo; SOUP_U.uTexH.value = t.height;
+    }
+
+    // Per-vertex surface data (aSurf = layer, roughness, sway, emissive) drives the shared material.
+    function injectSoupShader(sh) {
+      sh.uniforms.uTexA = SOUP_U.uTexA; sh.uniforms.uTexH = SOUP_U.uTexH; sh.uniforms.uBump = SOUP_U.uBump;
+      if (!sh.uniforms.uTime) sh.uniforms.uTime = sharedUniforms.uTime;
+      const hasTime = sh.vertexShader.includes('uniform float uTime;');
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', `#include <common>
+        attribute vec4 aSurf; attribute vec2 aTuv; varying vec4 vSurf; varying vec2 vTuv;
+        ${hasTime ? '' : 'uniform float uTime;'}`)
+        .replace('#include <begin_vertex>', `#include <begin_vertex>
+        vSurf = aSurf; vTuv = aTuv;
+        if (aSurf.z > 0.0) {
+          float swPh = 0.0;
+          #ifdef USE_INSTANCING
+            swPh = instanceMatrix[3][0] * 1.7 + instanceMatrix[3][2] * 1.3;
+          #endif
+          transformed.x += sin(uTime * 2.1 + swPh) * 0.022 * aSurf.z;
+          transformed.z += cos(uTime * 1.6 + swPh * 1.4) * 0.016 * aSurf.z;
+        }`);
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', `#include <common>
+        precision highp sampler2DArray;
+        uniform sampler2DArray uTexA; uniform sampler2DArray uTexH; uniform float uBump;
+        varying vec4 vSurf; varying vec2 vTuv;
+        vec3 cwBump(vec3 P, vec3 N, float dBx, float dBy, float sc) {
+          vec3 dPdx = dFdx(P), dPdy = dFdy(P);
+          vec3 R1 = cross(dPdy, N), R2 = cross(N, dPdx);
+          float det = dot(dPdx, R1);
+          vec3 grad = sign(det) * (dBx * R1 + dBy * R2);
+          return normalize(abs(det) * N - sc * grad);
+        }`)
+        .replace('#include <color_fragment>', `#include <color_fragment>
+        float cwL = floor(vSurf.x + 0.5);
+        vec4 cwT = texture(uTexA, vec3(vTuv, cwL));
+        diffuseColor.rgb *= cwT.rgb * 2.0;`)
+        .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        roughnessFactor = clamp(vSurf.y * (1.15 - 0.3 * cwT.a), 0.045, 1.0);`)
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        {
+          float cwH0 = texture(uTexH, vec3(vTuv, cwL)).a;
+          vec2 cdx = dFdx(vTuv), cdy = dFdy(vTuv);
+          float hx = texture(uTexH, vec3(vTuv + cdx, cwL)).a - cwH0;
+          float hy = texture(uTexH, vec3(vTuv + cdy, cwL)).a - cwH0;
+          normal = cwBump(-vViewPosition, normal, hx, hy, uBump);
+        }`)
+        .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        totalEmissiveRadiance += diffuseColor.rgb * vSurf.w * 6.0;`);
+    }
+
+    // def = item def (scene material with wind/fog/explode/drop) or null (plain, for icons)
+    function makeSoupMaterial(def) {
+      ensureSoupTextures();
+      const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
+      if (def) {
+        enhanceStandardMaterial(mat, {
+          windStrength: def.windStrength || 0,
+          useLayerHeight: true,
+          emissiveNightBoost: def.glow ? 2.6 : 0.0,
+          explodeSliceFactor: def.explodeSliceFactor || 0.4,
+          explodeTier: def.explodeTier || 0,
+          canopySplit: 0.0,
+          dropLayers: def.layers
+        });
+        const base = mat.onBeforeCompile;
+        mat.onBeforeCompile = (sh, r) => { base(sh, r); injectSoupShader(sh); };
+        mat.customProgramCacheKey = () => 'mori-soup';
+      } else {
+        mat.onBeforeCompile = (sh) => injectSoupShader(sh);
+        mat.customProgramCacheKey = () => 'mori-soup-icon';
+      }
+      return mat;
+    }
+
+    const ZERO3 = [0, 0, 0], WHITE = [1, 1, 1];
+    const GEO_CACHE = {};
+    function baseGeo(key, make) {
+      let e = GEO_CACHE[key];
+      if (!e) { let g = make(); if (g.index) g = g.toNonIndexed(); e = GEO_CACHE[key] = { pos: g.attributes.position.array, nrm: g.attributes.normal.array }; g.dispose(); }
+      return e;
+    }
+    const gBox = () => baseGeo('box', () => new THREE.BoxGeometry(1, 1, 1));
+    const gCyl = (n = 8, rt = 1, open = false) => baseGeo('cyl' + n + '_' + rt + (open ? 'o' : ''), () => new THREE.CylinderGeometry(rt, 1, 1, n, 1, open));
+    const gIco = (d = 1) => baseGeo('ico' + d, () => new THREE.IcosahedronGeometry(1, d));
+    const gSph = (w = 8, h = 6) => baseGeo('sph' + w + '_' + h, () => new THREE.SphereGeometry(1, w, h));
+    const gTorus = (n = 10, t = 0.2, m = 5) => baseGeo('tor' + n + '_' + t + '_' + m, () => new THREE.TorusGeometry(1, t, m, n));
+
+    const _sv = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()], _sn = new THREE.Vector3(), _snv = new THREE.Vector3();
+    const _sq = new THREE.Quaternion(), _se = new THREE.Euler(), _sa = new THREE.Vector3(), _sb = new THREE.Vector3(), _sp = new THREE.Vector3();
+    const _segd = new THREE.Vector3(), _upv = new THREE.Vector3(0, 1, 0);
+    let soupRng = makeRng(777);
+
+    class Soup {
+      constructor() { this.P = []; this.N = []; this.K = []; this.U = []; this.S = []; this.parts = []; }
+      get verts() { return this.P.length / 3; }
+      v(x, y, z, nx, ny, nz, r, g, b, u, w, layer, rough, sway = 0, emis = 0) {
+        this.P.push(x, y, z); this.N.push(nx, ny, nz); this.K.push(r, g, b); this.U.push(u, w); this.S.push(layer, rough, sway, emis);
+      }
+      tri(a, b, c, col, layer, rough, o) {
+        _sa.set(b[0] - a[0], b[1] - a[1], b[2] - a[2]); _sb.set(c[0] - a[0], c[1] - a[1], c[2] - a[2]); _sn.crossVectors(_sa, _sb);
+        const len = _sn.length(); if (len < 1e-10) return; _sn.multiplyScalar(1 / len);
+        const ax = Math.abs(_sn.x), ay = Math.abs(_sn.y), az = Math.abs(_sn.z), mode = (ay >= ax && ay >= az) ? 0 : (ax >= az ? 1 : 2);
+        const sw = o && o.sway || 0, em = o && o.emis || 0, uvs = o && o.uvs || 0.5, start = this.verts;
+        for (const p of [a, b, c]) {
+          const u = mode === 0 ? p[0] : (mode === 1 ? p[2] : p[0]), w = mode === 0 ? p[2] : p[1];
+          this.v(p[0], p[1], p[2], _sn.x, _sn.y, _sn.z, col[0], col[1], col[2], u * uvs, w * uvs, layer, rough, sw, em);
+        }
+        this.parts.push([start, this.verts]);
+      }
+      quad(a, b, c, d, col, layer, rough, o) { this.tri(a, b, c, col, layer, rough, o); this.tri(a, c, d, col, layer, rough, o); }
+      add(src, o) {
+        const sp = src.pos, sn = src.nrm, n = sp.length;
+        let sx = 1, sy = 1, sz = 1; const s = o.s;
+        if (s !== undefined) { if (typeof s === 'number') sx = sy = sz = s; else { sx = s[0]; sy = s[1]; sz = s[2]; } }
+        const q = _sq; if (o.q) q.copy(o.q); else if (o.r) q.setFromEuler(_se.set(o.r[0], o.r[1], o.r[2], o.ro || 'XYZ')); else q.identity();
+        const p = o.p || ZERO3, px = p[0], py = p[1], pz = p[2];
+        const c = o.c || WHITE, jit = o.jit === undefined ? 0.07 : o.jit, k = 1 + (soupRng() * 2 - 1) * jit;
+        const cr = c[0] * k, cg = c[1] * k, cb = c[2] * k;
+        const layer = o.l === undefined ? L_PLAIN : o.l, rough = o.rough === undefined ? 0.92 : o.rough, sway = o.sway || 0, emis = o.emis || 0;
+        const uvs = o.uvs === undefined ? 0.5 : o.uvs, uo = Math.floor(soupRng() * 64) / 16, vo = Math.floor(soupRng() * 64) / 16;
+        const smoothN = !!o.smooth, deform = o.deform, grad = o.grad;
+        const P = this.P, N = this.N, K = this.K, U = this.U, S = this.S, start = this.verts;
+        for (let i = 0; i < n; i += 9) {
+          for (let j = 0; j < 3; j++) { const v = _sv[j]; v.set(sp[i + j * 3] * sx, sp[i + j * 3 + 1] * sy, sp[i + j * 3 + 2] * sz); if (deform) deform(v); }
+          _sa.subVectors(_sv[1], _sv[0]); _sb.subVectors(_sv[2], _sv[0]); _sn.crossVectors(_sa, _sb);
+          const len = _sn.length(); if (len < 1e-12) continue; _sn.multiplyScalar(1 / len);
+          const ax = Math.abs(_sn.x), ay = Math.abs(_sn.y), az = Math.abs(_sn.z), mode = (ay >= ax && ay >= az) ? 0 : (ax >= az ? 1 : 2);
+          for (let j = 0; j < 3; j++) {
+            const v = _sv[j];
+            const u = mode === 0 ? v.x : (mode === 1 ? v.z : v.x), w = mode === 0 ? v.z : v.y;
+            U.push(u * uvs + uo, w * uvs + vo);
+            let g = 1; if (grad) g = lerp(grad[2], 1, smooth(grad[0], grad[1], v.y));
+            K.push(cr * g, cg * g, cb * g);
+            S.push(layer, rough, sway, emis);
+            if (smoothN) _snv.set(sn[i + j * 3] / sx, sn[i + j * 3 + 1] / sy, sn[i + j * 3 + 2] / sz).normalize().applyQuaternion(q);
+            else _snv.copy(_sn).applyQuaternion(q);
+            N.push(_snv.x, _snv.y, _snv.z);
+            v.applyQuaternion(q);
+            P.push(v.x + px, v.y + py, v.z + pz);
+          }
+        }
+        this.parts.push([start, this.verts]);
+        return this;
+      }
+      box(w, h, d, x, y, z, c, o = {}) { o.s = [w, h, d]; o.p = [x, y, z]; o.c = c; return this.add(gBox(), o); }
+      cyl(r, h, x, y, z, c, o = {}) { o.s = [r, h, o.rz === undefined ? r : o.rz]; o.p = [x, y, z]; o.c = c; return this.add(gCyl(o.n || 8, o.rt === undefined ? 1 : o.rt, o.open), o); }
+      cone(r, h, x, y, z, c, o = {}) { o.s = [r, h, r]; o.p = [x, y, z]; o.c = c; return this.add(gCyl(o.n || 6, 0), o); }
+      ico(r, x, y, z, c, o = {}) { o.s = o.sc ? [r * o.sc[0], r * o.sc[1], r * o.sc[2]] : r; o.p = [x, y, z]; o.c = c; return this.add(gIco(o.d === undefined ? 1 : o.d), o); }
+      sph(r, x, y, z, c, o = {}) { o.s = o.sc ? [r * o.sc[0], r * o.sc[1], r * o.sc[2]] : r; o.p = [x, y, z]; o.c = c; if (o.smooth === undefined) o.smooth = true; return this.add(gSph(o.w || 8, o.h || 6), o); }
+      torus(r, x, y, z, c, o = {}) { o.s = r; o.p = [x, y, z]; o.c = c; return this.add(gTorus(o.n || 10, o.t || 0.2, o.m || 5), o); }
+      rock(r, x, y, z, c, o = {}) {
+        const sd = soupRng() * 100, f = 1.5 / r, sq = o.sq === undefined ? 0.75 : o.sq;
+        o.deform = v => { const k = .72 + .56 * vnoise(v.x * f + v.y * f * .7 + sd, v.z * f - v.y * f * .6 + sd, 7); v.multiplyScalar(k); v.y *= sq; };
+        if (o.l === undefined) o.l = L_ROCK; if (o.r === undefined) o.r = [soupRng() * .5, soupRng() * TAU, soupRng() * .5];
+        o.s = r; o.p = [x, y, z]; o.c = c; return this.add(gIco(o.d === undefined ? 1 : o.d), o);
+      }
+      // tapered rod between two points
+      seg(a, b, r0, r1, c, o = {}) {
+        _segd.set(b[0] - a[0], b[1] - a[1], b[2] - a[2]); const len = _segd.length(); if (len < 1e-5) return this; _segd.multiplyScalar(1 / len);
+        const q = new THREE.Quaternion().setFromUnitVectors(_upv, _segd);
+        o.q = q; o.s = [r0, len, r0]; o.p = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]; o.c = c;
+        return this.add(gCyl(o.n || 6, Math.round(clamp(r1 / r0, 0, 2.5) * 10) / 10), o);
+      }
+      // place another soup as ONE part (it drops as a single piece)
+      merge(o2, opt = {}) {
+        const p = opt.p || ZERO3, s = opt.s === undefined ? 1 : opt.s, q = _sq;
+        if (opt.r) q.setFromEuler(_se.set(opt.r[0], opt.r[1], opt.r[2])); else q.setFromEuler(_se.set(0, opt.ry || 0, 0));
+        const nv = o2.P.length, start = this.verts;
+        for (let i = 0; i < nv; i += 3) {
+          _sp.set(o2.P[i] * s, o2.P[i + 1] * s, o2.P[i + 2] * s).applyQuaternion(q); this.P.push(_sp.x + p[0], _sp.y + p[1], _sp.z + p[2]);
+          _sp.set(o2.N[i], o2.N[i + 1], o2.N[i + 2]).applyQuaternion(q); this.N.push(_sp.x, _sp.y, _sp.z);
+          this.K.push(o2.K[i], o2.K[i + 1], o2.K[i + 2]);
+        }
+        for (let i = 0; i < o2.U.length; i++) this.U.push(o2.U[i]);
+        for (let i = 0; i < o2.S.length; i++) this.S.push(o2.S[i]);
+        this.parts.push([start, this.verts]);
+        return this;
+      }
+      // groups: parts are ranked bottom-up into this many drop/explode slices (aLayerH 0..1)
+      // ao: [y0, y1, min] darkens toward the ground like the sprite-stack layers do
+      build({ groups = 1, ao = [0, 0.3, 0.68] } = {}) {
+        const nV = this.verts, layerH = new Float32Array(nV);
+        const ranked = this.parts.map(([a, b], i) => {
+          let minY = 1e9; for (let v = a; v < b; v++) minY = Math.min(minY, this.P[v * 3 + 1]);
+          return { a, b, minY, i };
+        }).sort((x, y) => (x.minY - y.minY) || (x.i - y.i));
+        const G = Math.max(1, groups);
+        ranked.forEach((pt, rank) => {
+          const g = Math.floor(rank * G / ranked.length);
+          const hN = G > 1 ? g / (G - 1) : 0;
+          for (let v = pt.a; v < pt.b; v++) layerH[v] = hN;
+        });
+        const K = Float32Array.from(this.K);
+        if (ao) for (let v = 0; v < nV; v++) { const k = lerp(ao[2], 1, smooth(ao[0], ao[1], this.P[v * 3 + 1])); K[v * 3] *= k; K[v * 3 + 1] *= k; K[v * 3 + 2] *= k; }
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(this.P), 3));
+        g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(this.N), 3));
+        g.setAttribute('color', new THREE.BufferAttribute(K, 3));
+        g.setAttribute('aTuv', new THREE.BufferAttribute(new Float32Array(this.U), 2));
+        g.setAttribute('aSurf', new THREE.BufferAttribute(new Float32Array(this.S), 4));
+        g.setAttribute('aLayerH', new THREE.BufferAttribute(layerH, 1));
+        g.computeBoundingSphere(); g.computeBoundingBox();
+        return g;
+      }
+    }
+
+    function buildSoupAsset(def) {
+      soupRng = makeRng(def.seed || 777);
+      const S = new Soup();
+      def.build(S, makeRng((def.seed || 777) + 1));
+      def.layers = Math.max(2, Math.min(def.dropGroups || 16, S.parts.length));
+      const geometry = S.build({ groups: def.layers, ao: def.ao });
+      return { def, geometry };
+    }
+
+    // Small iso icon rendered from the real mesh (HDR target -> gamma -> 40px canvas)
+    function renderSoupIcon(renderer, geometry) {
+      const N = 40, SS = 2, W = N * SS;
+      const rt = new THREE.WebGLRenderTarget(W, W, { type: THREE.HalfFloatType });
+      const scene = new THREE.Scene();
+      const mat = makeSoupMaterial(null);
+      scene.add(new THREE.Mesh(geometry, mat));
+      scene.add(new THREE.HemisphereLight(0xdde8ff, 0x4a3a30, 1.3));
+      const sun = new THREE.DirectionalLight(0xfff0dc, 2.6); sun.position.set(-2, 5, 3); scene.add(sun);
+      const bs = geometry.boundingSphere, r = bs.radius * 0.92;
+      const cam = new THREE.OrthographicCamera(-r, r, r, -r, 0.01, 100);
+      cam.position.copy(bs.center).add(new THREE.Vector3(1, 0.85, 1).normalize().multiplyScalar(20));
+      cam.lookAt(bs.center);
+      const prevRT = renderer.getRenderTarget(), prevCol = renderer.getClearColor(new THREE.Color()), prevA = renderer.getClearAlpha();
+      const prevShadowNeeds = renderer.shadowMap.needsUpdate;
+      renderer.shadowMap.needsUpdate = false;
+      renderer.setRenderTarget(rt); renderer.setClearColor(0x000000, 0); renderer.clear(); renderer.render(scene, cam);
+      const buf = new Uint16Array(W * W * 4);
+      renderer.readRenderTargetPixels(rt, 0, 0, W, W, buf);
+      renderer.setRenderTarget(prevRT); renderer.setClearColor(prevCol, prevA);
+      renderer.shadowMap.needsUpdate = prevShadowNeeds;
+      rt.dispose(); mat.dispose();
+      const c = document.createElement('canvas'); c.width = N; c.height = N;
+      const ctx = c.getContext('2d'), img = ctx.createImageData(N, N);
+      const half = THREE.DataUtils.fromHalfFloat, enc = (x) => Math.round(255 * Math.pow(clamp(x * 1.1, 0, 1), 1 / 2.2));
+      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+        let rr = 0, gg = 0, bb = 0, aa = 0;
+        for (let sy = 0; sy < SS; sy++) for (let sx = 0; sx < SS; sx++) {
+          const i = (((W - 1 - (y * SS + sy)) * W) + x * SS + sx) * 4;
+          const a = half(buf[i + 3]); rr += half(buf[i]); gg += half(buf[i + 1]); bb += half(buf[i + 2]); aa += a;
+        }
+        const k = SS * SS, o = (y * N + x) * 4, a = aa / k;
+        img.data[o] = enc(a > 0 ? rr / aa : 0); img.data[o + 1] = enc(a > 0 ? gg / aa : 0); img.data[o + 2] = enc(a > 0 ? bb / aa : 0);
+        img.data[o + 3] = Math.round(255 * clamp(a, 0, 1));
+      }
+      ctx.putImageData(img, 0, 0);
+      return c;
+    }
+
+    /* =========================================================================
        5. HIGH-DENSITY SPRITE STACKING + AUTO-TILING + FREE-PROP CATALOG
        ========================================================================= */
     function px(ctx, x, y, color) {
@@ -1800,6 +2232,109 @@
         }
       }
     ];
+
+    // --- Built-from-primitives props (Soup kit). Mori's own designs: cozy, slightly crooked. ---
+    const MCOL = {
+      wood: C('#8a5a36'), woodD: C('#5a3a22'), woodL: C('#b47c4a'), woodG: C('#7a6a58'),
+      iron: C('#3a3f48'), ironL: C('#6b7280'), brass: C('#c09048'),
+      stone: C('#8d9199'), stoneD: C('#61666f'), stoneL: C('#b1b4ba'),
+      moss: C('#5b8a3c'), mossL: C('#86b553'),
+      glass: C('#ffc766'), glassHot: C('#fff0c0'),
+      clothR: C('#b0473a'), clothCream: C('#e9dcc0')
+    };
+    const SOUP_ITEMS = {
+      lantern: {
+        type: 'soup',
+        seed: 31,
+        windStrength: 0.0,
+        explodeSliceFactor: 0.55,
+        explodeTier: 1,
+        glow: { offsetX: 0.27, offsetZ: -0.03, offsetY: 0.76, color: '#ffbd60', scale: 1.5, lightIntensity: 1.0 },
+        contactRadius: 0.30,
+        build(S, rng) {
+          const px = -0.1; // post sits a little behind so the lamp hangs over the tile center
+          // fieldstone footing with moss
+          for (let k = 0; k < 5; k++) {
+            const a = k / 5 * TAU + rng.range(-.3, .3), d = rng.range(.11, .16);
+            S.rock(rng.range(.055, .085), px + Math.cos(a) * d, .03, Math.sin(a) * d, mixC(MCOL.stoneD, MCOL.stoneL, rng()), { sq: .65 });
+          }
+          S.cyl(.11, .07, px, .035, 0, MCOL.stoneD, { n: 7, l: L_MASON, rt: .85 });
+          for (let k = 0; k < 3; k++) {
+            const a = rng() * TAU;
+            S.ico(.035, px + Math.cos(a) * .15, .02, Math.sin(a) * .15, mixC(MCOL.moss, MCOL.mossL, rng()), { sc: [1.3, .5, 1], d: 0, rough: 1 });
+          }
+          // crooked timber post with two iron straps
+          const lean = [.025, 0, -.035];
+          S.box(.075, 1.0, .075, px, .55, 0, MCOL.wood, { l: L_WOOD, r: lean, rough: .85 });
+          for (const y of [.16, .26]) S.box(.085, .022, .085, px + y * -.035, y, y * -.025, MCOL.iron, { l: L_METAL, rough: .45, r: lean });
+          S.cone(.075, .07, px + .03, 1.085, -.035, MCOL.woodD, { n: 4, l: L_WOOD, r: [0, PI / 4, 0] });
+          // arm + diagonal brace
+          S.box(.44, .055, .055, px + .2, .99, -.03, MCOL.woodL, { l: L_WOOD, r: [0, 0, .04] });
+          S.seg([px + .03, .78, -.03], [px + .22, .97, -.03], .02, .018, MCOL.woodD, { l: L_WOOD, n: 5 });
+          S.box(.03, .03, .07, px + .4, 1.0, -.03, MCOL.iron, { l: L_METAL, rough: .4 });
+          // hook + short chain
+          const hx = px + .37, hz = -.03;
+          S.seg([hx, .99, hz], [hx, .93, hz], .007, .007, MCOL.ironL, { l: L_METAL, n: 4, rough: .35, sway: .25 });
+          S.torus(.016, hx, .915, hz, MCOL.ironL, { l: L_METAL, rough: .35, t: .3, m: 3, n: 6, sway: .35 });
+          // the hanging lamp (sways as one unit)
+          const L = new Soup(), sw = { sway: .7 };
+          L.cone(.085, .065, 0, .07, 0, MCOL.iron, { n: 4, l: L_METAL, rough: .5, r: [0, PI / 4, 0], ...sw });
+          L.ico(.014, 0, .115, 0, MCOL.brass, { l: L_METAL, rough: .3, d: 0, ...sw });
+          L.box(.12, .018, .12, 0, .03, 0, MCOL.iron, { l: L_METAL, rough: .45, ...sw });
+          L.box(.088, .1, .088, 0, -.032, 0, MCOL.glass, { l: L_PLAIN, rough: .18, emis: .5, jit: 0, ...sw });
+          L.box(.03, .05, .03, 0, -.03, 0, MCOL.glassHot, { l: L_PLAIN, rough: .2, emis: 1.0, jit: 0, ...sw });
+          for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) L.box(.014, .12, .014, dx * .048, -.032, dz * .048, MCOL.iron, { l: L_METAL, rough: .4, ...sw });
+          L.box(.11, .016, .11, 0, -.09, 0, MCOL.iron, { l: L_METAL, rough: .45, ...sw });
+          L.cone(.03, .03, 0, -.112, 0, MCOL.brass, { n: 4, l: L_METAL, rough: .3, r: [PI, PI / 4, 0], ...sw });
+          S.merge(L, { p: [hx, .80, hz], ry: .2, s: 1.2 });
+        }
+      },
+      bench: {
+        type: 'soup',
+        seed: 57,
+        windStrength: 0.0,
+        explodeSliceFactor: 0.40,
+        explodeTier: 0,
+        glow: null,
+        contactRadius: 0.40,
+        build(S, rng) {
+          const wc = () => mixC(MCOL.wood, MCOL.woodL, rng() * .7);
+          // side frames: short front leg, tall back leg leaning back, armrest
+          for (const s of [-1, 1]) {
+            const x = s * .37;
+            S.box(.055, .27, .055, x, .135, .12, MCOL.woodD, { l: L_WOOD, r: [0, 0, s * .02] });
+            S.box(.055, .6, .055, x, .3, -.13, MCOL.woodD, { l: L_WOOD, r: [-.14, 0, 0] });
+            S.box(.05, .045, .26, x, .25, -.005, MCOL.woodD, { l: L_WOOD });
+            S.box(.065, .032, .33, x + s * .005, .42, .0, MCOL.woodL, { l: L_WOOD, rough: .7 });
+            S.seg([x, .27, .12], [x, .405, .12], .018, .016, MCOL.woodD, { l: L_WOOD, n: 5 });
+          }
+          // seat planks with gaps, each slightly off
+          [-.095, .005, .105].forEach((z, i) => {
+            S.box(.86, .032, .088, rng.range(-.015, .015), .29, z, wc(), { l: L_WOOD, r: [0, rng.range(-.025, .025), 0], rough: .75 });
+            for (const s of [-1, 1]) S.box(.018, .01, .018, s * .37, .309, z, MCOL.ironL, { l: L_METAL, rough: .35, jit: 0 });
+          });
+          // backrest slats (one sits a touch crooked)
+          [.44, .55].forEach((y, i) => {
+            S.box(.84, .062, .026, rng.range(-.01, .01), y, -.13 - (y - .3) * .14, wc(), { l: L_WOOD, r: [-.14, 0, i ? .03 : 0], rough: .75 });
+          });
+          // stretcher under the seat
+          S.box(.72, .036, .036, 0, .09, -.005, MCOL.woodD, { l: L_WOOD });
+          // folded wool blanket on one end
+          S.box(.2, .03, .2, .2, .322, .005, MCOL.clothR, { l: L_CLOTH, rough: 1, r: [0, .12, 0] });
+          S.box(.19, .025, .19, .205, .348, .0, mulC(MCOL.clothR, .9), { l: L_CLOTH, rough: 1, r: [0, .08, .02] });
+          S.box(.2, .008, .03, .2, .363, .07, MCOL.clothCream, { l: L_CLOTH, rough: 1, r: [0, .08, 0], jit: 0 });
+          // a tuft of moss creeping up a leg
+          S.ico(.04, -.38, .02, .15, MCOL.moss, { sc: [1.4, .6, 1.1], d: 0, rough: 1 });
+        }
+      }
+    };
+    if (HASH.stack !== '1') { // #stack=1 keeps the old sprite-stack versions for comparison
+      for (let i = 0; i < ITEM_DEFS.length; i++) {
+        const s = SOUP_ITEMS[ITEM_DEFS[i].id];
+        if (s) ITEM_DEFS[i] = Object.assign({ id: ITEM_DEFS[i].id, name: ITEM_DEFS[i].name, freePlace: ITEM_DEFS[i].freePlace }, s);
+      }
+    }
+    const isInstancedDef = (def) => def.type === 'stack' || def.type === 'soup';
 
     /* =========================================================================
        6. SPRITE STACK BUILDER & MINIATURE ICONS
@@ -3379,6 +3914,38 @@
           return;
         }
 
+        if (def.type === 'soup') {
+          const asset = buildSoupAsset(def);
+          asset.iconCanvas = renderSoupIcon(renderer, asset.geometry);
+          assetsById[def.id] = asset;
+          const spawnAttr = new THREE.InstancedBufferAttribute(new Float32Array(MAX_INSTANCES).fill(-100), 1);
+          asset.geometry.setAttribute('aSpawn', spawnAttr);
+          const instMesh = new THREE.InstancedMesh(asset.geometry, makeSoupMaterial(def), MAX_INSTANCES);
+          instMesh.count = 0;
+          instMesh.castShadow = true;
+          instMesh.receiveShadow = true;
+          instMesh.frustumCulled = false;
+          instMesh.customDepthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+          instMesh.customDepthMaterial.onBeforeCompile = (shader) => {
+            shader.uniforms.uTime = sharedUniforms.uTime;
+            shader.uniforms.uDropLayers = { value: def.layers };
+            shader.uniforms.uDropGroup = { value: dropGroupFor(def.layers) };
+            shader.vertexShader = shader.vertexShader
+              .replace('#include <common>', '#include <common>\nuniform float uTime;\nattribute float aLayerH;' + DROP_DECL)
+              .replace('#include <begin_vertex>', '#include <begin_vertex>' + dropVertexGLSL(false));
+          };
+          instMesh.userData.spawnAttr = spawnAttr;
+          scene.add(instMesh);
+          instancedById[def.id] = instMesh;
+          const ghostMesh = new THREE.Mesh(asset.geometry, new THREE.MeshBasicMaterial({
+            color: '#a8ffbe', transparent: true, opacity: 0.55, depthWrite: false
+          }));
+          ghostMesh.visible = false;
+          scene.add(ghostMesh);
+          ghostMeshesById[def.id] = ghostMesh;
+          return;
+        }
+
         const asset = buildSpriteStackAsset(def);
         assetsById[def.id] = asset;
 
@@ -3924,7 +4491,7 @@
 
       function triggerPlaceJuice(def, x, y, z) {
         let total, groups;
-        if (def.type === 'stack') {
+        if (isInstancedDef(def)) {
           total = dropTotalTime(def.layers);
           groups = Math.floor((def.layers - 1) / dropGroupFor(def.layers)) + 1;
         } else if (def.type === '3d_cabin') {
@@ -4046,7 +4613,7 @@
 
       function rebuildInstances() {
         const buckets = {};
-        ITEM_DEFS.forEach((d) => { if (d.type === 'stack') buckets[d.id] = []; });
+        ITEM_DEFS.forEach((d) => { if (isInstancedDef(d)) buckets[d.id] = []; });
 
         while (cabinGroupContainer.children.length > 0) {
           const old = cabinGroupContainer.children[0];
@@ -4078,7 +4645,7 @@
           const wy = getTileElevation(entry.gx, entry.gz);
           const rotY = entry.rotation * (Math.PI / 2);
 
-          if (def.type === 'stack') {
+          if (isInstancedDef(def)) {
             buckets[entry.id].push({ wx, wy, wz, rotation: entry.rotation, scale: 1.0, spawnT: entry.spawnT ?? -100 });
           } else if (def.type === '3d_cabin') {
             const cabin = buildStorybookCabinPrefab();
@@ -4163,12 +4730,16 @@
 
           if (entry.id === 'campfire') campfireSpots.push({ x: wx, y: wy, z: wz, seed: hash2D(entry.gx, entry.gz, 9) * 10 });
           if (def.glow) {
+            // optional horizontal offset of the light source (e.g. a lamp hanging off a post arm)
+            const gox = def.glow.offsetX || 0, goz = def.glow.offsetZ || 0;
+            const gx = wx + gox * Math.cos(rotY) + goz * Math.sin(rotY);
+            const gz = wz - gox * Math.sin(rotY) + goz * Math.cos(rotY);
             const spMat = new THREE.SpriteMaterial({
               map: glowTex, color: def.glow.color, transparent: true, opacity: 0,
               blending: THREE.AdditiveBlending, depthWrite: false
             });
             const sprite = new THREE.Sprite(spMat);
-            sprite.position.set(wx, wy + def.glow.offsetY, wz);
+            sprite.position.set(gx, wy + def.glow.offsetY, gz);
             sprite.scale.set(def.glow.scale, def.glow.scale, 1);
             glowGroup.add(sprite);
             activeGlowSprites.push({
@@ -4180,7 +4751,7 @@
             if (plIndex < MAX_POINT_LIGHTS) {
               const pl = pointLightPool[plIndex++];
               pl.color.set(def.glow.color);
-              pl.position.set(wx, wy + def.glow.offsetY + 0.15, wz);
+              pl.position.set(gx, wy + def.glow.offsetY + 0.15, gz);
               pl.userData = {
                 baseY: wy + def.glow.offsetY + 0.15,
                 mult: def.glow.lightIntensity || 1.0,
@@ -4197,7 +4768,7 @@
         // 2. Process Free-Placed Overlapping Decor (Flowers, Reeds, Rocks, Mushrooms)
         freeProps.forEach((fp) => {
           const def = assetsById[fp.id]?.def;
-          if (!def || def.type !== 'stack') return;
+          if (!def || !isInstancedDef(def)) return;
           const wy = getContinuousTerrainHeight(fp.wx, fp.wz);
           buckets[fp.id].push({ wx: fp.wx, wy, wz: fp.wz, rotation: fp.rotation, scale: fp.scale || 1.0, spawnT: fp.spawnT ?? -100 });
           if (def.contactRadius > 0) {
@@ -4210,7 +4781,7 @@
 
         // Apply InstancedMeshes
         ITEM_DEFS.forEach((def) => {
-          if (def.type !== 'stack') return;
+          if (!isInstancedDef(def)) return;
           const list = buckets[def.id];
           const mesh = instancedById[def.id];
           for (let i = 0; i < list.length && i < MAX_INSTANCES; i++) {
