@@ -610,7 +610,20 @@
        ========================================================================= */
     const GRID_SIZE = 12;
     const HALF_GRID = GRID_SIZE / 2;
-    const MAX_PIXEL_RATIO = 1.75; // Intel Iris Xe sweet spot
+    const MAX_PIXEL_RATIO = 2.0; // only the final upscale pass runs at this density
+    // --- Low-res pixel rendering (scene is drawn small, then sharply upscaled) ---
+    const HASH = Object.fromEntries(location.hash.slice(1).split('&').filter(Boolean).map((kv) => {
+      const [k, v] = kv.split('='); return [k, v === undefined ? '1' : v];
+    }));
+    const LOWRES = {
+      enabled: HASH.hires !== '1', // #hires=1 renders at full resolution for comparison
+      maxIH: 600,                  // internal height cap (px)
+      maxPix: 620000,              // internal pixel budget
+      minTexel: 2,                 // at least 2x2 screen pixels per scene pixel
+      quality: 1.0,                // adaptive scale 0.55 ~ 1.0
+      adaptive: HASH.noscale !== '1'
+    };
+    const CAM_FOV_EQUIV = 22 * Math.PI / 180; // ortho framing matches the old 22-degree lens
     const SHADOW_MAP_SIZE = 1024;
     const MAX_POINT_LIGHTS = 8;
 
@@ -793,6 +806,7 @@
       uSkyBottom: { value: ATMOSPHERES.day.skyBottom.clone() },
       uGradeTint: { value: ATMOSPHERES.day.gradeTint.clone() },
       uGradeWarmth: { value: ATMOSPHERES.day.gradeWarmth },
+      uPointScale: { value: 0.5 }, // scene pixels per CSS pixel (for gl_PointSize)
       // Exploded View GPU uniforms for clear 4-tier non-overlapping separation
       uExplodeSpread: { value: 0.0 },
       uExplodePropLift: { value: 0.0 },
@@ -2459,7 +2473,7 @@
       const pixelRatio = Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO);
 
       const renderer = new THREE.WebGLRenderer({
-        antialias: true,
+        antialias: false, // MSAA is wasted: the screen only receives the upscale pass
         powerPreference: 'high-performance'
       });
       renderer.setPixelRatio(pixelRatio);
@@ -2470,41 +2484,84 @@
       container.appendChild(renderer.domElement);
 
       function getRTSize() {
-        return {
-          w: Math.max(1, Math.floor(window.innerWidth * pixelRatio)),
-          h: Math.max(1, Math.floor(window.innerHeight * pixelRatio))
-        };
+        const dw = Math.max(8, Math.floor(window.innerWidth * pixelRatio));
+        const dh = Math.max(8, Math.floor(window.innerHeight * pixelRatio));
+        if (!LOWRES.enabled) return { w: dw, h: dh };
+        const texel = Math.max(LOWRES.minTexel, Math.sqrt(dw * dh / LOWRES.maxPix), Math.min(dw, dh) / LOWRES.maxIH);
+        let h = Math.round(dh / texel * LOWRES.quality);
+        h = Math.max(h, Math.min(dh, 240));
+        let w = Math.max(8, Math.round(dw * h / dh));
+        if (w > 1500) { h = Math.round(h * 1500 / w); w = 1500; }
+        return { w, h };
       }
       let rtSize = getRTSize();
+      // Scene target: crisp nearest texels, with depth
       const renderTarget = new THREE.WebGLRenderTarget(rtSize.w, rtSize.h, {
-        minFilter: THREE.LinearFilter,
-        magFilter: THREE.LinearFilter,
+        minFilter: THREE.NearestFilter,
+        magFilter: THREE.NearestFilter,
         format: THREE.RGBAFormat,
         depthBuffer: true,
         stencilBuffer: false
       });
+      // Graded low-res image: linear so the upscale shader can anti-alias only texel edges
+      const postTarget = new THREE.WebGLRenderTarget(rtSize.w, rtSize.h, {
+        minFilter: THREE.LinearFilter,
+        magFilter: THREE.LinearFilter,
+        format: THREE.RGBAFormat,
+        depthBuffer: false,
+        stencilBuffer: false
+      });
+      const camSub = new THREE.Vector2();     // sub-pixel remainder of the snapped camera (in scene px)
+      const ditherOfs = new THREE.Vector2();  // keeps the Bayer pattern glued to the world while panning
+      const camShake = new THREE.Vector2();
+      function updatePointScale() {
+        sharedUniforms.uPointScale.value = rtSize.h / Math.max(window.innerHeight, 1);
+      }
+      updatePointScale();
 
       const scene = new THREE.Scene();
 
-      // Miniature Telephoto Camera (Low FOV = 22°)
-      const camera = new THREE.PerspectiveCamera(22, window.innerWidth / Math.max(window.innerHeight, 1), 1, 180);
+      // Miniature Orthographic Camera (framed like a 22-degree telephoto lens, snapped to whole scene pixels)
+      const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 260);
+      const CAM_BACK = 120;
       let orbitAngle = Math.PI / 4;
       let targetOrbitAngle = Math.PI / 4;
-      let camDist = 42.5;
-      let targetCamDist = 42.5;
+      const START_DIST = HASH.zoom ? THREE.MathUtils.clamp(+HASH.zoom || 42.5, 16, 62) : 42.5; // #zoom=18 starts zoomed in
+      let camDist = START_DIST;
+      let targetCamDist = START_DIST;
       let camLookY = 0.05;
       let targetCamLookY = 0.05;
       const ISO_ELEVATION = Math.atan(Math.sin(Math.PI / 4));
 
+      const _cDir = new THREE.Vector3(), _cRight = new THREE.Vector3(), _cUp = new THREE.Vector3(), _cTgt = new THREE.Vector3();
       function updateCameraTransform() {
-        const horiz = Math.cos(ISO_ELEVATION) * camDist;
-        const vert = Math.sin(ISO_ELEVATION) * camDist;
-        camera.position.set(
-          Math.sin(orbitAngle) * horiz,
-          vert + camLookY,
-          Math.cos(orbitAngle) * horiz
-        );
-        camera.lookAt(0, camLookY - 0.35, 0);
+        const aspect = window.innerWidth / Math.max(window.innerHeight, 1);
+        const vh = 2 * camDist * Math.tan(CAM_FOV_EQUIV / 2);
+        camera.left = -vh * aspect / 2; camera.right = vh * aspect / 2;
+        camera.top = vh / 2; camera.bottom = -vh / 2;
+
+        const e = ISO_ELEVATION, so = Math.sin(orbitAngle), co = Math.cos(orbitAngle);
+        _cDir.set(Math.cos(e) * so, Math.sin(e), Math.cos(e) * co);
+        _cRight.set(co, 0, -so);
+        _cUp.set(-Math.sin(e) * so, Math.cos(e), -Math.sin(e) * co);
+
+        _cTgt.set(0, camLookY - 0.35, 0)
+          .addScaledVector(_cRight, camShake.x)
+          .addScaledVector(_cUp, camShake.y);
+
+        // Snap the view to whole scene pixels; the remainder is applied in the upscale pass,
+        // so motion stays smooth while texels never crawl or shimmer.
+        const px = vh / rtSize.h;
+        const u = _cTgt.dot(_cRight), v = _cTgt.dot(_cUp);
+        const ui = Math.round(u / px), vi = Math.round(v / px);
+        camSub.set(u / px - ui, v / px - vi);
+        ditherOfs.set(((ui % 8) + 8) % 8, ((vi % 8) + 8) % 8);
+        _cTgt.addScaledVector(_cRight, ui * px - u).addScaledVector(_cUp, vi * px - v);
+
+        camera.position.copy(_cTgt).addScaledVector(_cDir, CAM_BACK);
+        camera.up.set(0, 1, 0);
+        camera.lookAt(_cTgt);
+        camera.updateProjectionMatrix();
       }
       updateCameraTransform();
 
@@ -2558,7 +2615,9 @@
           uGradeTint: sharedUniforms.uGradeTint,
           uGradeWarmth: sharedUniforms.uGradeWarmth,
           uNightFactor: sharedUniforms.uNightFactor,
-          uTime: sharedUniforms.uTime
+          uTime: sharedUniforms.uTime,
+          uDitherOfs: { value: ditherOfs },
+          uLevels: { value: 34.0 }
         },
         vertexShader: `
           varying vec2 vUv;
@@ -2576,7 +2635,13 @@
           uniform float uGradeWarmth;
           uniform float uNightFactor;
           uniform float uTime;
+          uniform vec2 uDitherOfs;
+          uniform float uLevels;
           varying vec2 vUv;
+
+          float bayer2(vec2 a) { a = floor(a); return fract(a.x / 2.0 + a.y * a.y * 0.75); }
+          float bayer4(vec2 a) { return bayer2(0.5 * a) * 0.25 + bayer2(a); }
+          float bayer8(vec2 a) { return bayer4(0.5 * a) * 0.25 + bayer2(a); }
 
           vec3 getSky(vec2 uv) {
             vec3 sky = mix(uSkyBottom, uSkyTop, pow(clamp(uv.y, 0.0, 1.0), 0.85));
@@ -2608,7 +2673,7 @@
             float radial = length(fromCenter);
 
             float blurStrength = smoothstep(0.18, 0.50, abs(vUv.y - 0.48));
-            float radius = blurStrength * 3.6;
+            float radius = blurStrength * 1.7; // in scene pixels (scene is low-res now)
 
             vec3 col;
             if (radius > 0.25) {
@@ -2641,6 +2706,10 @@
 
             float vig = 1.0 - dot(fromCenter, fromCenter) * 0.40;
             col *= clamp(vig, 0.72, 1.0);
+
+            // Ordered (Bayer 8x8) dithering: analog banding on gradients & shadow edges
+            float b = bayer8(gl_FragCoord.xy + uDitherOfs);
+            col = floor(col * uLevels + b) / uLevels;
             gl_FragColor = vec4(col, 1.0);
           }
         `,
@@ -2648,6 +2717,87 @@
         depthWrite: false
       });
       postScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), postMat));
+
+      // Final pass: sharp upscale (crisp texels, anti-aliased texel edges only) + sub-pixel camera offset + film grain
+      const upScene = new THREE.Scene();
+      const upMat = new THREE.ShaderMaterial({
+        uniforms: {
+          tColor: { value: postTarget.texture },
+          uTex: { value: new THREE.Vector2(rtSize.w, rtSize.h) },
+          uOut: { value: new THREE.Vector2(1, 1) },
+          uSub: { value: camSub },
+          uGrain: { value: 0.028 },
+          uSeed: { value: 0 }
+        },
+        vertexShader: `
+          varying vec2 vUv;
+          void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
+        `,
+        fragmentShader: `
+          uniform sampler2D tColor;
+          uniform vec2 uTex, uOut, uSub;
+          uniform float uGrain, uSeed;
+          varying vec2 vUv;
+          float hash12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+          void main() {
+            vec2 texel = vUv * uTex + uSub;
+            vec2 scale = max(uOut / uTex, vec2(1.0));
+            vec2 tf = floor(texel), f = texel - tf;
+            vec2 region = 0.5 - 0.5 / scale, cen = f - 0.5;
+            vec2 off = (cen - clamp(cen, -region, region)) * scale + 0.5;
+            vec3 c = texture2D(tColor, (tf + off) / uTex).rgb;
+            float g = hash12(gl_FragCoord.xy + uSeed) - 0.5;
+            c += g * uGrain * (0.35 + 0.65 * (1.0 - dot(c, vec3(0.333))));
+            gl_FragColor = vec4(c, 1.0);
+          }
+        `,
+        depthTest: false,
+        depthWrite: false
+      });
+      upScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), upMat));
+      function syncUpscaleSize() {
+        const sz = renderer.getDrawingBufferSize(new THREE.Vector2());
+        upMat.uniforms.uOut.value.copy(sz);
+        upMat.uniforms.uTex.value.set(rtSize.w, rtSize.h);
+      }
+      syncUpscaleSize();
+
+      // Resize every resolution-dependent piece (window resize or adaptive quality change)
+      function applyResolution() {
+        rtSize = getRTSize();
+        renderTarget.setSize(rtSize.w, rtSize.h);
+        postTarget.setSize(rtSize.w, rtSize.h);
+        postMat.uniforms.uResolution.value.set(rtSize.w, rtSize.h);
+        syncUpscaleSize();
+        updatePointScale();
+        updateCameraTransform();
+      }
+
+      // Optional frame-rate readout: #fps=1
+      const fpsEl = HASH.fps === '1' ? Object.assign(document.createElement('div'), {
+        style: 'position:fixed;left:8px;bottom:8px;z-index:99;font:11px monospace;color:#fff;background:rgba(0,0,0,.55);padding:3px 6px;border-radius:4px;pointer-events:none'
+      }) : null;
+      if (fpsEl) document.body.appendChild(fpsEl);
+      // Adaptive resolution: drop internal resolution when frames run long, recover when there's headroom
+      const perf = { acc: 0, frames: 0, slow: 0, fast: 0, hold: 0, back: 12 };
+      function trackPerformance(rawDt) {
+        if (document.hidden || rawDt > 0.25) { perf.acc = 0; perf.frames = 0; return; }
+        perf.acc += rawDt; perf.frames++;
+        if (perf.acc < 2) return;
+        const ms = perf.acc / perf.frames * 1000;
+        if (fpsEl) fpsEl.textContent = (1000 / ms).toFixed(0) + ' fps  ' + rtSize.w + 'x' + rtSize.h + '  q' + LOWRES.quality.toFixed(2) + '  calls ' + renderer.info.render.calls;
+        if (ms > 22.5) { perf.slow++; perf.fast = 0; } else { perf.slow = 0; perf.fast = ms < 18.6 ? perf.fast + 1 : 0; }
+        perf.hold -= perf.acc;
+        if (LOWRES.enabled && LOWRES.adaptive) {
+          if (perf.slow >= 2 && LOWRES.quality > 0.55) {
+            LOWRES.quality = Math.max(0.55, LOWRES.quality - 0.15); applyResolution();
+            perf.slow = 0; perf.hold = perf.back; perf.back = Math.min(480, perf.back * 2);
+          } else if (perf.fast >= 3 && LOWRES.quality < 1 && perf.hold <= 0) {
+            LOWRES.quality = Math.min(1, LOWRES.quality + 0.15); applyResolution(); perf.fast = 0;
+          }
+        }
+        perf.acc = 0; perf.frames = 0;
+      }
 
       /* =======================================================================
          10. ISLAND, AUTO-TILING PATH/FENCE, SPRITE STACKS & CONTACT SHADOWS
@@ -3011,11 +3161,12 @@
       pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
       pGeo.setAttribute('aSeed', new THREE.BufferAttribute(pSeeds, 1));
       const particleMat = new THREE.ShaderMaterial({
-        uniforms: { uTime: sharedUniforms.uTime, uNightFactor: sharedUniforms.uNightFactor },
+        uniforms: { uTime: sharedUniforms.uTime, uNightFactor: sharedUniforms.uNightFactor, uPointScale: sharedUniforms.uPointScale },
         vertexShader: `
           attribute float aSeed;
           uniform float uTime;
           uniform float uNightFactor;
+          uniform float uPointScale;
           varying float vAlpha;
           void main() {
             vec3 p = position;
@@ -3027,7 +3178,7 @@
             float pulse = 0.4 + 0.6 * sin(uTime * 3.2 + aSeed * 6.0);
             vAlpha = mix(0.55, pulse, uNightFactor);
             gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
-            gl_PointSize = mix(3.2, 5.2, uNightFactor);
+            gl_PointSize = max(1.0, floor(mix(3.2, 5.2, uNightFactor) * uPointScale + 0.5));
           }
         `,
         fragmentShader: `
@@ -3106,7 +3257,7 @@
       dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
       dustGeo.setAttribute('aLife', new THREE.BufferAttribute(dustLife, 1));
       const dustMat = new THREE.ShaderMaterial({
-        uniforms: { uPx: { value: pixelRatio } },
+        uniforms: { uPx: sharedUniforms.uPointScale },
         vertexShader: `
           attribute float aLife;
           uniform float uPx;
@@ -3115,7 +3266,7 @@
             vLife = aLife;
             vec4 mv = modelViewMatrix * vec4(position, 1.0);
             gl_Position = projectionMatrix * mv;
-            gl_PointSize = aLife > 0.0 ? (3.0 + 2.0 * aLife) * uPx : 0.0;
+            gl_PointSize = aLife > 0.0 ? max(1.0, floor((3.0 + 2.0 * aLife) * uPx + 0.5)) : 0.0;
           }`,
         fragmentShader: `
           varying float vLife;
@@ -4039,7 +4190,7 @@
 
       renderer.domElement.addEventListener('wheel', (e) => {
         e.preventDefault();
-        targetCamDist = THREE.MathUtils.clamp(targetCamDist + e.deltaY * 0.025, 22.0, 62.0);
+        targetCamDist = THREE.MathUtils.clamp(targetCamDist + e.deltaY * 0.025, 16.0, 62.0);
       }, { passive: false });
 
       let prevPinchDist = null, prevTwoFingerX = null;
@@ -4055,7 +4206,7 @@
           const t0 = e.touches[0], t1 = e.touches[1];
           const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
           const midX = (t0.clientX + t1.clientX) * 0.5;
-          targetCamDist = THREE.MathUtils.clamp(targetCamDist - (dist - prevPinchDist) * 0.08, 22.0, 62.0);
+          targetCamDist = THREE.MathUtils.clamp(targetCamDist - (dist - prevPinchDist) * 0.08, 16.0, 62.0);
           targetOrbitAngle -= (midX - prevTwoFingerX) * 0.01;
           prevPinchDist = dist;
           prevTwoFingerX = midX;
@@ -4086,12 +4237,8 @@
       window.addEventListener('resize', () => {
         const w = window.innerWidth;
         const h = Math.max(window.innerHeight, 1);
-        camera.aspect = w / h;
-        camera.updateProjectionMatrix();
         renderer.setSize(w, h);
-        rtSize = getRTSize();
-        renderTarget.setSize(rtSize.w, rtSize.h);
-        postMat.uniforms.uResolution.value.set(rtSize.w, rtSize.h);
+        applyResolution();
       });
 
       /* =======================================================================
@@ -4125,7 +4272,8 @@
 
       function animate(now) {
         requestAnimationFrame(animate);
-        const dt = Math.min((now - lastTime) / 1000, 0.05);
+        const rawFrameDt = (now - lastTime) / 1000;
+        const dt = Math.min(rawFrameDt, 0.05);
         lastTime = now;
         const elapsed = now * 0.001;
         sharedUniforms.uTime.value = elapsed;
@@ -4141,8 +4289,11 @@
           const st = elapsed - shakeStart;
           if (st >= 0 && st < 0.16) {
             const k = shakeAmp * (1 - st / 0.16);
-            camera.position.x += Math.sin(st * 160) * k;
-            camera.position.y += Math.cos(st * 190) * k * 0.6;
+            camShake.set(Math.sin(st * 160) * k, Math.cos(st * 190) * k * 0.6);
+            updateCameraTransform();
+          } else if (camShake.x !== 0 || camShake.y !== 0) {
+            camShake.set(0, 0);
+            updateCameraTransform();
           }
         }
 
@@ -4370,9 +4521,15 @@
         renderer.clear();
         renderer.render(scene, camera);
 
-        // Pass 2: Single-pass Post-Processing (Tilt-Shift DoF + Chromatic Aberration + Vignette + ACES)
-        renderer.setRenderTarget(null);
+        // Pass 2: Single-pass Post-Processing at scene resolution (Tilt-Shift + CA + Vignette + ACES + Bayer dither)
+        renderer.setRenderTarget(postTarget);
         renderer.render(postScene, postCamera);
+
+        // Pass 3: Sharp upscale to the screen + film grain
+        upMat.uniforms.uSeed.value = (elapsed * 60 % 1000) * 7.13;
+        renderer.setRenderTarget(null);
+        renderer.render(upScene, postCamera);
+        trackPerformance(rawFrameDt);
       }
 
       requestAnimationFrame(animate);
