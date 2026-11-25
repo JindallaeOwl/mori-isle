@@ -5801,7 +5801,13 @@
         btnAudio.classList.toggle('on', on);
       }
       syncAudioIcon();
-      btnAudio.addEventListener('click', () => { audio.toggle(); syncAudioIcon(); });
+      // sound is switched on and the browser is really playing it (not still holding it back)
+      const audioPlaying = () => audio.enabled && audio.ctx.state === 'running';
+      btnAudio.addEventListener('click', () => {
+        // icon says "on" but nothing is audible yet: this press starts the sound instead of muting it
+        if (audio.wantOn && !audioPlaying()) audio.setEnabled(true); else audio.toggle();
+        syncAudioIcon();
+      });
 
       const resetPopover = document.getElementById('reset-popover');
       function setPhotoMode(enabled) {
@@ -6721,18 +6727,18 @@
       }
       if (!INTRO_ON) { loaderEl.classList.add('go'); setTimeout(() => loaderEl.remove(), 1000); }
 
-      // first click or key turns the sound on (unless the player switched it off). Registered
-      // before the input hold below, so it also counts during the assembly.
+      // first click, tap or key turns the sound on (unless the player switched it off). It keeps
+      // trying until the browser really plays: Esc and browser shortcuts don't count as a user
+      // gesture, and a touch only counts when the finger lifts. Registered before the input hold
+      // below, so it also works during the assembly. The sound button handles itself.
       function unlockAudio(e) {
-        if (e.type === 'keydown' && (e.ctrlKey || e.metaKey || e.altKey || /^F\d+$/.test(e.key))) return;
-        if (audio.wantOn && !audio.enabled) { audio.setEnabled(true); syncAudioIcon(); }
-        if (audio.enabled || !audio.wantOn) {
-          window.removeEventListener('pointerdown', unlockAudio, true);
-          window.removeEventListener('keydown', unlockAudio, true);
-        }
+        if (!audio.wantOn || audioPlaying()) return;
+        if (e.type === 'keydown' && (e.key === 'Escape' || e.ctrlKey || e.metaKey || e.altKey || /^F\d+$/.test(e.key))) return;
+        if (e.target.closest?.('#btn-audio')) return;
+        audio.setEnabled(true);
+        syncAudioIcon();
       }
-      window.addEventListener('pointerdown', unlockAudio, true);
-      window.addEventListener('keydown', unlockAudio, true);
+      for (const ev of ['pointerdown', 'pointerup', 'keydown']) window.addEventListener(ev, unlockAudio, true);
 
       // while the island assembles (or crumbles) nothing reaches the game: no placing, no key
       // shortcuts, no HUD clicks. Wheel zoom is left alone; reload / devtools keys pass through.
