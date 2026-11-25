@@ -2568,6 +2568,68 @@
           // a tuft of moss creeping up a leg
           S.ico(.04, -.38, .02, .15, MCOL.moss, { sc: [1.4, .6, 1.1], d: 0, rough: 1 });
         }
+      },
+      campfire: {
+        type: 'soup',
+        seed: 83,
+        windStrength: 0.0,
+        explodeSliceFactor: 0.40,
+        explodeTier: 0,
+        glow: { offsetY: 0.36, color: '#ff8a38', scale: 1.75, lightIntensity: 1.25, flicker: true },
+        contactRadius: 0.42,
+        build(S, rng) {
+          // (the flame itself is the animated shader billboard: see CAMPFIRE FLAMES)
+          // ring of fieldstones, a few with moss on the shaded side
+          const N = 9;
+          for (let k = 0; k < N; k++) {
+            const a = k / N * TAU + rng.range(-.12, .12), d = rng.range(.25, .29), r = rng.range(.065, .09);
+            const x = Math.cos(a) * d, z = Math.sin(a) * d;
+            S.rock(r, x, r * .45, z, mixC(MCOL.stoneD, MCOL.stoneL, rng() * .8), { sq: .7, rough: .8 });
+            if (rng() < .4) S.ico(r * .6, x * 1.04, r * .95, z * 1.04, mixC(MCOL.moss, MCOL.mossL, rng()), { sc: [1.2, .4, 1], d: 0, rough: 1 });
+          }
+          // ash bed and glowing coals
+          S.cyl(.21, .02, 0, .01, 0, C('#4a4441'), { n: 9, l: L_DIRT, rough: 1 });
+          for (let k = 0; k < 7; k++) {
+            const a = rng() * TAU, d = rng() * .1;
+            S.ico(rng.range(.025, .04), Math.cos(a) * d, .03, Math.sin(a) * d, rng() < .5 ? C('#ff5a1f') : C('#ff9a2a'), { d: 0, emis: rng.range(.5, 1.0), rough: .9, jit: 0 });
+          }
+          // logs leaned into a teepee, charred tips at the top
+          for (let k = 0; k < 4; k++) {
+            const a = k / 4 * TAU + .4 + rng.range(-.15, .15), d = .17;
+            const bot = [Math.cos(a) * d, .02, Math.sin(a) * d], top = [Math.cos(a) * .025, .23, Math.sin(a) * .025];
+            const mid = [lerp(bot[0], top[0], .72), lerp(bot[1], top[1], .72), lerp(bot[2], top[2], .72)];
+            S.seg(bot, mid, .03, .028, mixC(MCOL.woodD, MCOL.wood, rng() * .5), { l: L_WOOD, n: 6, rough: .9 });
+            S.seg(mid, top, .028, .02, C('#2a211c'), { l: L_WOOD, n: 6, rough: 1, emis: .08 });
+          }
+          // two split logs lying across the coals
+          S.seg([-.14, .04, -.05], [.14, .05, .06], .032, .03, MCOL.woodD, { l: L_WOOD, n: 6, rough: .9 });
+          S.seg([-.06, .045, .14], [.08, .04, -.13], .028, .028, mulC(MCOL.woodD, .8), { l: L_WOOD, n: 6, rough: .95 });
+        }
+      },
+      rocks: {
+        type: 'soup',
+        seed: 97,
+        windStrength: 0.0,
+        explodeSliceFactor: 0.35,
+        explodeTier: 0,
+        glow: null,
+        contactRadius: 0.36,
+        build(S, rng) {
+          // big boulder, a smaller one leaning on it, a pebble; moss caps on the tops
+          const lump = (r, x, z, sq, mossK) => {
+            const c = mixC(MCOL.stoneD, MCOL.stone, rng.range(.3, .9));
+            S.rock(r, x, r * sq * .78, z, c, { sq, rough: .55 });
+            if (mossK > 0) { // a few patches sunk into the stone, not a lid
+              S.ico(r * .68, x - r * .18, r * sq * 1.5, z - r * .1, mixC(MCOL.moss, MCOL.mossL, rng() * .4), { sc: [1.1, .42 * mossK, .9], d: 1, rough: 1 });
+              S.ico(r * .4, x + r * .3, r * sq * 1.36, z + r * .25, mulC(MCOL.moss, .9), { sc: [1, .45, 1.2], d: 0, rough: 1 });
+              S.ico(r * .36, x - r * .66, r * sq * 1.0, z + r * .3, mulC(MCOL.moss, .8), { sc: [1, .6, 1], d: 0, rough: 1 });
+            }
+          };
+          lump(.25, -.05, -.03, .82, 1);
+          lump(.14, .2, .15, .78, .8);
+          lump(.06, -.22, .2, .7, 0);
+          for (let k = 0; k < 3; k++) S.rock(rng.range(.02, .035), rng.range(-.3, .3), .012, rng.range(.22, .32), MCOL.stoneL, { sq: .6, d: 0 });
+        }
       }
     };
     if (HASH.stack !== '1') { // #stack=1 keeps the old sprite-stack versions for comparison
@@ -4432,11 +4494,11 @@
         iconOf('fence', fence);
         // campfire: the stacked fire ring plus a little flame (in the scene the flame is a shader billboard)
         const cf = assetsById.campfire;
-        if (cf && cf.colorTex) {
-          const ringMat = new THREE.MeshStandardMaterial({
+        if (cf && cf.geometry) { // fire ring model (soup, or the old stack with #stack=1) + a little flame
+          const ringMat = cf.colorTex ? new THREE.MeshStandardMaterial({
             map: cf.colorTex, emissive: '#ffffff', emissiveMap: cf.emTex, emissiveIntensity: 1.5,
             alphaTest: 0.5, vertexColors: true, roughness: 0.78, side: THREE.DoubleSide
-          });
+          }) : makeSoupMaterial(null);
           const fire = new THREE.Group();
           fire.add(new THREE.Mesh(cf.geometry, ringMat));
           const F = new Soup();
