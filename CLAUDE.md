@@ -29,11 +29,13 @@
 
 ## 지켜야 할 규칙 (어기면 조용히 깨짐)
 - **그림자는 필요할 때만 갱신한다** (`renderer.shadowMap.autoUpdate = false`). 그림자를 드리우는 물체를 움직이는 코드를 넣으면 반드시 `markShadowsDirty(초)`를 부른다. 지금은 `rebuildInstances`(1.0초)와 분해 보기 전환(1.4초)에서 부른다.
-- **포인트 라이트 8개는 항상 `visible = true`**로 두고, 안 쓰면 `intensity = 0`, 사용 여부는 `pl.userData.active`로 구분한다. 보이는 조명 수가 바뀌면 모든 셰이더가 다시 컴파일되어 끊긴다.
+- **포인트 라이트 8개는 항상 `visible = true`**로 두고, 안 쓰면 `intensity = 0`, 사용 여부는 `pl.userData.active`로 구분한다. 보이는 조명 수가 바뀌면 모든 셰이더가 다시 컴파일되어 끊긴다. 불빛 오브젝트는 몇 개든 `lightSources`에 모이고, `updatePointLights`가 0.3초마다 화면 중심에 가까운 8개를 골라 조명을 빌려 준다(바뀔 때 0.2초 페이드). 조명을 직접 배정하지 말 것.
+- **오브젝트 정의 공통 항목:** `id`, `name`(설명 없이 이름만), `category`(`CATEGORIES`의 id), `type`, `freePlace`, `autoConnect`, `contactRadius`, `glow`, `explodeTier`. 카테고리가 없으면 콘솔 경고가 뜨고 `items.mjs` 테스트가 실패한다. 도구 막대는 카테고리 순으로 정렬된다.
+- **오두막 합치기:** 낙하가 끝나면 `mergeChunkToOneMesh`가 덩어리마다 재질 값을 꼭짓점에 넣어 메쉬 1~2개로 합친다(공유 재질 `getCabinMergedMaterial`, `userData.shared`라 해제하지 않음). 오두막에 새 재질을 쓸 때는 불투명·단면 `MeshStandardMaterial`이어야 하고, 야간 발광 배율은 `enhanceStandardMaterial`의 `emissiveNightBoost`로 준다.
 - **카메라 상하 각도는 30° ~ 86°**(`ELEV_MIN`/`ELEV_MAX`). 스프라이트 적층은 낮은 각도에서 층이 갈라져 보여서 사용자가 수평·아래 시점을 막기로 결정했다. 넓히지 말 것.
 - **직교 카메라 + 1픽셀 정렬**: `updateCameraTransform`이 카메라 위치를 씬 픽셀 단위로 맞추고 남는 차이(`camSub`)는 업스케일 셰이더가 보정한다. 카메라 위치를 직접 건드리지 말고 `camPan`, `camDist`, `camElev`, `orbitAngle`, `camShake`를 바꾼 뒤 이 함수를 거친다.
 - **해상도가 바뀌면 `applyResolution()`**을 부른다(깊이 텍스처는 `setSize`로 안 바뀌어서 새로 만든다).
-- **오두막**은 부품 96개로 만들어 낙하 애니메이션이 끝나면 `mergeCabinPrefab`으로 재질별로 합친다. 다시 만들 때 `disposeObjectTree`로 해제한다.
+- **오두막**은 부품 96개로 만들어 낙하 애니메이션이 끝나면 `mergeCabinPrefab`으로 합친다. 다시 만들 때 `disposeObjectTree`로 해제한다.
 - 적층 오브젝트의 점 크기(`gl_PointSize`)는 `sharedUniforms.uPointScale`(씬 픽셀/CSS 픽셀)을 곱한다.
 
 ## 렌더링 파이프라인
@@ -43,11 +45,12 @@
 ```powershell
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/controls.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/audio.mjs
+node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/items.mjs
 $env:SHOT='night'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1&time=night" tools/tests/screenshot.mjs
 ```
 - `tools/cdp.mjs`는 헤드리스 Chrome을 띄워 마우스·휠·키 입력, `evaluate`, 스크린샷을 제공한다. 결과 스크린샷은 `tools/shots/`(git 제외).
-- `#debug=1`이면 `window.__mori`(state, project, hit, audio)가 생긴다. 읽기 전용 테스트 훅이다.
-- 헤드리스는 SwiftShader(소프트웨어 렌더링)라 몇 초에 몇 프레임뿐이다. 시간(ms) 측정은 의미 없고, draw call 수(`#fps=1`이면 `body[data-bench]`와 콘솔에 기록)로 비교한다. 기본 섬 기준 그림자 갱신 없는 프레임 80 calls.
+- `#debug=1`이면 `window.__mori`(state, project, hit, audio, items, lights, renderables)가 생긴다. 읽기 전용 테스트 훅이다. `renderables()`로 draw call이 어디서 나오는지 나눠 볼 수 있다.
+- 헤드리스는 SwiftShader(소프트웨어 렌더링)라 몇 초에 몇 프레임뿐이다. 시간(ms) 측정은 의미 없고, draw call 수(`#fps=1`이면 `body[data-bench]`와 콘솔에 기록)로 비교한다. 기본 섬 기준 그림자 갱신 없는 프레임 59 calls(오두막 합치기 개선 전 82).
 - 시간대 전환은 천천히 섞이므로 스크린샷에는 `#time=night`처럼 시작 옵션을 쓴다(즉시 적용됨).
 - URL 옵션 전체 목록은 README 참고.
 

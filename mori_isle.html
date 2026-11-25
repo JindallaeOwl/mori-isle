@@ -1259,6 +1259,7 @@
       } = {}
     ) {
       const useDrop = useLayerHeight && dropLayers > 0;
+      material.userData.emissiveNightBoost = emissiveNightBoost; // read by mergeChunkToOneMesh
       material.onBeforeCompile = (shader) => {
         shader.uniforms.uTime = sharedUniforms.uTime;
         shader.uniforms.uNightFactor = sharedUniforms.uNightFactor;
@@ -1846,7 +1847,8 @@
     const ITEM_DEFS = [
       {
         id: 'cabin',
-        name: '오두막 (내부 포함)',
+        name: '오두막',
+        category: 'build',
         type: '3d_cabin',
         freePlace: false,
         glow: { offsetY: 0.52, color: '#ffaa4a', scale: 1.85, lightIntensity: 1.15 },
@@ -1856,6 +1858,7 @@
       {
         id: 'pine',
         name: '소나무',
+        category: 'flora',
         type: 'stack',
         freePlace: false,
         size: 20,
@@ -1902,6 +1905,7 @@
       {
         id: 'oak',
         name: '참나무',
+        category: 'flora',
         type: 'stack',
         freePlace: false,
         size: 22,
@@ -1954,16 +1958,20 @@
       },
       {
         id: 'path',
-        name: '돌길 / 흙길 (자동연결)',
+        name: '돌길',
+        category: 'paths',
         type: 'auto_path',
+        autoConnect: true,
         freePlace: false,
         glow: null,
         contactRadius: 0
       },
       {
         id: 'fence',
-        name: '나무 울타리 (자동연결)',
+        name: '나무 울타리',
+        category: 'paths',
         type: 'auto_fence',
+        autoConnect: true,
         freePlace: false,
         glow: null,
         contactRadius: 0.22
@@ -1971,6 +1979,7 @@
       {
         id: 'campfire',
         name: '모닥불',
+        category: 'living',
         type: 'stack',
         freePlace: false,
         size: 18,
@@ -2011,6 +2020,7 @@
       {
         id: 'lantern',
         name: '가로등',
+        category: 'living',
         type: 'stack',
         freePlace: false,
         size: 18,
@@ -2042,6 +2052,7 @@
       {
         id: 'bench',
         name: '나무 벤치',
+        category: 'living',
         type: 'stack',
         freePlace: false,
         size: 18,
@@ -2082,7 +2093,8 @@
       },
       {
         id: 'rocks',
-        name: '이끼 바위 (자유배치)',
+        name: '이끼 바위',
+        category: 'nature',
         type: 'stack',
         freePlace: true,
         size: 18,
@@ -2119,7 +2131,8 @@
       },
       {
         id: 'flowers',
-        name: '들꽃 (자유배치)',
+        name: '들꽃',
+        category: 'nature',
         type: 'stack',
         freePlace: true,
         size: 16,
@@ -2159,7 +2172,8 @@
       },
       {
         id: 'reeds',
-        name: '물가 갈대 (자유배치)',
+        name: '물가 갈대',
+        category: 'nature',
         type: 'stack',
         freePlace: true,
         size: 16,
@@ -2196,7 +2210,8 @@
       },
       {
         id: 'mushrooms',
-        name: '버섯 (자유배치)',
+        name: '버섯',
+        category: 'nature',
         type: 'stack',
         freePlace: true,
         size: 16,
@@ -2331,10 +2346,34 @@
     if (HASH.stack !== '1') { // #stack=1 keeps the old sprite-stack versions for comparison
       for (let i = 0; i < ITEM_DEFS.length; i++) {
         const s = SOUP_ITEMS[ITEM_DEFS[i].id];
-        if (s) ITEM_DEFS[i] = Object.assign({ id: ITEM_DEFS[i].id, name: ITEM_DEFS[i].name, freePlace: ITEM_DEFS[i].freePlace }, s);
+        const d = ITEM_DEFS[i];
+        if (s) ITEM_DEFS[i] = Object.assign({ id: d.id, name: d.name, category: d.category, freePlace: d.freePlace }, s);
       }
     }
     const isInstancedDef = (def) => def.type === 'stack' || def.type === 'soup';
+
+    // Tool categories (order = palette order). Every item def must name one of these.
+    const CATEGORIES = [
+      { id: 'build', name: '건물' },
+      { id: 'flora', name: '나무·식물' },
+      { id: 'paths', name: '길·담' },
+      { id: 'living', name: '생활 소품' },
+      { id: 'nature', name: '자연 소품' }
+    ];
+    // Shared fields every item has, whatever it is built with:
+    //   id, name, category, type ('stack' | 'soup' | '3d_cabin' | 'auto_path' | 'auto_fence'),
+    //   freePlace (no grid, may overlap), autoConnect (joins neighbours), contactRadius,
+    //   glow (light source or null), explodeTier (0 ground props, 1 mid, 2 cabin)
+    ITEM_DEFS.forEach((def) => {
+      if (!CATEGORIES.some((c) => c.id === def.category)) console.warn('[mori] item without a valid category:', def.id);
+      def.freePlace = !!def.freePlace;
+      def.autoConnect = !!def.autoConnect;
+      def.contactRadius = def.contactRadius || 0;
+      def.glow = def.glow || null;
+      if (def.explodeTier === undefined) def.explodeTier = def.type === '3d_cabin' ? 2 : 0;
+    });
+    // stable palette order: by category, then definition order
+    ITEM_DEFS.sort((a, b) => CATEGORIES.findIndex((c) => c.id === a.category) - CATEGORIES.findIndex((c) => c.id === b.category));
 
     /* =========================================================================
        6. SPRITE STACK BUILDER & MINIATURE ICONS
@@ -2581,9 +2620,91 @@
       oldGeos.forEach((g) => g.dispose());
       merged.forEach((m) => chunk.add(m));
     }
+    // One material for every merged cabin: colour, roughness, metalness and emissive travel per
+    // vertex, so a whole chunk is one draw call with the same shading as the separate materials.
+    let cabinMergedMat = null;
+    function getCabinMergedMaterial() {
+      if (cabinMergedMat) return cabinMergedMat;
+      const mat = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 }));
+      const base = mat.onBeforeCompile;
+      mat.onBeforeCompile = (sh, r) => {
+        base(sh, r);
+        sh.vertexShader = sh.vertexShader
+          .replace('#include <common>', '#include <common>\nattribute vec2 aRM; attribute vec4 aEmis; varying vec2 vRM; varying vec4 vEmis;')
+          .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRM = aRM; vEmis = aEmis;');
+        sh.fragmentShader = sh.fragmentShader
+          .replace('#include <common>', '#include <common>\nvarying vec2 vRM; varying vec4 vEmis;')
+          .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = vRM.x;')
+          .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = vRM.y;')
+          .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+          totalEmissiveRadiance = vEmis.rgb * (vEmis.a > 0.01 ? mix(0.25, vEmis.a, smoothstep(0.1, 0.85, uNightFactor)) : 1.0);`);
+      };
+      mat.customProgramCacheKey = () => 'mori-cabin-merged';
+      mat.userData.shared = true; // never disposed with a cabin
+      return (cabinMergedMat = mat);
+    }
+    const _mergeCol = new THREE.Color();
+    function mergeChunkToOneMesh(chunk) {
+      const meshes = [];
+      chunk.traverse((o) => { if (o.isMesh && o !== chunk) meshes.push(o); });
+      if (!meshes.length || meshes.some((m) => !m.material.isMeshStandardMaterial)) return mergeChunkByMaterial(chunk);
+      chunk.updateMatrixWorld(true);
+      _mergeInv.copy(chunk.matrixWorld).invert();
+      const groups = new Map(); // by shadow flags only
+      for (const m of meshes) {
+        const key = (m.castShadow ? 'c' : '') + (m.receiveShadow ? 'r' : '');
+        if (!groups.has(key)) groups.set(key, { cast: m.castShadow, recv: m.receiveShadow, list: [] });
+        groups.get(key).list.push(m);
+      }
+      const merged = [];
+      for (const g of groups.values()) {
+        let total = 0;
+        const parts = g.list.map((m) => { const geo = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry; total += geo.attributes.position.count; return { m, geo }; });
+        const pos = new Float32Array(total * 3), nrm = new Float32Array(total * 3), col = new Float32Array(total * 3);
+        const rm = new Float32Array(total * 2), em = new Float32Array(total * 4);
+        let off = 0;
+        for (const { m, geo } of parts) {
+          const mt = m.material;
+          _mergeM.multiplyMatrices(_mergeInv, m.matrixWorld);
+          _mergeN.getNormalMatrix(_mergeM);
+          const P = geo.attributes.position, N = geo.attributes.normal, VC = mt.vertexColors ? geo.attributes.color : null;
+          const er = mt.emissive.r * mt.emissiveIntensity, eg = mt.emissive.g * mt.emissiveIntensity, eb = mt.emissive.b * mt.emissiveIntensity;
+          const boost = mt.userData.emissiveNightBoost || 0;
+          for (let i = 0; i < P.count; i++) {
+            const o = off + i;
+            _mergeV.fromBufferAttribute(P, i).applyMatrix4(_mergeM);
+            pos[o * 3] = _mergeV.x; pos[o * 3 + 1] = _mergeV.y; pos[o * 3 + 2] = _mergeV.z;
+            if (N) { _mergeV.fromBufferAttribute(N, i).applyMatrix3(_mergeN).normalize(); nrm[o * 3] = _mergeV.x; nrm[o * 3 + 1] = _mergeV.y; nrm[o * 3 + 2] = _mergeV.z; }
+            _mergeCol.copy(mt.color);
+            if (VC) { _mergeCol.r *= VC.getX(i); _mergeCol.g *= VC.getY(i); _mergeCol.b *= VC.getZ(i); }
+            col[o * 3] = _mergeCol.r; col[o * 3 + 1] = _mergeCol.g; col[o * 3 + 2] = _mergeCol.b;
+            rm[o * 2] = mt.roughness; rm[o * 2 + 1] = mt.metalness;
+            em[o * 4] = er; em[o * 4 + 1] = eg; em[o * 4 + 2] = eb; em[o * 4 + 3] = boost;
+          }
+          off += P.count;
+          if (geo !== m.geometry) geo.dispose();
+        }
+        const mg = new THREE.BufferGeometry();
+        mg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        mg.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+        mg.setAttribute('color', new THREE.BufferAttribute(col, 3));
+        mg.setAttribute('aRM', new THREE.BufferAttribute(rm, 2));
+        mg.setAttribute('aEmis', new THREE.BufferAttribute(em, 4));
+        mg.computeBoundingSphere();
+        const mesh = new THREE.Mesh(mg, getCabinMergedMaterial());
+        mesh.castShadow = g.cast; mesh.receiveShadow = g.recv;
+        merged.push(mesh);
+      }
+      const oldGeos = new Set(), oldMats = new Set();
+      meshes.forEach((o) => { oldGeos.add(o.geometry); oldMats.add(o.material); });
+      while (chunk.children.length) chunk.remove(chunk.children[0]);
+      oldGeos.forEach((geo) => geo.dispose());
+      oldMats.forEach((mt) => mt.dispose());
+      merged.forEach((m) => chunk.add(m));
+    }
     function mergeCabinPrefab(root) {
       const { chunkInterior, chunkWalls, chunkRoof } = root.userData;
-      [chunkInterior, chunkWalls, chunkRoof].forEach(mergeChunkByMaterial);
+      [chunkInterior, chunkWalls, chunkRoof].forEach(mergeChunkToOneMesh);
       root.userData.merged = true;
       root.userData.dropParts = null;
     }
@@ -2594,7 +2715,7 @@
         o.geometry.dispose();
         (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => mats.add(m));
       });
-      mats.forEach((m) => m.dispose());
+      mats.forEach((m) => { if (!m.userData.shared) m.dispose(); });
     }
 
     function buildStorybookCabinPrefab() {
@@ -4145,6 +4266,56 @@
       scene.add(glowGroup);
       let activeGlowSprites = [];
 
+      // --- Point light budget: MAX_POINT_LIGHTS pool lights go to the light sources nearest the
+      // view center. Lights hand over with a short fade; the pool never changes size, so no
+      // shader recompiles (see rules in CLAUDE.md). ---
+      let lightSources = [];
+      let lightPickTimer = 0;
+      function pickPointLights(instant) {
+        const n = lightSources.length;
+        if (n <= MAX_POINT_LIGHTS) lightSources.forEach((s) => { s.want = true; });
+        else {
+          const d = (s) => (s.x - camPan.x) * (s.x - camPan.x) + (s.z - camPan.y) * (s.z - camPan.y);
+          const sorted = lightSources.slice().sort((a, b) => d(a) - d(b));
+          lightSources.forEach((s) => { s.want = false; });
+          for (let i = 0; i < MAX_POINT_LIGHTS; i++) sorted[i].want = true;
+        }
+        if (instant) {
+          // fresh rebuild: hand out slots directly, no fade-in
+          let slot = 0;
+          for (const s of lightSources) {
+            if (!s.want) continue;
+            s.slot = slot; s.w = 1;
+            const pl = pointLightPool[slot++];
+            pl.userData = { active: true };
+            pl.color.set(s.color);
+          }
+        }
+      }
+      function updatePointLights(dt, elapsed, pMid, pProps) {
+        lightPickTimer -= dt;
+        if (lightPickTimer <= 0) { lightPickTimer = 0.3; pickPointLights(false); }
+        for (const s of lightSources) {
+          if (s.slot >= 0) {
+            s.w += ((s.want ? 1 : 0) - s.w) * Math.min(1, dt * 5);
+            if (!s.want && s.w < 0.01) { // faded out: free its pool light
+              const pl = pointLightPool[s.slot];
+              pl.userData = { active: false }; pl.intensity = 0;
+              s.slot = -1; s.w = 0;
+            }
+          } else if (s.want) {
+            const j = pointLightPool.findIndex((pl) => !pl.userData.active);
+            if (j >= 0) { s.slot = j; s.w = 0; pointLightPool[j].userData = { active: true }; pointLightPool[j].color.set(s.color); }
+          }
+          if (s.slot < 0) continue;
+          const pl = pointLightPool[s.slot];
+          const flick = s.flicker ? fireFlicker(elapsed, s.seed) : (0.95 + 0.05 * noise1(elapsed * 1.7, s.seed));
+          pl.intensity = curAtmo.pointIntensity * s.mult * flick * s.w;
+          const lift = s.isCabin ? pMid * 1.68 : (s.tier === 1 ? pMid * 1.28 : pProps * 0.42);
+          pl.position.set(s.x, s.baseY + lift, s.z);
+        }
+      }
+
       /* =======================================================================
          11. CURSORS (SQUARE GRID & FREE-PROP RING) + DYNAMIC PARTICLES
          ======================================================================= */
@@ -4628,7 +4799,7 @@
         campfireSpots = [];
         contactShadowBaseList = [];
 
-        let plIndex = 0;
+        lightSources = [];
         pointLightPool.forEach((pl) => { pl.userData = { active: false }; pl.intensity = 0; });
 
         let pathCenterIdx = 0, pathConnIdx = 0, pathCobbleIdx = 0;
@@ -4748,22 +4919,20 @@
               isCabin: def.type === '3d_cabin', tier: def.explodeTier || 0
             });
 
-            if (plIndex < MAX_POINT_LIGHTS) {
-              const pl = pointLightPool[plIndex++];
-              pl.color.set(def.glow.color);
-              pl.position.set(gx, wy + def.glow.offsetY + 0.15, gz);
-              pl.userData = {
-                baseY: wy + def.glow.offsetY + 0.15,
-                mult: def.glow.lightIntensity || 1.0,
-                flicker: !!def.glow.flicker,
-                seed: hash2D(entry.gx, entry.gz, 15) * 20,
-                isCabin: def.type === '3d_cabin',
-                tier: def.explodeTier || 0,
-                active: true
-              };
-            }
+            // every light source is listed; updatePointLights() lends the 8 pool lights to the nearest ones
+            lightSources.push({
+              x: gx, z: gz, baseY: wy + def.glow.offsetY + 0.15,
+              color: def.glow.color,
+              mult: def.glow.lightIntensity || 1.0,
+              flicker: !!def.glow.flicker,
+              seed: hash2D(entry.gx, entry.gz, 15) * 20,
+              isCabin: def.type === '3d_cabin',
+              tier: def.explodeTier || 0,
+              want: false, slot: -1, w: 0
+            });
           }
         });
+        pickPointLights(true);
 
         // 2. Process Free-Placed Overlapping Decor (Flowers, Reeds, Rocks, Mushrooms)
         freeProps.forEach((fp) => {
@@ -5195,7 +5364,7 @@
           const def = assetsById[selectedTool].def;
           const badge = def.freePlace
             ? `<span class="mode-tag free">자유 겹치기</span>`
-            : `<span class="mode-tag">그리드 스냅</span>`;
+            : `<span class="mode-tag">${def.autoConnect ? '자동 연결' : '그리드 스냅'}</span>`;
           activeItemLabel.innerHTML = `${def.name} • ${deg}° ${badge}`;
         }
         updateHoverVisuals();
@@ -5206,6 +5375,7 @@
         btn.className = 'slot-btn' + (def.freePlace ? ' free-prop' : '');
         btn.dataset.tool = def.id;
         btn.title = def.name;
+        btn.dataset.category = def.category;
         btn.appendChild(assetsById[def.id].iconCanvas);
         btn.addEventListener('click', () => {
           selectedTool = def.id;
@@ -5672,17 +5842,7 @@
           const sc = g.baseScale * (0.94 + 0.08 * flick);
           g.sprite.scale.set(sc, sc, 1);
         }
-        for (let i = 0; i < pointLightPool.length; i++) {
-          const pl = pointLightPool[i];
-          if (!pl.userData.active) continue;
-          const ud = pl.userData;
-          const flick = ud.flicker
-            ? fireFlicker(elapsed, ud.seed)
-            : (0.95 + 0.05 * noise1(elapsed * 1.7, ud.seed));
-          pl.intensity = curAtmo.pointIntensity * ud.mult * flick;
-          const plLift = ud.isCabin ? pMid * 1.68 : (ud.tier === 1 ? pMid * 1.28 : pProps * 0.42);
-          pl.position.y = ud.baseY + plLift;
-        }
+        updatePointLights(dt, elapsed, pMid, pProps);
 
         updateCampfireFx(dt, elapsed, pProps * 0.42);
         // campfire crackle: louder when zoomed in and when a fire is near the view center
@@ -5789,6 +5949,22 @@
             dist: camDist, targetDist: targetCamDist, elev: camElev * 180 / Math.PI, orbit: orbitAngle,
             placed: placedItems.size, free: freeProps.length, photo: isPhotoMode, exploded: isExploded
           }),
+          items: () => ITEM_DEFS.map((d) => ({ id: d.id, name: d.name, category: d.category, type: d.type, freePlace: d.freePlace, autoConnect: d.autoConnect })),
+          lights: () => ({
+            sources: lightSources.length,
+            active: pointLightPool.filter((pl) => pl.userData.active).length,
+            lit: lightSources.filter((s) => s.slot >= 0 && s.want).map((s) => `${s.x.toFixed(1)},${s.z.toFixed(1)}`).sort().join(' ')
+          }),
+          // visible renderables in the main scene (for draw call breakdowns)
+          renderables: () => {
+            const out = [];
+            scene.traverseVisible((o) => {
+              if (!(o.isMesh || o.isPoints || o.isSprite || o.isLine)) return;
+              if (o.isInstancedMesh && o.count === 0) return;
+              out.push({ type: o.type, name: o.name || o.material?.type, count: o.isInstancedMesh ? o.count : 1, tris: o.geometry?.index ? o.geometry.index.count / 3 : (o.geometry?.attributes.position?.count || 0) / 3, cast: o.castShadow });
+            });
+            return out;
+          },
           // world point -> CSS pixel position on screen
           project: (x, y, z) => { _pv.set(x, y, z).project(camera); return [(_pv.x + 1) / 2 * window.innerWidth, (1 - _pv.y) / 2 * window.innerHeight]; },
           // CSS pixel -> ground hit (or null)
