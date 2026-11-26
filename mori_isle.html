@@ -3018,6 +3018,80 @@
           S.box(.012, .034, .017, BX - .14, .008, BZ + .04, PIN, { l: L_WOOD, r: [Math.PI / 2, .7, 0] });
           S.box(.012, .034, .017, BX - .11, .008, BZ + .09, PIN, { l: L_WOOD, r: [Math.PI / 2, 2.2, 0] });
         }
+      },
+      flowerpot: {
+        name: '화분',
+        category: 'living',
+        freePlace: true,
+        type: 'soup',
+        seed: 181,
+        windStrength: 0.0,
+        explodeSliceFactor: 0.40,
+        explodeTier: 0,
+        glow: null,
+        contactRadius: 0.30,
+        solidRadius: 0.22,
+        build(S, rng) {
+          const TERRA = C('#c0673f'), TERRA_D = C('#a4532f'), BLOOM = C('#dcc0a6'), SOIL = C('#3e2b1f'), LEAF = C('#4f7d34'), LEAF_L = C('#6f9c45');
+          const GER = C('#d6453a'), GER_P = C('#e8798a'), SUCC = C('#8fb39a'), SUCC_L = C('#b4cfae'), ZINC = C('#7d8f99');
+          // terracotta pot standing on its base at (x, 0, z): tapered body, thick rim, soil, chalky bloom near the foot
+          const pot = (T, x, z, r, h, soil = true) => {
+            T.cyl(r, h, x, h / 2, z, mixC(TERRA, C('#c97a52'), rng() * .5), { n: 10, rt: 1.28, l: L_PLASTER, rough: .85 });
+            T.cyl(r * 1.08, h * .1, x, h * .2, z, mixC(TERRA, BLOOM, .55), { n: 10, rt: 1.03, l: L_PLASTER, rough: 1, jit: .03 });
+            T.cyl(r * 1.36, h * .2, x, h * .9, z, TERRA_D, { n: 10, rt: 1.03, l: L_PLASTER, rough: .85 });
+            if (soil) T.cyl(r * 1.22, .006, x, h + .002, z, SOIL, { n: 10, l: L_DIRT, rough: 1, jit: .03 });
+          };
+          // 1) big pot of geraniums
+          const AX = -.05, AZ = -.04, AH = .16;
+          pot(S, AX, AZ, .085, AH);
+          for (let k = 0; k < 8; k++) {
+            const a = k / 8 * TAU + rng.range(-.2, .2), d = rng.range(.045, .085);
+            S.ico(rng.range(.03, .04), AX + Math.cos(a) * d, AH + rng.range(.02, .045), AZ + Math.sin(a) * d, mixC(LEAF, LEAF_L, rng()), { sc: [1.3, .4, 1.2], d: 1, rough: .75, r: [rng.range(-.4, .4), a, rng.range(-.3, .3)] });
+          }
+          [[-.03, .27, -.035, GER], [.035, .29, -.01, GER], [-.005, .245, .04, GER_P]].forEach(([dx, hy, dz, col]) => {
+            const hx = AX + dx, hz = AZ + dz;
+            S.seg([AX + dx * .3, AH, AZ + dz * .3], [hx, hy - .01, hz], .004, .003, LEAF, { n: 4, jit: 0 });
+            S.ico(.012, hx, hy, hz, mulC(col, .85), { d: 0, rough: .7 });
+            for (let j = 0; j < 7; j++) {
+              const b = j / 7 * TAU, e = rng.range(.012, .02);
+              S.ico(rng.range(.009, .013), hx + Math.cos(b) * e, hy + rng.range(-.006, .01), hz + Math.sin(b) * e, mixC(col, C('#ffffff'), rng() * .18), { d: 0, rough: .6, jit: .05 });
+            }
+          });
+          // 2) small pot with a succulent rosette
+          const BX = .14, BZ = .08, BH = .085;
+          pot(S, BX, BZ, .045, BH);
+          for (const [n, d, y, sc, col, tilt] of [[7, .03, BH + .012, 1, SUCC, .25], [5, .014, BH + .022, .75, SUCC_L, .7]]) {
+            for (let k = 0; k < n; k++) {
+              const a = k / n * TAU + (n === 5 ? .3 : 0);
+              S.ico(.02 * sc, BX + Math.cos(a) * d, y, BZ - Math.sin(a) * d, col, { sc: [1.6, .55, .85], d: 1, rough: .55, r: [0, a, tilt] });
+            }
+          }
+          // 3) a tiny pot tipped over, soil and a seedling spilled out of its mouth
+          const T = new Soup();
+          pot(T, 0, 0, .035, .07, false);
+          S.merge(T, { p: [.18, .041, -.13], r: [0, .5, 1.45] }); // rim and base both rest on the turf
+          S.ico(.05, .093, .006, -.082, SOIL, { sc: [1.4, .25, 1], d: 1, rough: 1, l: L_DIRT });
+          S.ico(.018, .108, .01, -.093, mulC(SOIL, 1.2), { sc: [1.2, .5, 1], d: 0, rough: 1, l: L_DIRT });
+          S.seg([.085, .012, -.08], [.07, .03, -.07], .003, .002, LEAF_L, { n: 3, jit: 0 });
+          S.ico(.012, .066, .033, -.068, LEAF_L, { sc: [1.4, .3, 1], d: 0, rough: .7, r: [0, .4, .5] });
+          // 4) a zinc watering can, spout toward the back-left, brass rose
+          const CX = -.2, CZ = .14;
+          S.cyl(.055, .1, CX, .05, CZ, ZINC, { n: 12, l: L_METAL, rough: .4 });
+          S.cyl(.055, .014, CX, .107, CZ, mulC(ZINC, 1.06), { n: 12, rt: .72, l: L_METAL, rough: .4 });
+          for (const y of [.012, .09]) S.cyl(.057, .008, CX, y, CZ, mulC(ZINC, .82), { n: 12, l: L_METAL, rough: .45, jit: 0 });
+          S.seg([CX - .035, .03, CZ + .035], [CX - .1, .125, CZ + .1], .013, .008, ZINC, { n: 6, l: L_METAL, rough: .4 });
+          S.seg([CX - .1, .125, CZ + .1], [CX - .113, .132, CZ + .113], .009, .022, MCOL.brass, { n: 8, l: L_METAL, rough: .3 });
+          S.torus(.042, CX, .108, CZ, mulC(ZINC, .9), { n: 10, t: .17, m: 4, l: L_METAL, rough: .4, r: [0, Math.PI / 4, 0] });
+          // a hand trowel stuck in the soil, fallen petals, moss at the foot of the big pot
+          S.ico(.03, .06, .018, .17, MCOL.ironL, { sc: [.65, 1.2, .14], d: 1, l: L_METAL, rough: .35, r: [.25, .3, 0] });
+          S.cyl(.008, .016, .06, .058, .18, MCOL.iron, { n: 6, l: L_METAL, rough: .45, r: [.25, .3, 0] });
+          S.seg([.06, .062, .181], [.06, .14, .2], .011, .013, C('#c89a62'), { n: 6, l: L_WOOD, rough: .6 });
+          for (let k = 0; k < 5; k++) {
+            const a = rng() * TAU, d = rng.range(.12, .19);
+            S.box(.014, .003, .01, AX + Math.cos(a) * d, .003, AZ + Math.sin(a) * d, k % 3 ? GER : GER_P, { l: L_PLAIN, rough: .8, r: [0, rng() * TAU, 0], jit: .05 });
+          }
+          S.ico(.035, AX - .08, .01, AZ - .06, MCOL.moss, { sc: [1.4, .5, 1.1], d: 0, rough: 1 });
+        }
       }
     };
     if (HASH.stack !== '1') { // #stack=1 keeps the old sprite-stack versions for comparison
@@ -5588,9 +5662,9 @@
         // 4. Solid free-placed rocks & closely overlapping small props
         for (const fp of freeProps) {
           const dist = Math.hypot(wx - fp.wx, wz - fp.wz);
-          if (fp.id === 'rocks') {
-            const rockR = 0.34 * (fp.scale || 1.0);
-            if (dist < rockR + selfRadius) return true;
+          const solidFree = fp.id === 'rocks' ? 0.34 : assetsById[fp.id]?.def.solidRadius;
+          if (solidFree) {
+            if (dist < solidFree * (fp.scale || 1.0) + selfRadius) return true;
           } else if (checkSmallFreeProps) {
             if (dist < 0.16 + selfRadius * 0.5) return true;
           }
