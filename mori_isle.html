@@ -8072,6 +8072,56 @@
           snaps: () => snapProps.map((o) => ({ id: o.id, wx: o.wx, wz: o.wz, rotation: o.rotation, rect: footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation) })),
           cabins: () => cabinRects(),
           pond: (x, z) => getPondSDF(x, z),
+          // terrain function samples for tools/tests/terrain.mjs (hash of exact float bits + a coarse table)
+          terrainDump: (step = 0.02, coarse = 0.25) => {
+            let h = 0x811c9dc5 >>> 0;
+            const f64 = new Float64Array(1), u8 = new Uint8Array(f64.buffer);
+            const mix = (v) => { f64[0] = v; for (let k = 0; k < 8; k++) { h ^= u8[k]; h = Math.imul(h, 16777619) >>> 0; } };
+            const fns = {
+              cont: (x, z) => getContinuousTerrainHeight(x, z),
+              turf: (x, z) => getTurfHeight(x, z),
+              sdf: (x, z) => getPondSDF(x, z),
+              pondW: (x, z) => (isPondWorld(x, z) ? 1 : 0) + (isPondWorld(x, z, 0.06) ? 2 : 0)
+            };
+            const out = { hash: {}, coarse: {}, tiles: {} };
+            const N = Math.round(13 / step);
+            for (const [k, fn] of Object.entries(fns)) {
+              h = 0x811c9dc5 >>> 0;
+              for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) mix(fn(-6.5 + i * step, -6.5 + j * step));
+              out.hash[k] = h;
+              const M = Math.round(13 / coarse), c = [];
+              for (let j = 0; j <= M; j++) for (let i = 0; i <= M; i++) c.push(+fn(-6.5 + i * coarse, -6.5 + j * coarse).toFixed(7));
+              out.coarse[k] = c;
+            }
+            for (const [k, fn] of Object.entries({ hill: getHillLevel, elev: getTileElevation, pondT: (x, z) => (isPondTile(x, z) ? 1 : 0) })) {
+              const c = [];
+              for (let gz = -2; gz < GRID_SIZE + 2; gz++) for (let gx = -2; gx < GRID_SIZE + 2; gx++) c.push(fn(gx, gz));
+              out.tiles[k] = c;
+            }
+            return out;
+          },
+          // hash of every mesh's geometry + instance matrices + texture canvases in the scene (built once / rebuilt)
+          meshDigest: () => {
+            const fnv = (arr, h) => { const u8 = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength); for (let k = 0; k < u8.length; k++) { h ^= u8[k]; h = Math.imul(h, 16777619) >>> 0; } return h; };
+            const out = [], seenTex = new Set();
+            scene.updateMatrixWorld(true);
+            scene.traverse((o) => {
+              if (!(o.isMesh || o.isPoints)) return;
+              let h = 0x811c9dc5 >>> 0;
+              const g = o.geometry;
+              for (const name of Object.keys(g.attributes).sort()) h = fnv(g.attributes[name].array, h);
+              if (g.index) h = fnv(g.index.array, h);
+              if (o.isInstancedMesh) h = fnv(o.instanceMatrix.array.subarray(0, o.count * 16), h);
+              h = fnv(new Float32Array(o.matrixWorld.elements), h);
+              const u = o.material && o.material.uniforms;
+              if (u) for (const v of Object.values(u)) {
+                const img = v && v.value && v.value.isTexture && v.value.image;
+                if (img && img.getContext && !seenTex.has(img)) { seenTex.add(img); h = fnv(img.getContext('2d').getImageData(0, 0, img.width, img.height).data, h); }
+              }
+              out.push((o.name || o.type) + ':' + (o.isInstancedMesh ? o.count : 1) + ':' + h.toString(16));
+            });
+            return out;
+          },
           lights: () => ({
             sources: lightSources.length,
             active: pointLightPool.filter((pl) => pl.userData.active).length,
