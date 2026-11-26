@@ -612,6 +612,8 @@
         dotColor: '#8fd18a',
         skyTop: new THREE.Color('#4f92d6'),
         skyBottom: new THREE.Color('#cfe9ff'),
+        skyHalo: new THREE.Color('#eef4f2'),   // backdrop glow behind the island
+        skyCorner: 0.26,                       // how much the backdrop corners darken
         keyColor: new THREE.Color('#fff2d6'),
         keyIntensity: 2.35,
         fillColor: new THREE.Color('#8bb8eb'),
@@ -636,6 +638,8 @@
         dotColor: '#f7b267',
         skyTop: new THREE.Color('#5b4678'),
         skyBottom: new THREE.Color('#ffae6e'),
+        skyHalo: new THREE.Color('#ffd49c'),
+        skyCorner: 0.30,
         keyColor: new THREE.Color('#ff9d4f'),
         keyIntensity: 2.5,
         fillColor: new THREE.Color('#6a7fb8'),
@@ -660,6 +664,8 @@
         dotColor: '#8ea8ff',
         skyTop: new THREE.Color('#090e21'),
         skyBottom: new THREE.Color('#1d2a4f'),
+        skyHalo: new THREE.Color('#1e2a54'),
+        skyCorner: 0.62,
         keyColor: new THREE.Color('#7a96dc'),  // cold moonlight
         keyIntensity: 0.8,
         fillColor: new THREE.Color('#24365f'),
@@ -719,6 +725,8 @@
       uWaterFoam: { value: ATMOSPHERES.day.waterFoam.clone() },
       uSkyTop: { value: ATMOSPHERES.day.skyTop.clone() },
       uSkyBottom: { value: ATMOSPHERES.day.skyBottom.clone() },
+      uSkyHalo: { value: ATMOSPHERES.day.skyHalo.clone() },
+      uSkyCorner: { value: ATMOSPHERES.day.skyCorner },
       uGradeTint: { value: ATMOSPHERES.day.gradeTint.clone() },
       uGradeWarmth: { value: ATMOSPHERES.day.gradeWarmth },
       uPointScale: { value: 0.5 }, // scene pixels per CSS pixel (for gl_PointSize)
@@ -3936,6 +3944,8 @@
         uniform sampler2D tColor; uniform sampler2D tDepth;
         uniform mat4 uInvVP; uniform vec3 uCamDir; uniform vec2 uPx;
         uniform vec3 uSkyTop; uniform vec3 uSkyBottom; uniform float uNightFactor; uniform float uTime;
+        uniform vec3 uSkyHalo; uniform float uSkyCorner;
+        uniform vec4 uHalo;                          // xy island centre (uv), z island radius (uv height), w aspect
         uniform vec3 uLightPos[${NL}]; uniform vec3 uLightCol[${NL}];
         uniform vec3 uMistAmb; uniform vec4 uMist;   // x base height, y falloff, z density, w lamp gain
         uniform vec3 uAO;                            // x strength, y radius (scene px), z radius (world)
@@ -3943,6 +3953,12 @@
         ${GLSL_COMMON}
         vec3 getSky(vec2 uv) {
           vec3 sky = mix(uSkyBottom, uSkyTop, pow(clamp(uv.y, 0.0, 1.0), 0.85));
+          // storybook backdrop: a soft oval of light behind the island, corners sinking into shade
+          vec2 q = (uv - uHalo.xy) * vec2(uHalo.w * 0.62, 1.0) / uHalo.z;
+          float hk = exp(-dot(q, q) * 1.6);
+          sky = mix(sky, uSkyHalo, hk * 0.8);
+          vec2 e = uv * 2.0 - 1.0;
+          sky *= 1.0 - uSkyCorner * smoothstep(0.15, 1.7, dot(e, e)) * (1.0 - hk);
           if (uNightFactor > 0.35) {
             vec2 starCell = floor(uv * vec2(220.0, 130.0));
             float h = fract(sin(dot(starCell, vec2(127.1, 311.7))) * 43758.5453);
@@ -3995,6 +4011,7 @@
         tColor: { value: renderTarget.texture }, tDepth: { value: renderTarget.depthTexture },
         uInvVP: { value: new THREE.Matrix4() }, uCamDir: { value: new THREE.Vector3() }, uPx: { value: new THREE.Vector2() },
         uSkyTop: sharedUniforms.uSkyTop, uSkyBottom: sharedUniforms.uSkyBottom,
+        uSkyHalo: sharedUniforms.uSkyHalo, uSkyCorner: sharedUniforms.uSkyCorner, uHalo: { value: new THREE.Vector4(0.5, 0.5, 0.4, 1.6) },
         uNightFactor: sharedUniforms.uNightFactor, uTime: sharedUniforms.uTime,
         uLightPos: { value: mistLightPos }, uLightCol: { value: mistLightCol },
         uMistAmb: { value: new THREE.Vector3(0.8, 0.85, 0.9) }, uMist: { value: new THREE.Vector4(0.0, 0.32, 0.22, 1.0) },
@@ -4112,6 +4129,7 @@
       });
 
       const _invVP = new THREE.Matrix4();
+      const _haloP = new THREE.Vector3();
       function runPostPipeline() {
         const px = atmoMat.uniforms.uPx.value.set(1 / rtSize.w, 1 / rtSize.h);
         const vh = camera.top - camera.bottom;
@@ -4124,6 +4142,9 @@
         _invVP.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).invert();
         u.uInvVP.value.copy(_invVP);
         camera.getWorldDirection(u.uCamDir.value);
+        // backdrop glow sits behind the island's middle and scales with the zoom (it ignores the reset fall)
+        _haloP.set(0, 0.4, 0).project(camera);
+        u.uHalo.value.set(_haloP.x * 0.5 + 0.5, _haloP.y * 0.5 + 0.5, 6.5 / vh, rtSize.w / rtSize.h);
         u.uAO.value.set(POST.ao && !POST.lite ? 1.5 : 0.0, 0.38 / worldPx, 0.38);
         u.uWind.value.set(sharedUniforms.uTime.value * 0.05, sharedUniforms.uTime.value * 0.021);
         u.uMist.value.set(0.0, 0.28, THREE.MathUtils.lerp(0.055, 0.2, night), 1.0);
@@ -5777,6 +5798,8 @@
       const curAtmo = {
         skyTop: ATMOSPHERES.day.skyTop.clone(),
         skyBottom: ATMOSPHERES.day.skyBottom.clone(),
+        skyHalo: ATMOSPHERES.day.skyHalo.clone(),
+        skyCorner: ATMOSPHERES.day.skyCorner,
         keyColor: ATMOSPHERES.day.keyColor.clone(),
         keyIntensity: ATMOSPHERES.day.keyIntensity,
         fillColor: ATMOSPHERES.day.fillColor.clone(),
@@ -6426,6 +6449,8 @@
         const lr = Math.min(1, dt * 2.5);
         curAtmo.skyTop.lerp(targetAtmo.skyTop, lr);
         curAtmo.skyBottom.lerp(targetAtmo.skyBottom, lr);
+        curAtmo.skyHalo.lerp(targetAtmo.skyHalo, lr);
+        curAtmo.skyCorner += (targetAtmo.skyCorner - curAtmo.skyCorner) * lr;
         curAtmo.keyColor.lerp(targetAtmo.keyColor, lr);
         curAtmo.keyIntensity += (targetAtmo.keyIntensity - curAtmo.keyIntensity) * lr;
         curAtmo.fillColor.lerp(targetAtmo.fillColor, lr);
@@ -6453,6 +6478,8 @@
 
         sharedUniforms.uSkyTop.value.copy(curAtmo.skyTop);
         sharedUniforms.uSkyBottom.value.copy(curAtmo.skyBottom);
+        sharedUniforms.uSkyHalo.value.copy(curAtmo.skyHalo);
+        sharedUniforms.uSkyCorner.value = curAtmo.skyCorner;
         sharedUniforms.uFogColor.value.copy(curAtmo.fogColor);
         sharedUniforms.uFogDensity.value = curAtmo.fogDensity;
         sharedUniforms.uWaterDeep.value.copy(curAtmo.waterDeep);
