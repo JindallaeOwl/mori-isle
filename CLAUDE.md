@@ -60,6 +60,7 @@ node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/items.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/ui.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/snap.mjs
+node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/console.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1&intro=1" tools/tests/intro.mjs
 $env:AUTOPLAY='0'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1&intro=1" tools/tests/sound-unlock.mjs; $env:AUTOPLAY=$null
 $env:SHOT='night'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1&time=night" tools/tests/screenshot.mjs
@@ -79,7 +80,7 @@ $env:SHOT='night'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#d
   - **섬을 다시 만들 수 있게 해야 하는 곳:** `buildMiniatureIsland`(8번, 잔디 윗면 0.2 격자 + 삼각형별 `turfColor`, 격자 오버레이용 `topGeo`, 지층 세 덩어리 `buildStrataChunk`, 물 `waterGeo` + 거품용 `sdfTex`(CanvasTexture, 물·안개 두 재질이 씀), 연잎 `lilyParts`, 연못 안개). 지금은 한 번만 만든다(`makeTerrainMaterial`은 공유, 해제 금지). `chunkTopSurface.children[0]`이 잔디 메쉬여야 한다는 규칙 유지(포인터 레이). 물가 풀·조약돌은 `rebuildInstances` 안에서 연못 중심 (2.35, 2.35) 기준으로 놓는다 → 데이터 기준으로. 시작 조립의 `LAYER_EDGE`(층 윗면 높이·반폭 상수)와 연못 등장 연출, 분해 보기도 확인.
   - **함수 사용 횟수(참고):** `getContinuousTerrainHeight` 17, `getTileElevation` 13, `getPondSDF` 12, `getTurfHeight` 5. 배치 규칙(`snapRectBlocked`, `shoreOk`, `isBlockedForPoint`, `canPlaceAtHit`)과 선착장도 이 함수들을 쓰므로 데이터만 바꾸면 따라온다.
   - **이후 단계 메모:** 편집 때만 메쉬를 다시 만들고 `markShadowsDirty`. 놓인 오브젝트는 땅을 따라 움직이고, 물에 잠기면 막기·지우기. 하단에 '지형' 카테고리(나무 토큰, `GLYPHS`). 성능: 윗면 삼각형 약 7천 개라 다시 만들기는 수 ms 예상, 평소 프레임 비용 변화 없음.
-  - **지킬 것:** 1단계 끝나면 기본 섬이 바뀌기 전과 똑같아야 한다(헤드리스 draw call 59 유지, 전체 테스트 통과, 콘솔 오류 0). 콘솔 오류 확인은 `Page.addScriptToEvaluateOnNewDocument`로 `console.error`를 모으는 방식(지난 세션 scratchpad `errs.mjs`, 필요하면 `tools/tests/`에 정식으로 추가).
+  - **지킬 것:** 1단계 끝나면 기본 섬이 바뀌기 전과 똑같아야 한다(헤드리스 draw call 59 유지, 전체 테스트 통과, 콘솔 오류 0). 콘솔 오류는 `tools/tests/console.mjs`로 확인(셰이더 컴파일 오류까지 잡음).
 - **굴뚝 연기 (사용자 확인 끝, 2026-11-26):** 사용자 지적(조립 중 잔존, 증기기관차 같은 분출, 불투명, 회색 안쪽·아랫면)을 고친 `4921259`에 "좋네요" 답을 받았다. 다시 지적이 없으면 건드리지 않는다. 실기기 프레임만 미확인.
 - **배경(하늘) 품질 높이기 (적용했다가 취소, 2026-11-26):** ①②를 커밋하고(`6343b86`, `f7dbb69`) ⑥을 손보던 중 사용자가 전부 취소하고 복구해 달라고 해서 게임 코드를 작업 전(`eba554c`) 상태로 되돌렸다(`0721c72`). 취소 이유는 듣지 않았다. 사용자가 먼저 꺼내지 않으면 다시 시작하지 않는다. 아래는 작업 전의 분석과 제안이다.
   - 지금 하늘: atmo 패스의 `getSky(uv)` 하나. 화면 y 기준 `uSkyBottom`→`uSkyTop` 2색 그라데이션 + 밤 해시 별. 색은 `ATMOSPHERES`의 `skyTop`/`skyBottom`.
