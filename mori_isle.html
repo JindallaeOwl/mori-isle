@@ -549,9 +549,18 @@
       return getPondSDF(wx, wz) < 0.18;
     }
 
-    // Cozy Back-Hill Framing (Terraced 1~2 steps on the back two edges: gx <= 2, gz <= 2)
-    function getHillLevel(gx, gz) {
-      if (gx < 0 || gx >= GRID_SIZE || gz < 0 || gz >= GRID_SIZE) return 0;
+    // --- Terrain data: one entry per tile (GRID_SIZE x GRID_SIZE, index gz * GRID_SIZE + gx) ---
+    // The terrain functions keep their names and arguments and read this table; terrain editing changes it.
+    // level: hill steps (x STEP_HEIGHT), signed so later steps can dig below the base ground.
+    // The pond is still the getPondSDF formula: 12x12 tiles can't reproduce its round lobes (moves to
+    // tile data with water editing, step 4). Material per tile comes with painting (step 3).
+    const terrain = {
+      level: new Int8Array(GRID_SIZE * GRID_SIZE),
+      version: 0 // bumped on every change (rebuild checks)
+    };
+
+    // Default island: Cozy Back-Hill Framing (Terraced 1~2 steps on the back two edges: gx <= 2, gz <= 2)
+    function defaultHillLevel(gx, gz) {
       // Top-most back corner ridge (Level 2)
       if ((gx === 0 && gz <= 5) || (gz === 0 && gx <= 5) || (gx === 1 && gz <= 2) || (gz === 1 && gx <= 2)) {
         return 2;
@@ -561,6 +570,20 @@
         return 1;
       }
       return 0;
+    }
+
+    function resetTerrainData() {
+      for (let gz = 0; gz < GRID_SIZE; gz++) for (let gx = 0; gx < GRID_SIZE; gx++) {
+        terrain.level[gz * GRID_SIZE + gx] = defaultHillLevel(gx, gz);
+      }
+      terrain.version++;
+    }
+    resetTerrainData();
+
+    // integer tile coords; outside the island = 0
+    function getHillLevel(gx, gz) {
+      if (gx < 0 || gx >= GRID_SIZE || gz < 0 || gz >= GRID_SIZE) return 0;
+      return terrain.level[gz * GRID_SIZE + gx];
     }
 
     const STEP_HEIGHT = 0.48;
