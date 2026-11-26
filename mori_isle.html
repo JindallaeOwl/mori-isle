@@ -2521,6 +2521,10 @@
       clothR: C('#b0473a'), clothCream: C('#e9dcc0')
     };
     const MOSS_D = C('#4c6a2c'); // olive-dark moss, reads apart from the bright turf
+    // hanging things (laundry, tags): pinned at `top`, swinging more toward the bottom (`len` below it)
+    function soupSwayBelow(S, start, top, len, amp) {
+      for (let v = start; v < S.verts; v++) S.S[v * 4 + 2] = amp * clamp((top - S.P[v * 3 + 1]) / len, 0, 1);
+    }
     const SOUP_ITEMS = {
       lantern: {
         type: 'soup',
@@ -2772,6 +2776,70 @@
           // moss on the shady sleeper end and a clump against the stack
           S.ico(.04, PX - .24, .02, -.23, MCOL.moss, { sc: [1.5, .55, 1.1], d: 0, rough: 1 });
           S.ico(.03, PX + .07, .015, .25, mixC(MOSS_D, MCOL.moss, .5), { sc: [1.3, .5, 1], d: 0, rough: 1 });
+        }
+      },
+      mailbox: {
+        name: '우편함',
+        category: 'living',
+        freePlace: false,
+        type: 'soup',
+        seed: 131,
+        windStrength: 0.0,
+        explodeSliceFactor: 0.50,
+        explodeTier: 1,
+        glow: null,
+        contactRadius: 0.26,
+        solidRadius: 0.16,
+        build(S, rng) {
+          const ROOF = C('#9c4a36'), ROOF_D = C('#7a3628'), FLAG = C('#c4473a'), PAPER = C('#efe4cc'), IVY = C('#3f6b2e'), IVY_L = C('#5f8f3c');
+          // fieldstone footing, moss on the shady side
+          for (let k = 0; k < 4; k++) {
+            const a = k / 4 * TAU + rng.range(-.3, .3), d = rng.range(.07, .1), st = S.verts;
+            S.rock(rng.range(.04, .06), Math.cos(a) * d, .012, Math.sin(a) * d, mixC(MCOL.stoneD, MCOL.stoneL, rng()), { sq: .6, flat: .3, rough: .8 });
+            if (k > 1) S.cover(st, mixC(MOSS_D, MCOL.moss, .5), .78, L_MOSS, k * 11);
+          }
+          // post (a touch crooked), number plate, ivy climbing up
+          const lean = [.02, 0, -.015];
+          S.box(.06, .52, .06, 0, .26, 0, MCOL.wood, { l: L_WOOD, r: lean, rough: .85 });
+          S.box(.042, .03, .006, .0, .36, .033, MCOL.brass, { l: L_METAL, rough: .35, r: lean });
+          S.box(.004, .016, .002, -.008, .36, .0365, MCOL.iron, { l: L_PLAIN, r: lean, jit: 0 });
+          S.box(.004, .016, .002, .008, .36, .0365, MCOL.iron, { l: L_PLAIN, r: lean, jit: 0 });
+          for (let k = 0; k < 9; k++) {
+            const y = .04 + k * .05, a = k * 1.9 + rng.range(-.3, .3);
+            S.ico(rng.range(.016, .022), Math.cos(a) * .036, y, Math.sin(a) * .036, mixC(IVY, IVY_L, rng()), { sc: [1.3, .45, 1.1], d: 0, rough: .8, r: [rng.range(-.6, .6), a, 0] });
+          }
+          // platform plank and two brackets
+          S.box(.13, .025, .27, .004, .53, -.004, MCOL.woodD, { l: L_WOOD, rough: .85 });
+          for (const s of [-1, 1]) S.seg([0, .41, s * .02], [0, .517, s * .11], .012, .011, MCOL.woodD, { n: 5, l: L_WOOD });
+          // the box: a little wooden house with a gabled shingle roof
+          const BY = .61, TOP = .675, R = .762;
+          S.box(.17, .13, .24, 0, BY, 0, MCOL.woodL, { l: L_WOOD, rough: .75 });
+          for (const z of [-.06, .06]) S.box(.172, .004, .004, 0, BY + rng.range(-.03, .03), z, mulC(MCOL.woodL, .8), { l: L_PLAIN, jit: 0 }); // plank seams
+          S.cyl(.098, .232, 0, TOP + .025, 0, MCOL.woodL, { n: 3, rz: .05, l: L_WOOD, rough: .75, r: [-Math.PI / 2, 0, 0] }); // gables
+          for (const s of [-1, 1]) {
+            const a = .6, cx = s * Math.cos(a) * .062, cy = R - Math.sin(a) * .062;
+            S.box(.124, .018, .29, cx, cy, 0, ROOF, { l: L_WOOD, rough: .85, r: [0, 0, -s * a] });
+            for (let k = 0; k < 3; k++) // shingle courses
+              S.box(.006, .006, .292, s * Math.cos(a) * (.025 + k * .036), R - Math.sin(a) * (.025 + k * .036) + .011, 0, ROOF_D, { l: L_PLAIN, jit: .04, r: [0, 0, -s * a] });
+          }
+          S.box(.028, .022, .3, 0, R + .006, 0, ROOF_D, { l: L_WOOD, rough: .9 });
+          // round front door with brass knob and hinge, letter slot with a letter poking out
+          const FZ = .12;
+          S.cyl(.052, .01, 0, BY - .006, FZ + .004, MCOL.wood, { n: 10, l: L_WOOD, rough: .8, r: [Math.PI / 2, 0, 0] });
+          S.cyl(.056, .006, 0, BY - .006, FZ + .001, MCOL.woodD, { n: 10, l: L_WOOD, r: [Math.PI / 2, 0, 0] });
+          S.ico(.008, .032, BY - .012, FZ + .012, MCOL.brass, { l: L_METAL, rough: .3, d: 0, jit: 0 });
+          S.box(.008, .06, .006, -.046, BY - .006, FZ + .01, MCOL.iron, { l: L_METAL, rough: .45, jit: 0 });
+          S.box(.06, .01, .006, 0, BY + .03, FZ + .01, C('#2a1d16'), { l: L_PLAIN, jit: 0 });
+          S.box(.05, .036, .003, .004, BY + .042, FZ + .011, PAPER, { l: L_PLAIN, rough: .9, r: [-.12, 0, .06], jit: .02 });
+          S.ico(.005, .012, BY + .05, FZ + .015, FLAG, { d: 0, rough: .6, jit: 0 }); // wax seal
+          // red flag on the side, raised: there's mail
+          S.cyl(.01, .008, .089, BY - .02, -.06, MCOL.iron, { n: 6, l: L_METAL, rough: .4, r: [0, 0, Math.PI / 2], jit: 0 });
+          S.box(.006, .12, .014, .092, BY + .0, -.06, FLAG, { l: L_METAL, rough: .5, r: [.12, 0, 0] }); // stays under the eave
+          S.box(.006, .042, .062, .092, BY + .042, -.036, FLAG, { l: L_METAL, rough: .5, r: [.12, 0, 0] });
+          // a tuft of grass and a dandelion at the foot
+          S.ico(.035, -.07, .01, .07, MCOL.moss, { sc: [1.4, .5, 1], d: 0, rough: 1 });
+          S.seg([.06, 0, .08], [.07, .12, .1], .003, .003, IVY_L, { n: 4, jit: 0 });
+          S.ico(.013, .07, .125, .1, C('#f2cf4a'), { d: 0, rough: .8, jit: .05 });
         }
       }
     };
