@@ -664,7 +664,7 @@
     // flat ground (a higher step beside it is fine: the bank just dips into the pool) or wet something
     // (fallCellBlocked, set by the game). Falls chain down a stair: a pool counts as the water behind
     // the next lip.
-    const WATER_FLAT = 0.3, WATER_EDGE = 0.6, FALL_EDGE = false;
+    const WATER_FLAT = 0.3, WATER_EDGE = 0.6, FALL_EDGE = true;
     const fallPool = new Uint8Array(MAT_N * MAT_N);
     const falls = []; // { qx, qz: lip cell next to the edge, gx, gz: its tile, sx, sz: the way it falls, edge, top, bot: tile heights }
     let fallCellBlocked = null;
@@ -5023,7 +5023,14 @@
         }
         return segs;
       };
+      const FALL_RIM_BOTTOM = -1.9; // an island-edge fall frays into mist on its way down to here
+      const edgeFallS = (t) => 0.16 * Math.sqrt(t) + 0.1 * t; // out past the rim: clears the earth wall at once
       const fallProfile = (seg) => { // pts: [s: out past the edge, y, t], foot: [s, y] where it lands
+        if (seg.edge) {
+          const ys = seg.top + FALL_SURF, Hd = ys - FALL_RIM_BOTTOM, pts = [[-0.16, ys, -0.6], [-0.08, ys, -0.3], [0, ys, 0]];
+          for (let k = 1; k <= 14; k++) { const t = k / 14; pts.push([edgeFallS(t), ys - Hd * t, t]); }
+          return { pts, foot: [edgeFallS(0.7), ys - Hd * 0.7] };
+        }
         const ys = seg.top + FALL_SURF, yb = seg.bot + FALL_SURF, H = ys - yb;
         const Lf = 0.2 + 0.05 * Math.min(3, H / STEP_HEIGHT), pts = [[-0.16, ys, -0.6], [-0.08, ys, -0.3], [0, ys, 0]];
         for (let k = 1; k <= 10; k++) { const t = k / 10; pts.push([Lf * t, ys - H * t * t, t]); }
@@ -5045,7 +5052,8 @@
           const arcs = prof.map((p, k) => (k ? (arc += Math.hypot(p[0] - prof[k - 1][0], p[1] - prof[k - 1][1])) : 0));
           const b = pos.length / 3;
           for (let k = 0; k < prof.length; k++) for (let i = 0; i <= nA; i++) {
-            const a = w0 + (w1 - w0) * i / nA, [s, y, t] = prof[k];
+            const [s, y, t] = prof[k], spread = seg.edge ? 0.07 * Math.max(0, t) : 0; // an edge fall widens as it falls
+            const a = w0 - spread + (w1 - w0 + 2 * spread) * i / nA;
             if (seg.sx) pos.push(seg.line + seg.sx * s, y, a); else pos.push(a, y, seg.line + seg.sz * s);
             flow.push(a, arcs[k]); fall.push(t, i / nA, seg.edge ? 1 : 0);
           }
@@ -5101,17 +5109,19 @@
             float t = vFall.x, side = vFall.y, x = vFlow.x, y = vFlow.y - uTime * 0.9;
             // white streaks: noise stretched along the flow and sliding down, uneven widths
             float n = fn(vec2(x * 22.0, y * 2.6)) * 0.62 + fn(vec2(x * 9.0 + 3.1, y * 1.3 + uTime * 0.15)) * 0.38;
-            float cut = mix(0.66, 0.46, smoothstep(0.0, 1.0, t));
+            float e = vFall.z; // off the island rim: no pool below, it frays into dashes and fades on the way down
+            float cut = mix(mix(0.66, 0.46, smoothstep(0.0, 1.0, t)), mix(0.62, 0.5, t), e);
             float streak = smoothstep(cut, cut + 0.05, n) * smoothstep(-0.25, 0.1, t) * (1.0 - smoothstep(1.05, 1.4, t));
+            streak *= mix(1.0, smoothstep(0.3, 0.5, fn(vec2(x * 7.0, y * 5.0))), e * smoothstep(0.25, 0.8, t));
             float lip = smoothstep(-0.35, -0.05, t) * (1.0 - smoothstep(0.05, 0.22, t)) * smoothstep(0.35, 0.6, fn(vec2(x * 16.0, uTime * 1.3)));
-            float foam = smoothstep(0.78, 1.02, t) * (1.0 - smoothstep(1.25, 1.55, t)) * smoothstep(0.32, 0.55, fn(vec2(x * 13.0 + uTime * 0.6, vFlow.y * 6.0 - uTime * 3.0)));
+            float foam = (1.0 - e) * smoothstep(0.78, 1.02, t) * (1.0 - smoothstep(1.25, 1.55, t)) * smoothstep(0.32, 0.55, fn(vec2(x * 13.0 + uTime * 0.6, vFlow.y * 6.0 - uTime * 3.0)));
             float white = max(streak, max(lip, foam));
             // clear water body under them (the drop only; the runs on the ponds are their sheets)
-            float body = smoothstep(-0.1, 0.06, t) * (1.0 - smoothstep(0.95, 1.12, t));
+            float body = smoothstep(-0.1, 0.06, t) * (1.0 - smoothstep(mix(0.95, 0.35, e), mix(1.12, 0.9, e), t));
             vec3 base = mix(uShallow * 1.08, uDeep, 0.22 + 0.25 * n);
             vec3 col = mix(base, uFoam, white);
             float a = max(body * 0.58, white * 0.96);
-            a *= smoothstep(-0.6, -0.2, t) * (1.0 - smoothstep(1.2, 1.6, t));
+            a *= smoothstep(-0.6, -0.2, t) * (1.0 - smoothstep(mix(1.2, 0.5, e), mix(1.6, 1.0, e), t));
             a *= smoothstep(0.0, 0.1, side) * (1.0 - smoothstep(0.9, 1.0, side)) * uK;
             if (a < 0.01) discard;
             col = mix(col, uFogColor, uFogDensity * 0.2);
@@ -5135,11 +5145,11 @@
         const pos = [], sp = [];
         let n = 0;
         for (const f of fallFeet) {
-          const drops = Math.max(4, Math.round(f.w * 26)), mist = Math.max(1, Math.round(f.w * 4));
+          const drops = f.edge ? 0 : Math.max(4, Math.round(f.w * 26)), mist = f.edge ? Math.max(3, Math.round(f.w * 10)) : Math.max(1, Math.round(f.w * 4));
           for (let k = 0; k < drops + mist && n < SPRAY_MAX; k++, n++) {
             const seed = hash2D(Math.round(f.x * 64) + k * 13, Math.round(f.z * 64), 71) * 997, acr = (hash2D(k, Math.round(f.x * 64 + f.z * 32), 72) - 0.5) * f.w;
             pos.push(f.x - f.dz * acr, f.y, f.z + f.dx * acr);
-            sp.push(f.dx, f.dz, seed, k >= drops ? 1 : 0);
+            sp.push(f.dx, f.dz, seed, f.edge ? 2 : (k >= drops ? 1 : 0));
           }
         }
         const g = new THREE.BufferGeometry();
@@ -5160,16 +5170,21 @@
           uniform float uTime;
           uniform float uViewH;
           uniform float uK;
-          attribute vec4 aSpray; // the way the fall goes (x, z), seed, kind (0 droplet, 1 mist)
+          attribute vec4 aSpray; // the way the fall goes (x, z), seed, kind (0 droplet, 1 mist, 2 edge-fall mist)
           varying float vA;
           varying float vKind;
           float h1(float n) { return fract(sin(n * 91.345) * 47453.21); }
           void main() {
             float seed = aSpray.z, kind = aSpray.w, size;
             vec2 dir = aSpray.xy, perp = vec2(-dir.y, dir.x);
-            float life = fract(uTime * (kind > 0.5 ? 0.22 + 0.1 * h1(seed) : 0.9 + 0.7 * h1(seed)) + h1(seed * 1.7));
+            float life = fract(uTime * (kind > 1.5 ? 0.18 + 0.1 * h1(seed) : (kind > 0.5 ? 0.22 + 0.1 * h1(seed) : 0.9 + 0.7 * h1(seed))) + h1(seed * 1.7));
             vec3 p = position;
-            if (kind > 0.5) { // mist: a slow soft puff lifting off the pool
+            if (kind > 1.5) { // island-edge fall: the water frays into mist drifting down and out
+              p.xz += dir * (0.06 + 0.3 * life) + perp * (h1(seed * 3.1) - 0.5) * 0.35 * life;
+              p.y -= life * 0.55;
+              vA = sin(life * 3.14159) * 0.3;
+              size = 0.14 + 0.22 * life;
+            } else if (kind > 0.5) { // mist: a slow soft puff lifting off the pool
               p.xz += (dir * 0.12 + perp * (h1(seed * 3.1) - 0.5) * 0.2) * life;
               p.y += 0.04 + life * 0.22;
               vA = sin(life * 3.14159) * 0.32;
@@ -5262,7 +5277,7 @@
       // terrain edits: rebuild everything that follows the ground height (the meshes stay, so
       // chunkTopSurface.children[0] is still the turf). Clay and bedrock don't depend on it.
       // The water follows terrain.mat (call rebuildWaterField first); soil = false skips the island
-      // rim (topsoil wall, roots), which water never reaches (it keeps WATER_EDGE off the rim).
+      // rim (topsoil wall, roots): only an island-edge waterfall's lip reaches it (soilDirty).
       function rebuildSurface(soil = true) {
         topMesh.geometry.dispose();
         topMesh.geometry = buildTurfGeometry();

@@ -3,7 +3,8 @@
 // (fallPool, not painted), the strip mesh and its spray show (+2 draw calls; ripple rings and the
 // babble come on), the pool can't be painted dry, drying
 // the lip removes fall and pool and leaves the island exactly as before, the edge is refused when
-// something stands where the pool would go, a second fall chains down a stair, lowering / raising
+// something stands where the pool would go, a second fall chains down a stair, a pond painted out
+// to the island rim spills over it (edge fall: mist, the rim wall dips, drying restores it), lowering / raising
 // the tiles of a fall is refused, and "처음 섬으로" has no falls. Fails on any console error / warning.
 // usage: node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/terrain-waterfall.mjs
 export default async ({ wait, evaluate, mouse, send, log }) => {
@@ -120,6 +121,23 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
   const f3 = await falls();
   ok('falls chain down the stair', f3.some((f) => f.top === 0.96 && f.bot === 0.48) && f3.some((f) => f.top === 0.48 && f.bot === 0), JSON.stringify(f3));
   ok('the lower pool too', (await J(`${M}.pond(${X}, -4.3)`)) < 0 && (await mat(X, -4.3)) === 0);
+
+  // off the island rim (east, open lawn north of the stair)
+  const Z = -4.625, dE = await J(`${M}.islandDigest()`), wE = await J(`${M}.terrainWater()`);
+  ok('rim row refused with no water behind it', !(await allowed(5.625, Z)) && !(await allowed(5.875, Z)));
+  ok('no lip at the island corner', !(await J(`${M}.lipInfo(47, 47)`)) && !(await J(`${M}.lipInfo(47, 0)`)));
+  await drag([4.625, Z], [5.375, Z], 6);
+  ok('a pond up to the last row before the rim', (await mat(5.375, Z)) === 4 && !(await J(`${M}.falls()`)).some((f) => f.edge));
+  await drag([5.375, Z], [5.95, Z], 4);
+  const fe = (await falls()).filter((f) => f.edge);
+  ok('painting to the rim makes an island-edge fall', fe.length === 1 && fe[0].sx === 1 && fe[0].bot === null && (await mat(5.875, Z)) === 4, JSON.stringify(fe));
+  await wait(800);
+  const fsE = await J(`${M}.fallSheet()`);
+  ok('edge fall: strip, mist and babble; ripple rings only for the falls into pools', fsE.visible && fsE.spray > 0 && fsE.sound > 0.02 && fsE.ripples === Math.min(8, fsE.feet - 1), JSON.stringify(fsE));
+  ok('the rim wall dips where it spills (island meshes changed)', !same(dE, await J(`${M}.islandDigest()`)));
+  await tool('paint_grass');
+  await drag([5.95, Z], [4.625, Z], 8);
+  ok('dried: no edge fall, the rim exactly as before', !(await falls()).some((f) => f.edge) && (await J(`${M}.terrainWater()`)) === wE && same(dE, await J(`${M}.islandDigest()`)));
 
   // 처음 섬으로
   await evaluate(`${M}.resetIsland()`);
