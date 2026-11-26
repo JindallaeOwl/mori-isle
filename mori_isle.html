@@ -2521,6 +2521,31 @@
       clothR: C('#b0473a'), clothCream: C('#e9dcc0')
     };
     const MOSS_D = C('#4c6a2c'); // olive-dark moss, reads apart from the bright turf
+    const BARK = C('#4f3524'), BARK_L = C('#6a4a30'), SAP = C('#d6ae74'), RING = C('#a4723f'), PITH = C('#7a4f2c'); // firewood
+    // one log lying along X: round (bark all over) or split (one flat pale face), end grain on both ends
+    // (the cylinder's local x turns into world up, so the split face looks up, tipped toward fc)
+    function soupFirewood(S, rng, x, y, z, r, len, split, tilt) {
+      const lean = [0, tilt, Math.PI / 2];
+      const fc = rng.range(-.8, .8), dx = Math.cos(fc), dz = Math.sin(fc);
+      const cut = split ? r * rng.range(.45, .7) : 9; // deform runs on scaled (real-size) verts
+      const flat = v => { const p = v.x * dx + v.z * dz; if (p > cut) { v.x -= (p - cut) * dx; v.z -= (p - cut) * dz; } };
+      const start = S.verts;
+      S.cyl(r, len, x, y, z, mixC(BARK, BARK_L, rng() * .6), { n: 7, l: L_WOOD, rough: .95, r: lean, deform: flat });
+      if (split) { // the split face is fresh pale wood, not bark
+        const N = S.N, K = S.K, fresh = mixC(SAP, RING, rng() * .3);
+        for (let v = start; v < S.verts; v++) {
+          if (N[v * 3 + 1] * dx + N[v * 3 + 2] * dz > .93) { K[v * 3] = fresh[0]; K[v * 3 + 1] = fresh[1]; K[v * 3 + 2] = fresh[2]; S.S[v * 4 + 1] = .8; }
+        }
+      }
+      for (const s of [-1, 1]) {
+        const ex = x + s * (len / 2 + .002) * Math.cos(tilt), ez = z - s * (len / 2 + .002) * Math.sin(tilt);
+        const er = [0, tilt, Math.PI / 2];
+        S.cyl(r * .93, .006, ex, y, ez, mixC(SAP, C('#e2c08c'), rng()), { n: 7, l: L_PLAIN, rough: .85, r: er, deform: flat, jit: .03 });
+        S.cyl(r * .55, .004, ex + s * .003 * Math.cos(tilt), y, ez - s * .003 * Math.sin(tilt), RING, { n: 7, l: L_PLAIN, rough: .9, r: er, deform: flat, jit: .03 });
+        S.cyl(r * .38, .004, ex + s * .005 * Math.cos(tilt), y, ez - s * .005 * Math.sin(tilt), mixC(SAP, RING, .3), { n: 6, l: L_PLAIN, rough: .9, r: er, jit: .03 });
+        S.cyl(r * .13, .004, ex + s * .007 * Math.cos(tilt), y, ez - s * .007 * Math.sin(tilt), PITH, { n: 5, l: L_PLAIN, rough: .9, r: er, jit: 0 });
+      }
+    }
     // hanging things (laundry, tags): pinned at `top`, swinging more toward the bottom (`len` below it)
     function soupSwayBelow(S, start, top, len, amp) {
       for (let v = start; v < S.verts; v++) S.S[v * 4 + 2] = amp * clamp((top - S.P[v * 3 + 1]) / len, 0, 1);
@@ -2692,32 +2717,8 @@
         contactRadius: 0.40,
         solidRadius: 0.34,
         build(S, rng) {
-          const BARK = C('#4f3524'), BARK_L = C('#6a4a30'), SAP = C('#d6ae74'), RING = C('#a4723f'), PITH = C('#7a4f2c');
           const PX = -.1; // the stack sits left of center, the chopping block takes the right
-          // one log lying along X: round (bark all over) or split (one flat pale face), end grain on both ends
-          // (the cylinder's local x turns into world up, so the split face looks up, tipped toward fc)
-          const log = (x, y, z, r, len, split, tilt) => {
-            const lean = [0, tilt, Math.PI / 2];
-            const fc = rng.range(-.8, .8), dx = Math.cos(fc), dz = Math.sin(fc);
-            const cut = split ? r * rng.range(.45, .7) : 9; // deform runs on scaled (real-size) verts
-            const flat = v => { const p = v.x * dx + v.z * dz; if (p > cut) { v.x -= (p - cut) * dx; v.z -= (p - cut) * dz; } };
-            const start = S.verts;
-            S.cyl(r, len, x, y, z, mixC(BARK, BARK_L, rng() * .6), { n: 7, l: L_WOOD, rough: .95, r: lean, deform: flat });
-            if (split) { // the split face is fresh pale wood, not bark
-              const N = S.N, K = S.K, fresh = mixC(SAP, RING, rng() * .3);
-              for (let v = start; v < S.verts; v++) {
-                if (N[v * 3 + 1] * dx + N[v * 3 + 2] * dz > .93) { K[v * 3] = fresh[0]; K[v * 3 + 1] = fresh[1]; K[v * 3 + 2] = fresh[2]; S.S[v * 4 + 1] = .8; }
-              }
-            }
-            for (const s of [-1, 1]) {
-              const ex = x + s * (len / 2 + .002) * Math.cos(tilt), ez = z - s * (len / 2 + .002) * Math.sin(tilt);
-              const er = [0, tilt, Math.PI / 2];
-              S.cyl(r * .93, .006, ex, y, ez, mixC(SAP, C('#e2c08c'), rng()), { n: 7, l: L_PLAIN, rough: .85, r: er, deform: flat, jit: .03 });
-              S.cyl(r * .55, .004, ex + s * .003 * Math.cos(tilt), y, ez - s * .003 * Math.sin(tilt), RING, { n: 7, l: L_PLAIN, rough: .9, r: er, deform: flat, jit: .03 });
-              S.cyl(r * .38, .004, ex + s * .005 * Math.cos(tilt), y, ez - s * .005 * Math.sin(tilt), mixC(SAP, RING, .3), { n: 6, l: L_PLAIN, rough: .9, r: er, jit: .03 });
-              S.cyl(r * .13, .004, ex + s * .007 * Math.cos(tilt), y, ez - s * .007 * Math.sin(tilt), PITH, { n: 5, l: L_PLAIN, rough: .9, r: er, jit: 0 });
-            }
-          };
+          const log = (x, y, z, r, len, split, tilt) => soupFirewood(S, rng, x, y, z, r, len, split, tilt);
 
           // two sleeper logs keep the stack off the wet turf; a few flat stones under them
           for (const sx of [-.24, .05]) {
@@ -3101,6 +3102,77 @@
             S.box(.014, .003, .01, AX + Math.cos(a) * d, .003, AZ + Math.sin(a) * d, k % 3 ? GER : GER_P, { l: L_PLAIN, rough: .8, r: [0, rng() * TAU, 0], jit: .05 });
           }
           S.ico(.035, AX - .08, .01, AZ - .06, MCOL.moss, { sc: [1.4, .5, 1.1], d: 0, rough: 1 });
+        }
+      },
+      woodshed: {
+        name: '장작 창고',
+        category: 'build',
+        type: 'soup',
+        seed: 211,
+        snapPlace: true,
+        footprint: [-.44, .44, -.3, .3],
+        windStrength: 0.0,
+        explodeSliceFactor: 0.50,
+        explodeTier: 1,
+        glow: null,
+        contactRadius: 0.45,
+        build(S, rng) {
+          const OLD = C('#7a6650'), OLD_D = C('#5c4a3a'), ROOF = C('#6b4a33'), ROOF_D = C('#4e3626');
+          const oc = () => mixC(OLD, MCOL.wood, rng() * .5);
+          // stone footings, two sleepers, a plank floor
+          for (const x of [-.38, .38]) for (const z of [-.24, .24]) S.rock(.05, x, .012, z, mixC(MCOL.stoneD, MCOL.stone, rng()), { sq: .55, flat: .3, rough: .85 });
+          for (const z of [-.17, .17]) S.box(.84, .04, .05, 0, .03, z, OLD_D, { l: L_WOOD, rough: .95 });
+          for (let k = 0; k < 5; k++) S.box(.82 + rng.range(-.01, .01), .022, .09, rng.range(-.006, .006), .065, -.2 + k * .1, oc(), { l: L_WOOD, rough: .85 });
+          const FT = .076; // floor top
+          // posts: tall at the back, short at the front (lean-to: put the back against a wall)
+          const BACK = .86, FRONT = .68;
+          for (const x of [-.4, .4]) {
+            S.box(.05, BACK, .05, x, BACK / 2, -.25, MCOL.woodD, { l: L_WOOD });
+            S.box(.05, FRONT, .05, x, FRONT / 2, .25, MCOL.woodD, { l: L_WOOD });
+            S.seg([x, .3, .25], [x, FRONT - .02, .1], .013, .012, MCOL.woodD, { n: 5, l: L_WOOD }); // knee brace
+            for (const y of [.2, .41, .6]) S.box(.018, .07, .52, x + Math.sign(x) * .028, y, 0, oc(), { l: L_WOOD, rough: .9, r: [rng.range(-.02, .02), 0, 0] }); // side slats
+          }
+          S.box(.05, BACK, .05, 0, BACK / 2, -.25, MCOL.woodD, { l: L_WOOD });
+          // back wall: vertical boards with gaps, one shorter (patched)
+          for (let k = 0; k < 9; k++) {
+            const x = -.355 + k * .089, h = BACK - .1 - (k === 6 ? .1 : 0);
+            S.box(.082, h, .018, x, FT + h / 2, -.278, oc(), { l: L_WOOD, rough: .9 });
+            if (k === 6) S.box(.082, .085, .02, x, FT + h + .045, -.278, mixC(MCOL.woodL, OLD, .3), { l: L_WOOD, rough: .8 });
+          }
+          // roof beams and a lean-to plank roof falling to the front, mossy
+          S.box(.88, .04, .05, 0, BACK + .02, -.25, MCOL.woodD, { l: L_WOOD });
+          S.box(.88, .04, .05, 0, FRONT + .02, .25, MCOL.woodD, { l: L_WOOD });
+          const TH = Math.atan((BACK - FRONT) / .5), RY = (BACK + FRONT) / 2 + .055;
+          S.box(.96, .03, .66, 0, RY, 0, ROOF, { l: L_WOOD, rough: .9, r: [TH, 0, 0] });
+          for (const t of [-.24, -.1, .04, .18, .3]) S.box(.965, .008, .008, 0, RY + .018 - Math.sin(TH) * t, Math.cos(TH) * t, ROOF_D, { l: L_PLAIN, jit: .04, r: [TH, 0, 0] });
+          for (let k = 0; k < 5; k++) {
+            const x = rng.range(-.4, .4), t = rng.range(-.28, .2);
+            S.ico(rng.range(.04, .07), x, RY + .016 - Math.sin(TH) * t, Math.cos(TH) * t, mixC(MOSS_D, MCOL.moss, rng()), { sc: [1.6, .22, 1.2], d: 0, rough: 1, l: L_MOSS, r: [TH, 0, 0] });
+          }
+          // firewood stacked inside, end grain to the front
+          const W = new Soup();
+          let y = FT + .046;
+          for (let row = 0; row < 5; row++) {
+            const n = row % 2 ? 6 : 7, w = .1;
+            for (let k = 0; k < n; k++) {
+              const z0 = (k - (n - 1) / 2) * w;
+              const r = .046 * rng.range(.85, 1.08);
+              soupFirewood(W, rng, rng.range(-.015, .015), y + (r - .046) * .5, z0 + rng.range(-.005, .005), r, rng.range(.4, .44), rng() < .6, rng.range(-.05, .05));
+            }
+            y += .046 * 1.74;
+          }
+          S.merge(W, { p: [0, 0, -.03], ry: Math.PI / 2 });
+          // out front: an axe leaning on the right post, a kindling bundle, a stray log
+          S.seg([.35, .0, .3], [.39, .44, .27], .011, .01, C('#c89a62'), { n: 6, l: L_WOOD, rough: .6 });
+          S.box(.026, .052, .1, .39, .42, .3, MCOL.iron, { l: L_METAL, rough: .45, r: [-.1, 0, -.09] });
+          S.box(.028, .056, .012, .39, .42, .353, MCOL.ironL, { l: L_METAL, rough: .3, r: [-.1, 0, -.09], jit: 0 });
+          for (let k = 0; k < 9; k++) {
+            const dz = rng.range(-.03, .03), dy = rng.range(0, .03);
+            S.seg([-.32, FT + .012 + dy, .2 + dz], [-.1, FT + .012 + dy + rng.range(-.01, .01), .2 + dz], .007, .006, mixC(C('#a07a4e'), C('#d6ae74'), rng()), { n: 3, l: L_WOOD, rough: .9, jit: .05 });
+          }
+          S.torus(.04, -.21, FT + .028, .2, C('#c9b48a'), { n: 8, t: .15, m: 3, l: L_CLOTH, rough: 1, r: [0, Math.PI / 2, 0] });
+          soupFirewood(S, rng, .16, FT + .045, .235, .044, .2, true, .3);
+          S.ico(.04, -.42, .01, .28, MCOL.moss, { sc: [1.4, .5, 1.1], d: 0, rough: 1 });
         }
       }
     };
