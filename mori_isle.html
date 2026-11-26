@@ -3368,6 +3368,88 @@
           S.cyl(.12, .05, Math.sin(MP) * .43, .11, Math.cos(MP) * .43, MCOL.stone, { n: 12, l: L_MASON, rough: .8, r: [1.2, MP, 0], ro: 'YXZ' });
           S.cyl(.025, .056, Math.sin(MP) * .43, .11, Math.cos(MP) * .43, C('#3a3d42'), { n: 6, l: L_PLAIN, rough: .9, r: [1.2, MP, 0], ro: 'YXZ', jit: 0 });
         }
+      },
+      dock: {
+        name: '선착장',
+        category: 'build',
+        type: 'soup',
+        seed: 241,
+        snapPlace: true,
+        // local +z runs out over the water; y = 0 is the land end's ground, the pond surface sits at -0.09
+        footprint: [-.24, .55, -.66, .78],
+        shore: { land: [-.22, .22, -.66, -.42], water: [-.2, .55, .14, .78] },
+        windStrength: 0.0,
+        explodeSliceFactor: 0.40,
+        explodeTier: 0,
+        glow: { offsetX: -.2, offsetZ: .6, offsetY: 0.37, color: '#ffbd60', scale: 1.0, lightIntensity: 0.7 },
+        contactRadius: 0.0,
+        build(S, rng) {
+          const WY = -.09, DECK = .05, PLANK = C('#9a7350'), PLANK_L = C('#b08a60'), WET = C('#3d4a3a'), ALGAE = C('#5d7a3a'), ROPE = C('#c9b48a');
+          // land end: fieldstones and a log sill bedded into the bank
+          for (let k = 0; k < 5; k++) S.rock(rng.range(.05, .07), -.22 + k * .11, .0, -.6 + rng.range(-.02, .02), mixC(MCOL.stoneD, MCOL.stone, rng()), { sq: .55, flat: .3, rough: .85 });
+          S.seg([-.25, .025, -.56], [.25, .025, -.56], .03, .028, mixC(MCOL.woodD, BARK, .5), { n: 6, l: L_WOOD, rough: .95 });
+          // two stringers under the planks
+          for (const x of [-.15, .15]) S.box(.05, .03, 1.24, x, DECK - .03, .02, MCOL.woodD, { l: L_WOOD, rough: .9 });
+          // deck planks: weathered, small gaps, one fresh replacement, one lifted at the end
+          for (let k = 0; k < 16; k++) {
+            const z = -.57 + k * .075, fresh = k === 9, lifted = k === 14;
+            S.box(.42 + rng.range(-.015, .015), .022, .066, rng.range(-.01, .01), DECK - .011 + (lifted ? .008 : 0), z, fresh ? PLANK_L : mixC(PLANK, MCOL.woodG, rng() * .5), { l: L_WOOD, rough: .85, r: [lifted ? .06 : 0, rng.range(-.02, .02), lifted ? .03 : 0] });
+            for (const x of [-.15, .15]) S.box(.012, .004, .012, x + rng.range(-.005, .005), DECK + .001, z, MCOL.iron, { l: L_METAL, rough: .45, jit: 0 }); // nail heads
+          }
+          // piles down into the pond, a dark wet band and algae at the waterline, X-braces between
+          for (const z of [.0, .3, .6]) for (const x of [-.2, .2]) {
+            const top = z === .6 ? .28 : DECK + .04;
+            S.cyl(.03, top + .42, x, (top - .42) / 2, z, mixC(MCOL.woodD, MCOL.wood, rng() * .4), { n: 6, l: L_WOOD, rough: .95 });
+            S.cyl(.032, .06, x, WY + .01, z, WET, { n: 6, l: L_WOOD, rough: .7, jit: .03 });
+            S.cyl(.033, .015, x, WY + .04, z, ALGAE, { n: 6, l: L_MOSS, rough: 1, jit: .05 });
+          }
+          for (const z of [.15, .45]) for (const s of [-1, 1]) S.seg([-.2, DECK - .04, z - s * .15], [.2, WY - .08, z + s * .15], .01, .01, MCOL.woodD, { n: 4, l: L_WOOD });
+          // rope wound round the right mooring post
+          for (let k = 0; k < 3; k++) S.torus(.035, .2, .17 + k * .022, .6, ROPE, { n: 8, t: .2, m: 3, l: L_CLOTH, rough: 1, r: [Math.PI / 2, 0, 0] });
+          S.ico(.032, .2, .285, .6, mulC(MCOL.woodD, 1.1), { sc: [1, .4, 1], d: 0, l: L_WOOD }); // post cap
+          // a small lantern on the left mooring post
+          S.box(.08, .016, .08, -.2, .29, .6, MCOL.iron, { l: L_METAL, rough: .45 });
+          S.box(.06, .07, .06, -.2, .335, .6, MCOL.glass, { l: L_PLAIN, rough: .18, emis: .5, jit: 0 });
+          S.box(.022, .036, .022, -.2, .335, .6, MCOL.glassHot, { l: L_PLAIN, rough: .2, emis: 1.0, jit: 0 });
+          for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) S.box(.01, .08, .01, -.2 + dx * .032, .335, .6 + dz * .032, MCOL.iron, { l: L_METAL, rough: .4, jit: 0 });
+          S.cone(.055, .045, -.2, .392, .6, MCOL.iron, { n: 4, l: L_METAL, rough: .5, r: [0, Math.PI / 4, 0] });
+          S.torus(.014, -.2, .425, .6, MCOL.ironL, { n: 6, t: .3, m: 3, l: L_METAL, rough: .35 });
+          // rowboat tied alongside, bobbing on the water
+          const B = new Soup(), HULL = C('#7d5a3c');
+          B.sph(1, 0, 0, 0, HULL, { sc: [.13, .075, .34], w: 12, h: 8, l: L_WOOD, rough: .8, deform: (v) => { if (v.y > 0) v.y = 0; } });
+          B.sph(1, 0, .002, 0, mulC(HULL, 1.25), { sc: [.135, .012, .345], w: 12, h: 4, l: L_WOOD, rough: .8 });
+          B.sph(1, 0, .006, 0, C('#4a3526'), { sc: [.112, .01, .3], w: 12, h: 4, l: L_WOOD, rough: .9 });
+          for (const z of [-.12, .1]) B.box(.21, .012, .05, 0, .008, z, MCOL.woodL, { l: L_WOOD, rough: .8 });
+          B.box(.06, .004, .5, 0, .009, 0, C('#5a4030'), { l: L_WOOD, jit: 0 }); // keelson
+          for (const s of [-1, 1]) { // oars shipped inside
+            B.seg([s * .04, .016, -.2], [s * .06, .014, .22], .007, .007, MCOL.woodL, { n: 4, l: L_WOOD });
+            B.box(.035, .006, .1, s * .062, .014, .25, MCOL.woodL, { l: L_WOOD, r: [0, s * .05, 0] });
+          }
+          const bs = S.verts;
+          S.merge(B, { p: [.4, WY + .035, .42], ry: .06 });
+          for (let v = bs; v < S.verts; v++) S.S[v * 4 + 2] = .45; // drifts gently
+          S.seg([.2, .19, .6], [.41, WY + .05, .74], .005, .005, ROPE, { n: 3, l: L_CLOTH, rough: 1, jit: 0 });
+          // fishing rod resting on the deck with its line and a red-and-white float
+          S.seg([-.14, DECK + .012, .18], [-.1, .17, .66], .007, .004, C('#a88a5a'), { n: 4, l: L_WOOD, rough: .6 });
+          S.cyl(.014, .03, -.137, DECK + .016, .22, MCOL.iron, { n: 6, l: L_METAL, rough: .4, r: [Math.PI / 2 - .25, 0, 0] }); // reel
+          S.seg([-.1, .17, .66], [-.1, WY + .01, .72], .0015, .0015, C('#e8e2d0'), { n: 3, jit: 0 });
+          const fs = S.verts;
+          S.ico(.012, -.1, WY + .006, .72, C('#d6453a'), { d: 1, rough: .4, jit: 0 });
+          S.ico(.009, -.1, WY + .015, .72, C('#f2ede0'), { d: 1, rough: .4, jit: 0 });
+          for (let v = fs; v < S.verts; v++) S.S[v * 4 + 2] = .3;
+          // a pail on the deck with a fish tail sticking out
+          S.cyl(.045, .065, .08, DECK + .032, .42, C('#9a6a3e'), { n: 9, rt: 1.12, l: L_WOOD, rough: .8 });
+          S.cyl(.048, .008, .08, DECK + .02, .42, MCOL.iron, { n: 9, l: L_METAL, rough: .45, jit: 0 });
+          S.cyl(.047, .004, .08, DECK + .065, .42, C('#3d6476'), { n: 9, l: L_PLAIN, rough: .12, jit: 0 });
+          S.ico(.03, .085, DECK + .075, .43, C('#9aa8b0'), { sc: [.45, 1, .3], d: 1, l: L_METAL, rough: .3, r: [0, 0, .4] });
+          S.box(.035, .022, .004, .1, DECK + .108, .43, C('#8a98a0'), { l: L_METAL, rough: .3, r: [0, 0, .4] }); // tail
+          // reeds and moss where the bank meets the deck
+          for (let k = 0; k < 6; k++) {
+            const x = rng() < .5 ? rng.range(-.34, -.24) : rng.range(.24, .32), z = rng.range(-.3, -.05);
+            S.seg([x, -.04, z], [x + rng.range(-.03, .03), .14 + rng() * .1, z + rng.range(-.03, .03)], .006, .003, mixC(C('#6f8a3c'), C('#9aa84a'), rng()), { n: 3, rough: .9, sway: .3 });
+          }
+          S.ico(.04, -.27, -.02, -.45, MCOL.moss, { sc: [1.4, .5, 1.1], d: 0, rough: 1 });
+        }
       }
     };
     if (HASH.stack !== '1') { // #stack=1 keeps the old sprite-stack versions for comparison
@@ -5919,8 +6001,9 @@
          Each snap prop has a ground footprint rectangle (def.footprint, local [x0, x1, z0, z1]);
          rotations are quarter turns, so the world footprint stays an axis-aligned rectangle. */
       const SNAP_STEP = 0.25, SNAP_GAP = 0.012, SNAP_PULL = 0.16;
-      function footprintRect(def, wx, wz, rot) {
-        const f = def.footprint || [-0.3, 0.3, -0.3, 0.3], th = rot * Math.PI / 2;
+      const footprintRect = (def, wx, wz, rot) => localRect(def.footprint || [-0.3, 0.3, -0.3, 0.3], wx, wz, rot);
+      function localRect(f, wx, wz, rot) {
+        const th = rot * Math.PI / 2;
         const c = Math.round(Math.cos(th)), s = Math.round(Math.sin(th));
         let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
         for (const lx of [f[0], f[1]]) for (const lz of [f[2], f[3]]) { // same turn as the instance matrix (rotation.y)
@@ -5958,14 +6041,25 @@
         return out;
       }
       // can a snap prop with world footprint `r` stand here? (skipIdx: a snapProps entry to ignore)
-      function snapRectBlocked(r, skipIdx = -1) {
+      const rectSamples = (r) => { const out = []; for (const fx of [0, 0.5, 1]) for (const fz of [0, 0.5, 1]) out.push([r.x0 + (r.x1 - r.x0) * fx, r.z0 + (r.z1 - r.z0) * fz]); return out; };
+      // shore props (def.shore = { land, water } local rects): the land end on flat dry ground, the water end over the pond
+      function shoreOk(land, water) {
+        const h0 = getContinuousTerrainHeight((land.x0 + land.x1) / 2, (land.z0 + land.z1) / 2);
+        for (const [x, z] of rectSamples(land)) if (getPondSDF(x, z) < 0.3 || Math.abs(getContinuousTerrainHeight(x, z) - h0) > 0.03) return false;
+        for (const [x, z] of rectSamples(water)) if (getPondSDF(x, z) > -0.02) return false;
+        return true;
+      }
+      function snapRectBlocked(r, skipIdx = -1, shore = null) {
         const lim = HALF_GRID - 0.04;
         if (r.x0 < -lim || r.x1 > lim || r.z0 < -lim || r.z1 > lim) return true;
-        // flat, dry ground under the whole footprint (no terrace edge, no pond basin)
-        const cx = (r.x0 + r.x1) / 2, cz = (r.z0 + r.z1) / 2, h0 = getContinuousTerrainHeight(cx, cz);
-        for (const fx of [0, 0.5, 1]) for (const fz of [0, 0.5, 1]) {
-          const px = r.x0 + (r.x1 - r.x0) * fx, pz = r.z0 + (r.z1 - r.z0) * fz;
-          if (isPondWorld(px, pz, 0.04) || Math.abs(getContinuousTerrainHeight(px, pz) - h0) > 0.04) return true;
+        if (shore) {
+          if (!shoreOk(shore.land, shore.water)) return true;
+        } else {
+          // flat, dry ground under the whole footprint (no terrace edge, no pond basin)
+          const cx = (r.x0 + r.x1) / 2, cz = (r.z0 + r.z1) / 2, h0 = getContinuousTerrainHeight(cx, cz);
+          for (const [px, pz] of rectSamples(r)) {
+            if (isPondWorld(px, pz, 0.04) || Math.abs(getContinuousTerrainHeight(px, pz) - h0) > 0.04) return true;
+          }
         }
         for (const c of cabinRects()) if (rectsOverlap(r, c)) return true;
         for (const e of placedItems.values()) {
@@ -5989,7 +6083,34 @@
       }
       // where a snap prop would go for this cursor hit: quarter-tile grid, but pulled flush against
       // a nearby cabin wall or another snap prop when an edge is within SNAP_PULL
+      // ground height a snap prop stands at (a shore prop: its land end)
+      function snapGroundY(def, wx, wz, rot) {
+        if (!def.shore) return getContinuousTerrainHeight(wx, wz);
+        const l = localRect(def.shore.land, wx, wz, rot);
+        return getContinuousTerrainHeight((l.x0 + l.x1) / 2, (l.z0 + l.z1) / 2);
+      }
+      // shore props look around the cursor (a quarter tile each way) and try every heading, the
+      // current one first, so a dock dropped at the water's edge turns to face the water by itself
+      function shorePlacement(def, hit) {
+        const gx = Math.round(hit.wx / SNAP_STEP) * SNAP_STEP, gz = Math.round(hit.wz / SNAP_STEP) * SNAP_STEP;
+        const cands = [];
+        [0, 1, 3, 2].forEach((k, ri) => {
+          const rot = (currentRotation + k) % 4;
+          for (const dx of [0, -SNAP_STEP, SNAP_STEP]) for (const dz of [0, -SNAP_STEP, SNAP_STEP]) {
+            const x = gx + dx, z = gz + dz;
+            cands.push({ x, z, rot, cost: Math.hypot(x - hit.wx, z - hit.wz) + ri * 0.12 });
+          }
+        });
+        cands.sort((a, b) => a.cost - b.cost);
+        for (const c of cands) {
+          const rect = footprintRect(def, c.x, c.z, c.rot);
+          const shore = { land: localRect(def.shore.land, c.x, c.z, c.rot), water: localRect(def.shore.water, c.x, c.z, c.rot) };
+          if (!snapRectBlocked(rect, -1, shore)) return { wx: c.x, wz: c.z, wy: snapGroundY(def, c.x, c.z, c.rot), rect, valid: true, rot: c.rot };
+        }
+        return { wx: gx, wz: gz, wy: getContinuousTerrainHeight(gx, gz), rect: footprintRect(def, gx, gz, currentRotation), valid: false, rot: currentRotation };
+      }
       function snapPlacement(def, hit, rot = currentRotation) {
+        if (def.shore) return shorePlacement(def, hit);
         const f0 = footprintRect(def, 0, 0, rot);
         const gridX = Math.round(hit.wx / SNAP_STEP) * SNAP_STEP, gridZ = Math.round(hit.wz / SNAP_STEP) * SNAP_STEP;
         const walls = cabinRects();
@@ -6012,10 +6133,10 @@
         tries.push([px, pz], [px, gridZ], [gridX, pz], [gridX, gridZ]);
         for (const [x, z] of tries) {
           const rect = footprintRect(def, x, z, rot);
-          if (!snapRectBlocked(rect)) return { wx: x, wz: z, wy: getContinuousTerrainHeight(x, z), rect, valid: true };
+          if (!snapRectBlocked(rect)) return { wx: x, wz: z, wy: getContinuousTerrainHeight(x, z), rect, valid: true, rot };
         }
         const rect = footprintRect(def, gridX, gridZ, rot);
-        return { wx: gridX, wz: gridZ, wy: getContinuousTerrainHeight(gridX, gridZ), rect, valid: false };
+        return { wx: gridX, wz: gridZ, wy: getContinuousTerrainHeight(gridX, gridZ), rect, valid: false, rot };
       }
       function snapPropAt(wx, wz) { // the snap prop whose footprint holds this point (smallest wins)
         let best = -1, area = 1e9;
@@ -6262,7 +6383,7 @@
         snapProps.forEach((o) => {
           const def = assetsById[o.id]?.def;
           if (!def) return;
-          const wy = getContinuousTerrainHeight(o.wx, o.wz), rotY = o.rotation * (Math.PI / 2);
+          const wy = snapGroundY(def, o.wx, o.wz, o.rotation), rotY = o.rotation * (Math.PI / 2);
           if (isInstancedDef(def)) buckets[o.id].push({ wx: o.wx, wy, wz: o.wz, rotation: o.rotation, scale: 1.0, spawnT: o.spawnT ?? -100 });
           addItemExtras(o.id, def, o.wx, wy, o.wz, rotY, Math.round(o.wx * 4) + 101, Math.round(o.wz * 4) + 101);
         });
@@ -6537,7 +6658,7 @@
         const def = assetsById[selectedTool].def;
         if (def.snapPlace) {
           const p = snapPlacement(def, hit);
-          snapProps.push({ id: selectedTool, wx: p.wx, wz: p.wz, rotation: currentRotation, spawnT: performance.now() * 0.001 });
+          snapProps.push({ id: selectedTool, wx: p.wx, wz: p.wz, rotation: p.rot, spawnT: performance.now() * 0.001 });
           rebuildInstances();
           triggerPlaceJuice(def, p.wx, p.wy, p.wz);
         } else if (def.freePlace) {
@@ -6618,7 +6739,7 @@
             ghost.visible = true;
             ghost.position.set(p.wx, p.wy + 0.02, p.wz);
             ghost.userData.baseY = p.wy;
-            ghost.rotation.y = currentRotation * (Math.PI / 2);
+            ghost.rotation.y = p.rot * (Math.PI / 2);
             setGhostValidityColor(ghost, p.valid);
           }
         } else if (def.freePlace) {
@@ -7808,7 +7929,7 @@
         snapProps.forEach((o) => {
           const def = assetsById[o.id].def;
           o.spawnT = spawnAt(def, o.wx, o.wz);
-          landing(def, o.wx, getContinuousTerrainHeight(o.wx, o.wz), o.wz, o.spawnT);
+          landing(def, o.wx, snapGroundY(def, o.wx, o.wz, o.rotation), o.wz, o.spawnT);
         });
         rebuildInstances();
         markShadowsDirty(IT.end + lead + 0.4); // casters keep moving the whole time
@@ -7950,6 +8071,7 @@
           items: () => ITEM_DEFS.map((d) => ({ id: d.id, name: d.name, category: d.category, type: d.type, freePlace: d.freePlace, snapPlace: d.snapPlace, autoConnect: d.autoConnect })),
           snaps: () => snapProps.map((o) => ({ id: o.id, wx: o.wx, wz: o.wz, rotation: o.rotation, rect: footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation) })),
           cabins: () => cabinRects(),
+          pond: (x, z) => getPondSDF(x, z),
           lights: () => ({
             sources: lightSources.length,
             active: pointLightPool.filter((pl) => pl.userData.active).length,

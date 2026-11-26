@@ -58,6 +58,32 @@ export default async ({ wait, evaluate, mouse, key, log }) => {
     ok('eraser removes the woodpile', !s.some((o) => o.id === 'woodpile'), s.map((o) => o.id).join(','));
   }
 
+  // 7) a dock: refused on the open lawn, accepted at the water's edge and turned to face the water
+  await tool('dock');
+  let n0 = (await snaps()).length;
+  await click(-3.5, 3.5);
+  ok('dock refused away from the pond', (await snaps()).length === n0);
+  let docked = null;
+  for (let a = 0; a < 24 && !docked; a++) {
+    const ang = a / 24 * Math.PI * 2;
+    let wx = 2.35, wz = 2.35;
+    for (let r = 0.5; r < 3.5; r += 0.05) { wx = 2.35 + Math.cos(ang) * r; wz = 2.35 + Math.sin(ang) * r; if (await evaluate(`window.__mori.pond(${wx}, ${wz})`) > 0.05) break; }
+    const [x, y] = await J(`window.__mori.project(${wx}, 0.0, ${wz})`);
+    if (x < 20 || y < 70 || x > 980 || y > 540) continue;
+    n0 = (await snaps()).length;
+    await click(wx, wz);
+    const s2 = await snaps();
+    if (s2.length > n0) docked = s2.find((o) => o.id === 'dock');
+  }
+  ok('dock placed at the pond edge', !!docked);
+  if (docked) {
+    // the far end (local +z, 0.7 out) is in the water, the near end (-0.6) on land
+    const th = docked.rotation * Math.PI / 2, out = (d) => [docked.wx + d * Math.sin(th), docked.wz + d * Math.cos(th)];
+    const [fx, fz] = out(0.7), [nx, nz] = out(-0.6);
+    const far = await evaluate(`window.__mori.pond(${fx}, ${fz})`), near = await evaluate(`window.__mori.pond(${nx}, ${nz})`);
+    ok('dock faces the water', far < 0 && near > 0.25, `far ${far.toFixed(2)} near ${near.toFixed(2)} rot ${docked.rotation}`);
+  }
+
   // 6) footprints never overlap each other, and never stand on a path core
   const all = await snaps();
   let overlap = false;

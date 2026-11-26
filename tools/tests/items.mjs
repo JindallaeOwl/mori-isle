@@ -44,8 +44,28 @@ export default async ({ wait, evaluate, mouse, key, log }) => {
     return false;
   };
 
+  // shore props (dock) go at the pond's edge: cursor on points just outside the water line
+  const placeShore = async (tool) => {
+    await evaluate(`document.querySelector('#hud-dock [data-tool="${tool}"]').click()`);
+    await wait(300);
+    for (let a = 0; a < 24; a++) {
+      const ang = a / 24 * Math.PI * 2;
+      let wx = 2.35, wz = 2.35;
+      for (let r = 0.5; r < 3.5; r += 0.05) { wx = 2.35 + Math.cos(ang) * r; wz = 2.35 + Math.sin(ang) * r; if (await evaluate(`window.__mori.pond(${wx}, ${wz})`) > 0.05) break; }
+      const [x, y] = await J(`window.__mori.project(${wx}, 0.0, ${wz})`);
+      if (x < 20 || y < 70 || x > 980 || y > 540) continue;
+      const before = await total();
+      await mouse('mouseMoved', x, y); await wait(250);
+      await mouse('mousePressed', x, y, { button: 'left', buttons: 1, clickCount: 1 });
+      await mouse('mouseReleased', x, y, { button: 'left', clickCount: 1 });
+      await wait(700);
+      if ((await total()) > before) return true;
+    }
+    return false;
+  };
+
   // 2) every tool places
-  for (const d of items) ok(`places ${d.id} (${d.category})`, await placeSomewhere(d.id));
+  for (const d of items) ok(`places ${d.id} (${d.category})`, d.id === 'dock' ? await placeShore(d.id) : await placeSomewhere(d.id));
 
   // 3) light budget
   let lights = await J('window.__mori.lights()');
