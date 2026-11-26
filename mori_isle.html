@@ -3956,7 +3956,10 @@
         vec3 wpos(vec2 uv, float d) { vec4 p = uInvVP * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0); return p.xyz / p.w; }
         void main() {
           vec4 sc = texture2D(tColor, vUv);
-          vec3 col = mix(getSky(vUv), sc.rgb, clamp(sc.a, 0.0, 1.0));
+          // the scene target holds premultiplied colour over a transparent clear (that is what normal blending
+          // leaves there), so translucent things over the sky keep their brightness; skip the sky where it is hidden
+          float scA = clamp(sc.a, 0.0, 1.0);
+          vec3 col = scA < 0.999 ? getSky(vUv) * (1.0 - scA) + sc.rgb : sc.rgb;
           float d = texture2D(tDepth, vUv).x;
           if (d < 0.9999) {
             vec3 P = wpos(vUv, d);
@@ -4843,14 +4846,14 @@
       petalInst.instanceColor.needsUpdate = true;
       scene.add(petalInst);
 
-      // (C) Chimney smoke: lumpy opaque puffs streamed from each chimney, swaying as one S-curve column.
-      //     Opaque + noise erosion (no transparency sorting); the bottom of young puffs glows with the hearth at night.
+      // (C) Chimney smoke: soft translucent lumpy puffs lazily rising from each chimney, swaying as one S-curve column.
+      //     Puffs are depth-sorted on the CPU every frame (one draw call); edges and erosion fade softly instead of cutting.
       const MAX_SMOKE_PUFFS = 144;
       const smokeGeo = new THREE.IcosahedronGeometry(1, 2); // radius 1, scaled per puff
       const aSmoke = new THREE.InstancedBufferAttribute(new Float32Array(MAX_SMOKE_PUFFS * 4), 4); // age, seed, erosion, heat
       aSmoke.setUsage(THREE.DynamicDrawUsage);
       smokeGeo.setAttribute('aSmoke', aSmoke);
-      const smokeMat = new THREE.MeshStandardMaterial({ color: '#f3eee6', roughness: 1.0, metalness: 0.0 });
+      const smokeMat = new THREE.MeshStandardMaterial({ color: '#f6f2ec', roughness: 1.0, metalness: 0.0, transparent: true, depthWrite: false });
       const SMOKE_NOISE = `
         float smHash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
         float smNoise(vec3 x) {
@@ -4895,30 +4898,39 @@
             varying vec4 vSmoke; varying vec3 vSmokeP; varying vec3 vSmokeN;
             ${SMOKE_NOISE}`)
           .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
-            // erosion: holes open and drift upward as the puff ages, then it breaks into wisps
+            // erosion: soft holes open and drift upward as the puff ages, then it thins into wisps
             // (low frequencies only: fine holes turn into salt-and-pepper at the low internal resolution)
             float smN = smNoise(vSmokeP * 1.8 + vSmoke.y * 11.0 + vec3(0.0, -vSmoke.x * 1.4, 0.0)) * 0.78
                       + smNoise(vSmokeP * 3.4 + vSmoke.y * 3.0) * 0.22;
-            if (smN < vSmoke.z) discard;`)
+            float smErode = smoothstep(vSmoke.z, vSmoke.z + 0.22, smN);
+            if (smErode < 0.01) discard;`)
           .replace('#include <color_fragment>', `#include <color_fragment>
-            // fresh smoke leaves the flue a little sooty, then whitens; eroding edges catch a bit more light
-            diffuseColor.rgb *= mix(0.86, 1.0, smoothstep(0.0, 0.3, vSmoke.x)) * (1.0 + smoothstep(0.12, 0.0, smN - vSmoke.z) * 0.12 * step(0.01, vSmoke.z));
-            // cloud shading: sunlit cream tops, cool blue-grey bellies
-            float smUp = smoothstep(-0.7, 0.85, vSmokeN.y);
-            diffuseColor.rgb *= mix(vec3(0.70, 0.74, 0.86), vec3(1.0, 0.98, 0.94), smUp);`)
+            // fresh smoke leaves the flue faintly warm-grey, then whitens
+            diffuseColor.rgb *= mix(vec3(0.9, 0.88, 0.86), vec3(1.0), smoothstep(0.0, 0.25, vSmoke.x));
+            // cloud shading: sunlit cream tops, only slightly cooler bellies (smoke is thin, light passes through)
+            float smUp = smoothstep(-0.8, 0.9, vSmokeN.y);
+            diffuseColor.rgb *= mix(vec3(0.86, 0.88, 0.94), vec3(1.0, 0.99, 0.96), smUp);`)
           .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-            // light scattered through the puff (never fully shaded), tinted by the sky/fog of the hour; more on top
-            totalEmissiveRadiance += diffuseColor.rgb * uFogColor * mix(0.05, 0.16, smUp) * mix(1.0, 0.6, uNightFactor);
+            // light scattered through the thin puff, tinted by the sky/fog of the hour
+            totalEmissiveRadiance += diffuseColor.rgb * uFogColor * mix(0.26, 0.34, smUp) * mix(1.0, 0.55, uNightFactor);
             // hearth glow on the underside of young puffs
             float smUnder = clamp(-vSmokeN.y * 0.7 + 0.3, 0.0, 1.0);
-            totalEmissiveRadiance += vec3(1.0, 0.52, 0.22) * vSmoke.w * pow(1.0 - vSmoke.x, 3.0) * smUnder * mix(0.06, 0.9, uNightFactor);`);
+            totalEmissiveRadiance += vec3(1.0, 0.52, 0.22) * vSmoke.w * pow(1.0 - vSmoke.x, 3.0) * smUnder * mix(0.05, 0.8, uNightFactor);`)
+          .replace('#include <opaque_fragment>', `
+            // opacity: fade in out of the flue, thin out with age, feather the silhouette so puffs read as vapour
+            float smFacing = clamp(dot(normal, isOrthographic ? vec3(0.0, 0.0, 1.0) : normalize(vViewPosition)), 0.0, 1.0);
+            float smLife = smoothstep(0.0, 0.08, vSmoke.x) * (1.0 - smoothstep(0.35, 1.0, vSmoke.x));
+            diffuseColor.a = 0.6 * smLife * smErode * smoothstep(0.05, 0.6, smFacing);
+            #include <opaque_fragment>`);
       };
       const smokeInst = new THREE.InstancedMesh(smokeGeo, smokeMat, MAX_SMOKE_PUFFS);
       smokeInst.count = 0;
       smokeInst.frustumCulled = false; // puffs travel far from the bounding sphere
       scene.add(smokeInst);
-      const SMOKE = { rate: 4.2, life: 5.4, mouth: new THREE.Vector3(0.25, 1.45, -0.16), wind: new THREE.Vector2(0.8, -0.6) };
-      const smokeStates = new Map(); // cabin key -> { acc, seed, puffs: [{ born, ox, oy, oz, s, jx, jz, spin }] }
+      const SMOKE = { rate: 3.0, life: 6.5, mouth: new THREE.Vector3(0.25, 1.45, -0.16), wind: new THREE.Vector2(0.8, -0.6) };
+      const smokeStates = new Map(); // cabin key -> { acc, last, seed, puffs: [{ born, ox, oy, oz, s, jx, jz, seed, spin, heat }] }
+      const smokeDraw = Array.from({ length: MAX_SMOKE_PUFFS }, () => ({})); // per-frame puff records, reused
+      const smokeViewDir = new THREE.Vector3();
 
       /* =======================================================================
          12. DIORAMA STATE (GRID ITEMS + FREE-PLACED DECOR + AUTO-TILING)
@@ -6485,8 +6497,10 @@
 
         // 7. Chimney smoke: puffs are emitted at the chimney mouth (tracked through roof lift / tilt) and then
         //    move analytically from their birth time; the S-curve sway is a wave travelling up the whole column.
-        let smIdx = 0;
-        const smokeArr = aSmoke.array, liveSmoke = new Set();
+        //    Translucent, so the live puffs are sorted far -> near before they are written to the instance buffer.
+        let smN = 0;
+        const liveSmoke = new Set();
+        camera.getWorldDirection(smokeViewDir);
         for (let c = 0; c < activeCabins.length; c++) {
           const cb = activeCabins[c];
           const { chunkRoof } = cb.mesh.userData;
@@ -6498,9 +6512,9 @@
           const smokeK = Math.min(1, introLightK(cb.baseX, cb.baseZ, elapsed)); // chimney starts once the cabin is lit
           let st = smokeStates.get(key);
           const newPuff = (born) => {
-            const a = Math.random() * Math.PI * 2, r = Math.random();
+            const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random());
             st.puffs.push({ born, ox: tmpWorldPos.x, oy: tmpWorldPos.y, oz: tmpWorldPos.z, s: 0.8 + Math.random() * 0.45,
-              jx: Math.cos(a) * r, jz: Math.sin(a) * r, seed: Math.random(), spin: (Math.random() - 0.5) * 1.2, heat: smokeK });
+              jx: Math.cos(a) * r, jz: Math.sin(a) * r, seed: Math.random(), spin: (Math.random() - 0.5) * 0.8, heat: smokeK });
           };
           if (!st) {
             // a chimney placed outside the startup assembly is already burning: start with a full column
@@ -6516,34 +6530,39 @@
 
           const wx = SMOKE.wind.x, wz = SMOKE.wind.y; // downwind; (-wz, wx) is across the wind
           for (const p of st.puffs) {
-            if (smIdx >= MAX_SMOKE_PUFFS) break;
+            if (smN >= MAX_SMOKE_PUFFS) break;
             const t = Math.max(0, elapsed - p.born), a = t / SMOKE.life;
-            const h = 0.2 * t + 0.55 * (1 - Math.exp(-1.6 * t));              // fast out of the flue, then a lazy climb
-            const drift = 0.04 * t + 0.026 * t * t;                             // the breeze bends the column more as it rises
-            const reach = THREE.MathUtils.smoothstep(h, 0.0, 0.5);
-            const across = Math.sin(h * 2.1 - elapsed * 0.7 + st.seed) * 0.17 * reach;
-            const along = Math.cos(h * 1.6 - elapsed * 0.5 + st.seed) * 0.06 * reach;
-            const jit = 0.02 + 0.2 * a;                                         // the column loosens into separate billows
-            animDummy.position.set(
-              p.ox + wx * (drift + along) - wz * across + p.jx * jit,
-              p.oy + h,
-              p.oz + wz * (drift + along) + wx * across + p.jz * jit);
-            // pop out of the flue with a little overshoot, swell, then shrink while it erodes away
-            const u = Math.min(1, t / 0.28), pop = 1 + 2.2 * Math.pow(u - 1, 3) + 1.2 * Math.pow(u - 1, 2);
-            const size = (0.05 + 0.12 * (1 - Math.exp(-1.7 * t)) + 0.022 * t) * pop * (1 - 0.3 * THREE.MathUtils.smoothstep(a, 0.75, 1.0)) * p.s;
-            animDummy.rotation.set(p.spin * t, p.seed * 6.28 + p.spin * t * 0.7, 0);
-            animDummy.scale.set(size, size * 0.92, size);
-            animDummy.updateMatrix();
-            smokeInst.setMatrixAt(smIdx, animDummy.matrix);
-            smokeArr[smIdx * 4] = a;
-            smokeArr[smIdx * 4 + 1] = p.seed;
-            smokeArr[smIdx * 4 + 2] = THREE.MathUtils.lerp(-0.1, 1.02, THREE.MathUtils.smoothstep(a, 0.42, 1.0));
-            smokeArr[smIdx * 4 + 3] = p.heat;
-            smIdx++;
+            const h = 0.21 * t + 0.1 * (1 - Math.exp(-1.5 * t));              // a lazy, nearly even climb (no flue pressure)
+            const drift = 0.03 * t + 0.016 * t * t;                             // the breeze bends the column more as it rises
+            const reach = THREE.MathUtils.smoothstep(h, 0.0, 0.6);
+            const across = Math.sin(h * 2.0 - elapsed * 0.55 + st.seed) * 0.16 * reach;
+            const along = Math.cos(h * 1.5 - elapsed * 0.4 + st.seed) * 0.05 * reach;
+            const jit = 0.015 + 0.16 * a;                                       // the column loosens into separate billows
+            const d = smokeDraw[smN++];
+            d.x = p.ox + wx * (drift + along) - wz * across + p.jx * jit;
+            d.y = p.oy + h;
+            d.z = p.oz + wz * (drift + along) + wx * across + p.jz * jit;
+            // seep out small and swell gently; a slight shrink at the very end while it thins away
+            d.size = (0.055 + 0.1 * (1 - Math.exp(-0.9 * t)) + 0.016 * t) * (1 - 0.2 * THREE.MathUtils.smoothstep(a, 0.8, 1.0)) * p.s;
+            d.rx = p.spin * t; d.ry = p.seed * 6.28 + p.spin * t * 0.7;
+            d.a = a; d.seed = p.seed; d.heat = p.heat;
+            d.erode = THREE.MathUtils.lerp(-0.25, 0.85, THREE.MathUtils.smoothstep(a, 0.3, 1.0));
+            d.depth = d.x * smokeViewDir.x + d.y * smokeViewDir.y + d.z * smokeViewDir.z;
           }
         }
         for (const key of smokeStates.keys()) if (!liveSmoke.has(key)) smokeStates.delete(key);
-        smokeInst.count = smIdx;
+        const smSorted = smokeDraw.slice(0, smN).sort((p, q) => q.depth - p.depth);
+        const smokeArr = aSmoke.array;
+        for (let i = 0; i < smN; i++) {
+          const d = smSorted[i];
+          animDummy.position.set(d.x, d.y, d.z);
+          animDummy.rotation.set(d.rx, d.ry, 0);
+          animDummy.scale.set(d.size, d.size * 0.92, d.size);
+          animDummy.updateMatrix();
+          smokeInst.setMatrixAt(i, animDummy.matrix);
+          smokeArr[i * 4] = d.a; smokeArr[i * 4 + 1] = d.seed; smokeArr[i * 4 + 2] = d.erode; smokeArr[i * 4 + 3] = d.heat;
+        }
+        smokeInst.count = smN;
         smokeInst.instanceMatrix.needsUpdate = true;
         aSmoke.needsUpdate = true;
 
@@ -6863,6 +6882,7 @@
       function startAssembly(withUI, lead = 0.12) {
         const t0 = performance.now() * 0.001 + lead;
         intro.phase = 'assemble'; intro.t0 = t0; intro.withUI = withUI;
+        smokeStates.clear(); // drop smoke left from the hidden warm-up frames / the island that just fell
         isExploded = false; explodeToggleTime = -10;
         hoveredHit = null; updateHoverVisuals();
         islandRoot.position.set(0, 0, 0); islandRoot.rotation.set(0, 0, 0);
