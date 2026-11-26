@@ -611,11 +611,14 @@
     }
     function rebuildWaterField() {
       const N = WF_N, h = 1 / WF_RES;
+      computeFalls(); // the plunge pools join the field like painted water
       waterFieldEmpty = !terrain.water;
       if (waterFieldEmpty) { waterField.fill(WF_FAR); return; }
       const cov = _wfCov, isW = (x, z) => {
         const qx = Math.floor((x + HALF_GRID) * MAT_RES), qz = Math.floor((z + HALF_GRID) * MAT_RES);
-        return qx >= 0 && qx < MAT_N && qz >= 0 && qz < MAT_N && terrain.mat[qz * MAT_N + qx] === MAT_WATER ? 1 : 0;
+        if (qx < 0 || qx >= MAT_N || qz < 0 || qz >= MAT_N) return 0;
+        const q = qz * MAT_N + qx;
+        return terrain.mat[q] === MAT_WATER || fallPool[q] ? 1 : 0;
       };
       const e = h * 0.25; // 2x2 sub-samples: nodes on a cell edge get half
       for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
@@ -650,6 +653,95 @@
       return a + (b - a) * tz;
     }
 
+    // --- Water rules + waterfalls (terrain step 4-2) ---
+    // A pond lies on one terrace: the hill ground is flat within WATER_FLAT of every water cell centre
+    // (a terrace slope runs 0.28 either side of a step; WATER_FLAT is 0.175 past the cell's edge, where
+    // the water sheet has long faded out); WATER_EDGE keeps it off the island rim. The exception is a
+    // lip: the two quarter-tile rows of a tile nearest a step down (or the rim, FALL_EDGE), flat once
+    // that one step is taken away. A lip column whose two cells are water is a waterfall (falls). Its
+    // plunge pool on the lower terrace is derived, not painted (fallPool): it lasts as long as the
+    // fall, joins the distance field like water, and is clipped where it would leave that terrace's
+    // flat ground (a higher step beside it is fine: the bank just dips into the pool) or wet something
+    // (fallCellBlocked, set by the game). Falls chain down a stair: a pool counts as the water behind
+    // the next lip.
+    const WATER_FLAT = 0.3, WATER_EDGE = 0.6, FALL_EDGE = false;
+    const fallPool = new Uint8Array(MAT_N * MAT_N);
+    const falls = []; // { qx, qz: lip cell next to the edge, gx, gz: its tile, sx, sz: the way it falls, edge, top, bot: tile heights }
+    let fallCellBlocked = null;
+    const cellCentre = (qx, qz) => [(qx + 0.5) / MAT_RES - HALF_GRID, (qz + 0.5) / MAT_RES - HALF_GRID];
+    const inMat = (qx, qz) => qx >= 0 && qx < MAT_N && qz >= 0 && qz < MAT_N;
+    function waterFlatAt(cx, cz) {
+      const y0 = getHillHeight(cx, cz);
+      for (let i = -2; i <= 2; i++) for (let j = -2; j <= 2; j++) {
+        if (Math.abs(getHillHeight(cx + i * WATER_FLAT / 2, cz + j * WATER_FLAT / 2) - y0) > 1e-4) return false;
+      }
+      return true;
+    }
+    const waterRimOk = (cx, cz) => Math.abs(cx) <= HALF_GRID - WATER_EDGE && Math.abs(cz) <= HALF_GRID - WATER_EDGE;
+    function withLevels(tiles, fn) { // run fn with some tiles' levels changed for a moment ([gx, gz, level])
+      const saved = [];
+      for (const [gx, gz, lv] of tiles) {
+        if (gx < 0 || gx >= GRID_SIZE || gz < 0 || gz >= GRID_SIZE) continue;
+        const k = gz * GRID_SIZE + gx; saved.push([k, terrain.level[k]]); terrain.level[k] = lv;
+      }
+      try { return fn(); } finally { for (let i = saved.length - 1; i >= 0; i--) terrain.level[saved[i][0]] = saved[i][1]; }
+    }
+    function lipInfo(qx, qz) { // the edge a lip cell spills over, or null (row 0 = the cell next to the edge)
+      const gx = Math.floor(qx / MAT_RES), gz = Math.floor(qz / MAT_RES), lx = qx - gx * MAT_RES, lz = qz - gz * MAT_RES;
+      const [cx, cz] = cellCentre(qx, qz), rimX = Math.abs(cx) > HALF_GRID - WATER_EDGE, rimZ = Math.abs(cz) > HALF_GRID - WATER_EDGE;
+      const lu = getHillLevel(gx, gz), cands = [];
+      if (lx >= MAT_RES - 2) cands.push([1, 0, MAT_RES - 1 - lx]);
+      if (lx <= 1) cands.push([-1, 0, lx]);
+      if (lz >= MAT_RES - 2) cands.push([0, 1, MAT_RES - 1 - lz]);
+      if (lz <= 1) cands.push([0, -1, lz]);
+      for (const [sx, sz, row] of cands) {
+        if ((sx && rimZ) || (sz && rimX)) continue; // the rim along the other axis is in the way
+        const nx = gx + sx, nz = gz + sz, edge = nx < 0 || nx >= GRID_SIZE || nz < 0 || nz >= GRID_SIZE;
+        let ok;
+        if (edge) ok = FALL_EDGE && waterFlatAt(cx, cz); // past the grid the hill carries on flat
+        else {
+          if (rimX || rimZ || getHillLevel(nx, nz) >= lu) continue;
+          const px = Math.abs(sz), pz = Math.abs(sx), raise = [];
+          for (let k = -1; k <= 1; k++) { const tx = nx + px * k, tz = nz + pz * k; if (getHillLevel(tx, tz) < lu) raise.push([tx, tz, lu]); }
+          ok = withLevels(raise, () => waterFlatAt(cx, cz)); // flat once the step past this edge (along its whole row) is gone
+        }
+        if (ok) return { sx, sz, row, gx, gz, edge, lu, ld: edge ? null : getHillLevel(nx, nz) };
+      }
+      return null;
+    }
+    function lipColumn(qx, qz, L) { // [the cell next to the edge, the other lip cell, the flat cell behind]
+      const ax = qx + L.sx * L.row, az = qz + L.sz * L.row;
+      return [[ax, az], [ax - L.sx, az - L.sz], [ax - 2 * L.sx, az - 2 * L.sz]];
+    }
+    function poolCellOk(qx, qz, ld) { // may the plunge pool of a fall onto level ld cover this cell?
+      if (!inMat(qx, qz)) return false;
+      const gx = Math.floor(qx / MAT_RES), gz = Math.floor(qz / MAT_RES), [cx, cz] = cellCentre(qx, qz);
+      if (getHillLevel(gx, gz) !== ld || !waterRimOk(cx, cz)) return false;
+      const lower = [];
+      for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) if (getHillLevel(gx + i, gz + j) > ld) lower.push([gx + i, gz + j, ld]);
+      if (!withLevels(lower, () => waterFlatAt(cx, cz))) return false;
+      return !(fallCellBlocked && fallCellBlocked(cx, cz));
+    }
+    function fallPoolCells(qx, qz, sx, sz, required) { // the two cells right below a lip column, or its whole pool (3 x 3)
+      const out = [], px = Math.abs(sz), pz = Math.abs(sx);
+      for (let k = 1; k <= (required ? 2 : 3); k++) for (let p = required ? 0 : -1; p <= (required ? 0 : 1); p++) out.push([qx + sx * k + px * p, qz + sz * k + pz * p]);
+      return out;
+    }
+    function computeFalls() {
+      fallPool.fill(0); falls.length = 0;
+      if (!terrain.water) return;
+      for (let qz = 0; qz < MAT_N; qz++) for (let qx = 0; qx < MAT_N; qx++) {
+        if (terrain.mat[qz * MAT_N + qx] !== MAT_WATER) continue;
+        const L = lipInfo(qx, qz);
+        if (!L || L.row !== 0 || terrain.mat[(qz - L.sz) * MAT_N + qx - L.sx] !== MAT_WATER) continue;
+        falls.push({ qx, qz, gx: L.gx, gz: L.gz, sx: L.sx, sz: L.sz, edge: L.edge, top: L.lu * STEP_HEIGHT, bot: L.edge ? null : L.ld * STEP_HEIGHT });
+        if (L.edge) continue;
+        for (const [px, pz] of fallPoolCells(qx, qz, L.sx, L.sz, false)) {
+          if (inMat(px, pz) && terrain.mat[pz * MAT_N + px] !== MAT_WATER && poolCellOk(px, pz, L.ld)) fallPool[pz * MAT_N + px] = 1;
+        }
+      }
+    }
+
     // Default island: Cozy Back-Hill Framing (Terraced 1~2 steps on the back two edges: gx <= 2, gz <= 2)
     function defaultHillLevel(gx, gz) {
       // Top-most back corner ridge (Level 2)
@@ -677,7 +769,6 @@
       rebuildWaterField();
       terrain.version++;
     }
-    resetTerrainData();
 
     // painted ground at a world point: the four nearest cells blend (bilinear coverage, frayed a
     // little by noise) so a painted patch has soft round edges instead of square quarter tiles
@@ -756,6 +847,7 @@
       if (borderDist < 0.18) y -= (0.18 - borderDist) * 0.45;
       return y + (vnoise(wx * 2.3, wz * 2.3, 131) - 0.5) * 0.04 + (vnoise(wx * 6.1, wz * 6.1, 137) - 0.5) * 0.012;
     }
+    resetTerrainData(); // after the height functions' constants (the waterfall check reads them)
 
     // 3-Point Lighting & Atmosphere Presets
     const ATMOSPHERES = {
@@ -4845,6 +4937,131 @@
       pondMist.position.y = 0.12;
       chunkTopSurface.add(pondMist);
 
+      // --- 8D-2. Waterfalls: one strip mesh for all of them (falls, section 1) ---
+      // Lip columns side by side on one edge make one strip. Its profile (t): a short run on the
+      // upper pond (t < 0), the drop (0..1, a falling curve that clears the dug bank under it), a short
+      // run on the plunge pool (t > 1). The shader paints two layers in one pass: clear translucent
+      // water and crisp white streaks of varying width sliding down (thin at the lip, foam at the foot).
+      const FALL_SURF = -0.09 + 0.016; // the water sheet (waterMesh.position.y), clear of its waves
+      const fallSegments = () => {
+        const groups = new Map();
+        for (const f of falls) {
+          const [cx, cz] = cellCentre(f.qx, f.qz);
+          const line = f.sx ? cx + f.sx * 0.125 : cz + f.sz * 0.125; // the edge it spills over
+          const key = `${f.sx},${f.sz},${line.toFixed(3)},${f.top},${f.bot}`;
+          if (!groups.has(key)) groups.set(key, { sx: f.sx, sz: f.sz, line, top: f.top, bot: f.bot, edge: f.edge, a: [] });
+          groups.get(key).a.push(f.sx ? cz : cx);
+        }
+        const segs = [];
+        for (const g of groups.values()) {
+          g.a.sort((p, q) => p - q);
+          let a0 = g.a[0], prev = a0;
+          for (let i = 1; i <= g.a.length; i++) {
+            if (i < g.a.length && g.a[i] - prev < 0.26) { prev = g.a[i]; continue; }
+            segs.push({ sx: g.sx, sz: g.sz, line: g.line, top: g.top, bot: g.bot, edge: g.edge, a0: a0 - 0.125, a1: prev + 0.125 });
+            if (i < g.a.length) a0 = prev = g.a[i];
+          }
+        }
+        return segs;
+      };
+      const fallProfile = (seg) => { // [s: out past the edge, y, t]
+        const ys = seg.top + FALL_SURF, yb = seg.bot + FALL_SURF, H = ys - yb;
+        const Lf = 0.2 + 0.05 * Math.min(3, H / STEP_HEIGHT), out = [[-0.16, ys, -0.6], [-0.08, ys, -0.3], [0, ys, 0]];
+        for (let k = 1; k <= 10; k++) { const t = k / 10; out.push([Lf * t, ys - H * t * t, t]); }
+        out.push([Lf + 0.07, yb, 1.25], [Lf + 0.16, yb, 1.6]);
+        return out;
+      };
+      const buildFallGeometry = () => {
+        const segs = fallSegments(), pos = [], flow = [], fall = [], idx = [];
+        for (const seg of segs) {
+          const prof = fallProfile(seg), w0 = seg.a0 - 0.04, w1 = seg.a1 + 0.04, nA = Math.ceil((w1 - w0) / 0.0625);
+          let arc = 0;
+          const arcs = prof.map((p, k) => (k ? (arc += Math.hypot(p[0] - prof[k - 1][0], p[1] - prof[k - 1][1])) : 0));
+          const b = pos.length / 3;
+          for (let k = 0; k < prof.length; k++) for (let i = 0; i <= nA; i++) {
+            const a = w0 + (w1 - w0) * i / nA, [s, y, t] = prof[k];
+            if (seg.sx) pos.push(seg.line + seg.sx * s, y, a); else pos.push(a, y, seg.line + seg.sz * s);
+            flow.push(a, arcs[k]); fall.push(t, i / nA, seg.edge ? 1 : 0);
+          }
+          for (let k = 0; k < prof.length - 1; k++) for (let i = 0; i < nA; i++) {
+            const p = b + k * (nA + 1) + i, q = p + nA + 1;
+            idx.push(p, q, p + 1, p + 1, q, q + 1);
+          }
+        }
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        g.setAttribute('aFlow', new THREE.Float32BufferAttribute(flow, 2));
+        g.setAttribute('aFall', new THREE.Float32BufferAttribute(fall, 3));
+        g.setIndex(idx);
+        g.computeBoundingSphere();
+        return g;
+      };
+      const fallMat = new THREE.ShaderMaterial({
+        uniforms: {
+          uTime: sharedUniforms.uTime,
+          uDeep: sharedUniforms.uWaterDeep,
+          uShallow: sharedUniforms.uWaterShallow,
+          uFoam: sharedUniforms.uWaterFoam,
+          uFogColor: sharedUniforms.uFogColor,
+          uFogDensity: sharedUniforms.uFogDensity,
+          uK: { value: 1 } // 0..1: the startup assembly lets the falls start running
+        },
+        vertexShader: `
+          attribute vec2 aFlow;
+          attribute vec3 aFall;
+          varying vec2 vFlow;
+          varying vec3 vFall;
+          void main() {
+            vFlow = aFlow; vFall = aFall;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform float uTime;
+          uniform float uK;
+          uniform vec3 uDeep;
+          uniform vec3 uShallow;
+          uniform vec3 uFoam;
+          uniform vec3 uFogColor;
+          uniform float uFogDensity;
+          varying vec2 vFlow; // across the fall (world units), arc length down it
+          varying vec3 vFall; // t (see the profile), 0..1 across, island-edge fall
+          float fh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+          float fn(vec2 p) {
+            vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+            return mix(mix(fh(i), fh(i + vec2(1.0, 0.0)), f.x), mix(fh(i + vec2(0.0, 1.0)), fh(i + 1.0), f.x), f.y);
+          }
+          void main() {
+            float t = vFall.x, side = vFall.y, x = vFlow.x, y = vFlow.y - uTime * 0.9;
+            // white streaks: noise stretched along the flow and sliding down, uneven widths
+            float n = fn(vec2(x * 22.0, y * 2.6)) * 0.62 + fn(vec2(x * 9.0 + 3.1, y * 1.3 + uTime * 0.15)) * 0.38;
+            float cut = mix(0.66, 0.46, smoothstep(0.0, 1.0, t));
+            float streak = smoothstep(cut, cut + 0.05, n) * smoothstep(-0.25, 0.1, t) * (1.0 - smoothstep(1.05, 1.4, t));
+            float lip = smoothstep(-0.35, -0.05, t) * (1.0 - smoothstep(0.05, 0.22, t)) * smoothstep(0.35, 0.6, fn(vec2(x * 16.0, uTime * 1.3)));
+            float foam = smoothstep(0.78, 1.02, t) * (1.0 - smoothstep(1.25, 1.55, t)) * smoothstep(0.32, 0.55, fn(vec2(x * 13.0 + uTime * 0.6, vFlow.y * 6.0 - uTime * 3.0)));
+            float white = max(streak, max(lip, foam));
+            // clear water body under them (the drop only; the runs on the ponds are their sheets)
+            float body = smoothstep(-0.1, 0.06, t) * (1.0 - smoothstep(0.95, 1.12, t));
+            vec3 base = mix(uShallow * 1.08, uDeep, 0.22 + 0.25 * n);
+            vec3 col = mix(base, uFoam, white);
+            float a = max(body * 0.58, white * 0.96);
+            a *= smoothstep(-0.6, -0.2, t) * (1.0 - smoothstep(1.2, 1.6, t));
+            a *= smoothstep(0.0, 0.1, side) * (1.0 - smoothstep(0.9, 1.0, side)) * uK;
+            if (a < 0.01) discard;
+            col = mix(col, uFogColor, uFogDensity * 0.2);
+            gl_FragColor = vec4(col, a);
+          }
+        `,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide
+      });
+      const fallMesh = new THREE.Mesh(buildFallGeometry(), fallMat);
+      fallMesh.renderOrder = 2; // over the pond sheets it starts and ends on
+      fallMesh.visible = falls.length > 0; // no falls, no draw call
+      fallMesh.userData.digestSkip = true; // added after the terrain baseline, empty on the default island
+      chunkTopSurface.add(fallMesh);
+
       // --- 8E. Subtle Context-Sensitive Terrain Grid Overlay (>50% lower contrast, auto-hides!) ---
       const gridGeo = topGeo.clone();
       const gridMat = new THREE.ShaderMaterial({
@@ -4913,6 +5130,7 @@
         fillSdfCanvas(); sdfTex.needsUpdate = true;
         waterMesh.geometry.dispose(); waterMesh.geometry = buildPondSheet(0.1);
         pondMist.geometry.dispose(); pondMist.geometry = buildPondSheet(0.32);
+        fallMesh.geometry.dispose(); fallMesh.geometry = buildFallGeometry(); fallMesh.visible = falls.length > 0;
         placeLilies();
       }
       // ground paint: only the turf colours change (same vertices)
@@ -4921,7 +5139,7 @@
         topMesh.geometry = buildTurfGeometry(false);
       }
 
-      return { chunkTopSurface, chunkSubsoil, chunkBedrock, pondMist, mistMat, gridMat, waterMesh, lilyParts, rebuildSurface, repaintSurface };
+      return { chunkTopSurface, chunkSubsoil, chunkBedrock, pondMist, mistMat, gridMat, waterMesh, waterMat, fallMesh, fallMat, lilyParts, rebuildSurface, repaintSurface };
     }
 
     /* =========================================================================
@@ -5540,7 +5758,7 @@
       /* =======================================================================
          10. ISLAND, AUTO-TILING PATH/FENCE, SPRITE STACKS & CONTACT SHADOWS
          ======================================================================= */
-      const { chunkTopSurface, chunkSubsoil, chunkBedrock, pondMist, mistMat, gridMat, waterMesh, lilyParts, rebuildSurface: rebuildTerrainSurface, repaintSurface: repaintTerrainSurface } = buildMiniatureIsland(scene);
+      const { chunkTopSurface, chunkSubsoil, chunkBedrock, pondMist, mistMat, gridMat, waterMesh, waterMat, fallMesh, fallMat, lilyParts, rebuildSurface: rebuildTerrainSurface, repaintSurface: repaintTerrainSurface } = buildMiniatureIsland(scene);
 
       // Height-Proportional Contact Shadow InstancedMesh (shifts & fades as layers float!)
       const csCanvas = document.createElement('canvas');
@@ -7308,7 +7526,7 @@
         const before = rects.map(rectDeviation);
         terrain.level[k] = next; // try it, measure, put it back
         const after = rects.map(rectDeviation);
-        const pondsFlat = wet.every(([wx, wz]) => waterFlatAt(wx, wz));
+        const pondsFlat = wet.every(([qx, qz]) => waterCellOk(qx, qz));
         terrain.level[k] = cur;
         return pondsFlat && after.every((d, i) => d <= Math.max(0.04, before[i] + 1e-6));
       }
@@ -7330,31 +7548,34 @@
       // seed flowers follow when the stroke ends. Water is painted the same way: the basin digs itself
       // (rebuildWaterField + turf heights, water and mist sheets, once a frame); painting any ground
       // over water dries it.
-      let paintStroke = null, repaintPending = false, waterDirty = false;
+      let paintStroke = null, repaintPending = false, waterDirty = false, soilDirty = false;
       const paintCellAt = (wx, wz) => [Math.floor((wx + HALF_GRID) * MAT_RES), Math.floor((wz + HALF_GRID) * MAT_RES)];
       const paintCellCentre = (qx, qz) => [(qx + 0.5) / MAT_RES - HALF_GRID, (qz + 0.5) / MAT_RES - HALF_GRID];
-      // Water rules. A pond lies on one terrace: the hill ground is flat within WATER_FLAT of every water
-      // cell centre (a terrace slope runs 0.28 either side of a step; WATER_FLAT is 0.175 past the cell's
-      // edge, where the water sheet has long faded out (sdf 0.08), so water never hangs over a slope;
-      // no waterfalls yet). WATER_EDGE keeps it off the island rim. Nothing
-      // standing on dry ground may end up wet (cabins, paths, trees, fences, props: refused, red cursor);
-      // seed flowers just sink. Drying is refused only under a dock's water end.
-      const WATER_FLAT = 0.3, WATER_EDGE = 0.6, CELL_R = Math.SQRT1_2 / MAT_RES;
-      function waterFlatAt(cx, cz) {
-        const y0 = getHillHeight(cx, cz);
-        for (let i = -2; i <= 2; i++) for (let j = -2; j <= 2; j++) {
-          if (Math.abs(getHillHeight(cx + i * WATER_FLAT / 2, cz + j * WATER_FLAT / 2) - y0) > 1e-4) return false;
-        }
-        return true;
-      }
-      function waterCellsNear(cx, cz, r) { // centres of the water cells within r (square)
+      // Water rules (WATER_FLAT, WATER_EDGE, lips and plunge pools: section 1). Nothing standing on dry
+      // ground may end up wet (cabins, paths, trees, fences, props: refused, red cursor); seed flowers
+      // just sink. Drying is refused under a dock's water end and on a plunge pool (it goes with its fall).
+      // A waterfall's two lip cells are painted and dried together.
+      const CELL_R = Math.SQRT1_2 / MAT_RES;
+      function waterCellsNear(cx, cz, r) { // the water cells within r (square), [qx, qz]
         const out = [];
         if (!terrain.water) return out;
         const [q0x, q0z] = paintCellAt(cx - r, cz - r), [q1x, q1z] = paintCellAt(cx + r, cz + r);
         for (let qz = Math.max(0, q0z); qz <= Math.min(MAT_N - 1, q1z); qz++) for (let qx = Math.max(0, q0x); qx <= Math.min(MAT_N - 1, q1x); qx++) {
-          if (terrain.mat[qz * MAT_N + qx] === MAT_WATER) out.push(paintCellCentre(qx, qz));
+          if (terrain.mat[qz * MAT_N + qx] === MAT_WATER) out.push([qx, qz]);
         }
         return out;
+      }
+      function waterCellOk(qx, qz) { // a water cell that the ground under it still allows
+        const [cx, cz] = paintCellCentre(qx, qz);
+        return (waterRimOk(cx, cz) && waterFlatAt(cx, cz)) || !!lipInfo(qx, qz);
+      }
+      const wetCell = (qx, qz) => inMat(qx, qz) && (terrain.mat[qz * MAT_N + qx] === MAT_WATER || fallPool[qz * MAT_N + qx] === 1);
+      function lipPaintAllowed(qx, qz, L) { // water on a lip: water behind it, nothing standing there or where it falls
+        const [a, b, behind] = lipColumn(qx, qz, L);
+        if (!inMat(behind[0], behind[1]) || !wetCell(behind[0], behind[1])) return false;
+        for (const [x, z] of [a, b]) if (waterHitsObject(...paintCellCentre(x, z))) return false;
+        if (L.edge) return true;
+        return fallPoolCells(a[0], a[1], L.sx, L.sz, true).every(([x, z]) => wetCell(x, z) || poolCellOk(x, z, L.ld));
       }
       function waterHitsObject(cx, cz) { // would water in the cell at (cx, cz) wet something standing nearby?
         const R = CELL_R + 0.1;
@@ -7377,6 +7598,7 @@
         }
         return false;
       }
+      fallCellBlocked = waterHitsObject; // plunge pools stop short of anything standing there
       function dryHitsDock(cx, cz) { // drying this cell would leave a dock's water end on land
         for (const o of snapProps) {
           const def = assetsById[o.id].def;
@@ -7384,26 +7606,41 @@
         }
         return false;
       }
+      const waterPlainOk = (qx, qz) => { const [cx, cz] = paintCellCentre(qx, qz); return waterRimOk(cx, cz) && waterFlatAt(cx, cz) && !waterHitsObject(cx, cz); };
       function paintAllowed(qx, qz, mat = MAT_GRASS) {
-        if (qx < 0 || qx >= MAT_N || qz < 0 || qz >= MAT_N) return false;
-        const [cx, cz] = paintCellCentre(qx, qz), old = terrain.mat[qz * MAT_N + qx];
+        if (!inMat(qx, qz)) return false;
+        const q = qz * MAT_N + qx, [cx, cz] = paintCellCentre(qx, qz), old = terrain.mat[q];
+        if (mat !== MAT_WATER && fallPool[q]) return false; // the pool goes with its fall
         if (old === mat) return true;
         if (mat === MAT_WATER) {
-          if (Math.abs(cx) > HALF_GRID - WATER_EDGE || Math.abs(cz) > HALF_GRID - WATER_EDGE) return false;
-          return waterFlatAt(cx, cz) && !waterHitsObject(cx, cz);
+          if (fallPool[q] || waterPlainOk(qx, qz)) return true; // a plunge pool is water already
+          const L = lipInfo(qx, qz);
+          return !!L && lipPaintAllowed(qx, qz, L);
         }
         return old !== MAT_WATER || !dryHitsDock(cx, cz);
+      }
+      function setCell(qx, qz, mat) {
+        const q = qz * MAT_N + qx, old = terrain.mat[q];
+        if (old === mat) return;
+        terrain.mat[q] = mat;
+        const ground = (m) => (m !== MAT_GRASS && m !== MAT_WATER ? 1 : 0);
+        terrain.painted += ground(mat) - ground(old);
+        terrain.water += (mat === MAT_WATER ? 1 : 0) - (old === MAT_WATER ? 1 : 0);
+        if (mat === MAT_WATER || old === MAT_WATER) {
+          waterDirty = true;
+          const [cx, cz] = paintCellCentre(qx, qz);
+          if (Math.max(Math.abs(cx), Math.abs(cz)) > HALF_GRID - 1) soilDirty = true; // near the rim: its wall follows
+        }
+        terrain.version++;
       }
       function paintCell(qx, qz, mat) { // true when the cell changed
         if (!paintAllowed(qx, qz, mat)) return false;
         const q = qz * MAT_N + qx, old = terrain.mat[q];
         if (old === mat) return false;
-        terrain.mat[q] = mat;
-        const ground = (m) => (m !== MAT_GRASS && m !== MAT_WATER ? 1 : 0);
-        terrain.painted += ground(mat) - ground(old);
-        terrain.water += (mat === MAT_WATER ? 1 : 0) - (old === MAT_WATER ? 1 : 0);
-        if (mat === MAT_WATER || old === MAT_WATER) waterDirty = true;
-        terrain.version++;
+        if (mat === MAT_WATER && fallPool[q] && !waterPlainOk(qx, qz)) return false; // stays the fall's pool
+        setCell(qx, qz, mat);
+        const L = mat === MAT_WATER || old === MAT_WATER ? lipInfo(qx, qz) : null;
+        if (L) { const [a, b] = lipColumn(qx, qz, L); for (const [x, z] of [a, b]) setCell(x, z, mat); } // lip cells go in pairs
         return true;
       }
       function flushRepaint() {
@@ -7412,7 +7649,8 @@
         if (waterDirty) { // the basin moved: heights, water and mist sheets (the island rim stays)
           waterDirty = false;
           rebuildWaterField();
-          rebuildTerrainSurface(false);
+          rebuildTerrainSurface(soilDirty); // the island rim only when water near it changed
+          soilDirty = false;
           markShadowsDirty(0.3);
         } else repaintTerrainSurface();
         if (seedFlowers.length) rebuildSeedFlowers(); // flowers sink as the brush passes, not on release
@@ -8943,6 +9181,10 @@
           paintAllowed: (qx, qz, mat = 0) => paintAllowed(qx, qz, mat),
           terrainWater: () => terrain.water,
           ground: (x, z) => getContinuousTerrainHeight(x, z),
+          falls: () => falls.map((f) => ({ qx: f.qx, qz: f.qz, gx: f.gx, gz: f.gz, sx: f.sx, sz: f.sz, edge: f.edge, top: f.top, bot: f.bot })),
+          fallPool: () => fallPool.reduce((n, v) => n + v, 0),
+          fallSheet: () => ({ visible: fallMesh.visible, verts: fallMesh.geometry.attributes.position.count }),
+          lipInfo: (qx, qz) => lipInfo(qx, qz),
           waterSheet: () => ({ water: waterMesh.geometry.index.count / 6, mist: pondMist.geometry.index.count / 6, lilies: lilyParts.map((lp) => lp.meshes[0].visible) }),
           instanceCount: (id) => instancedById[id].count,
           instanceVisible: (id) => instancedById[id].visible,
