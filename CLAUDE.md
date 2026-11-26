@@ -63,10 +63,12 @@ node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/console.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/terrain.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/terrain-edit.mjs
+node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/terrain-paint.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1&intro=1" tools/tests/intro.mjs
 $env:AUTOPLAY='0'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1&intro=1" tools/tests/sound-unlock.mjs; $env:AUTOPLAY=$null
 $env:SHOT='night'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1&time=night" tools/tests/screenshot.mjs
 ```
+- 테스트는 **한 번에 하나씩** 돌린다(동시에 돌리면 사용자 PC가 심하게 버벅이고 `intro.mjs`가 시간 초과로 실패한 적이 있다). `cdp.mjs`는 끝날 때 임시 프로필 폴더(`TEMP/mori-cdp-*`)를 지운다(강제 중단하면 남을 수 있음. 예전에는 안 지워 약 17GB가 쌓였다).
 - `tools/cdp.mjs`는 헤드리스 Chrome을 띄워 마우스·휠·키 입력, `evaluate`, 스크린샷을 제공한다. 결과 스크린샷은 `tools/shots/`(git 제외).
 - `#debug=1`이면 `window.__mori`(state, project, hit, audio, items, lights, renderables, terrainDump, meshDigest)가 생긴다. 읽기 전용 테스트 훅이다. `renderables()`로 draw call이 어디서 나오는지 나눠 볼 수 있다.
 - 헤드리스는 SwiftShader(소프트웨어 렌더링)라 몇 초에 몇 프레임뿐이다. 시간(ms) 측정은 의미 없고, draw call 수(`#fps=1`이면 `body[data-bench]`와 콘솔에 기록)로 비교한다. 기본 섬 기준 그림자 갱신 없는 프레임 57 calls(2026-11-26 지형 데이터 전환 전후 측정, 삼각형·프로그램 수는 실행마다 조금 흔들림. 오두막 합치기 개선 전 82).
@@ -76,7 +78,7 @@ $env:SHOT='night'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#d
 - URL 옵션 전체 목록은 README 참고.
 
 ## 남은 일
-- **지형 편집 (사용자 요청·순서 합의 2026-11-26).** 1·2단계 끝(2단계 사용자 확인 "좋네요" 2026-11-26). **▶ 다음 시작점: 3단계 재질 칠하기**(아래 "이후 단계 메모"부터 읽기).
+- **지형 편집 (사용자 요청·순서 합의 2026-11-26).** 1·2단계 끝(2단계 사용자 확인 "좋네요" 2026-11-26), 3단계 끝(사용자 확인 대기). 다음은 4단계 물 채우기(사용자 확인 뒤 시작, 아래 "이후 단계 메모"부터 읽기).
   - **전체 순서:** ① 데이터 구조 전환(겉모습 변화 없음) → ② 높낮이(칸 단위 한 단씩 올리고 내리기, 지층 벽 자동) → ③ 재질 칠하기(잔디·모래·흙·돌·꽃밭, ¼칸 붓, Soup 텍스처 묶음에 모래 추가) → ④ 물 채우기(파낸 칸에 물, 둥글게 다듬은 연못) → ⑤ 저장(브라우저 저장소, 몇 KB). 단계마다 따로 커밋(그 단계만 되돌릴 수 있게)하고 사용자 확인받기(스크린샷 없이 사용자가 직접 확인).
   - **정한 방식 (사용자 결정 2026-11-26):** 지형 함수의 이름과 호출 방식은 유지하고 안에서 데이터를 읽는다. 데이터의 처음 값은 지금 규칙의 결과로 채운다. **연못은 4단계 전까지 기존 수식 `getPondSDF`(원 4개)를 그대로 쓴다**(12×12 칸으로는 지금의 둥근 모양을 똑같이 못 만듦). 연못을 칸 데이터로 바꾸는 것은 4단계.
   - **① 완료:** 1번 섹션의 `terrain`(`level`: `Int8Array(144)`, 인덱스 `gz * GRID_SIZE + gx`, 음수 허용 / `version`: 바뀔 때마다 증가). 처음 값은 `defaultHillLevel`(옛 언덕 규칙)로 `resetTerrainData()`가 채운다. `getHillLevel`은 섬 밖이면 0, 안이면 배열 값(정수 좌표만 받음, 지금 호출부는 모두 정수). 재질은 3단계에서 `terrain`에 필드를 더한다.
@@ -85,8 +87,10 @@ $env:SHOT='night'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#d
   - **다시 만드는 곳 `rebuildSurface`(`buildMiniatureIsland`가 돌려줌, 바깥 이름 `rebuildTerrainSurface`):** 메쉬는 그대로 두고 지오메트리만 바꾼다(`chunkTopSurface.children[0]` = 잔디 규칙 유지, 재질 공유라 해제 안 함). 잔디 윗면 `buildTurfGeometry`, 표토 `buildTopsoil`, 뿌리 `placeRoots`, 격자 오버레이 `fitGridHeights(gridGeo)`. 점토·암반·박힌 돌·물·연잎·안개는 높이와 무관해서 그대로. 표토는 3단 벽용 띠 두 개(1.18, 0.98)를 맨 위에 더 얹고 `buildStrataChunk`의 `jBase: 2`로 무늬 seed를 기존 번호에 맞춰, 기본 섬 벽(띠를 건너뜀)은 전과 똑같다(`terrain.mjs` 통과). 연못에 따라 달라지는 것(4단계): `sdfTex`(128² 캔버스, 물·격자 두 재질이 씀), `waterGeo`, 물 높이 `waterMesh.position.y = -0.09`(조립 `WATER_Y`가 읽음).
   - **편집 테스트 `tools/tests/terrain-edit.mjs`:** 올리고 내리면 섬 메쉬(`__mori.islandDigest`)와 높이 해시가 처음과 정확히 같은지, 연못·오두막 칸·0 아래·3 위 거부, 올린 칸 옆 오두막 거부, "처음 섬으로" 복구, 콘솔 오류 0. 훅 `terrainLevel`, `terrainVersion`, `terrainAllowed`, `hit`의 `wy`.
   - **남은 확인 (사용자):** 실기기에서 편집 한 번의 끊김(헤드리스는 측정 의미 없음), 3단 벽과 비탈의 생김새, 소리 느낌. 드래그로 여러 칸 칠하기는 아직 없다(클릭 한 번에 한 칸).
+  - **③ 완료 (재질 칠하기):** `terrain.mat`(`Uint8Array`, ¼칸 `MAT_N`=48, 인덱스 `qz * MAT_N + qx`, 값 `MAT_GRASS` 0 = 기본 잔디 / 모래 1 / 흙 2 / 돌 3 / 꽃밭 4), `terrain.painted`(잔디 아닌 칸 수, 0이면 `terrainPaintAt`이 바로 0을 돌려 기본 섬이 전과 똑같음), `terrain.bloomT`(꽃밭 칠한 시각 = 들꽃 낙하 `spawnT`). `terrainPaintAt(x, z)`는 이웃 4칸 쌍선형 가중치 + 약간의 노이즈로 경계를 둥글게 한다. `turfColor`는 연못 바닥 다음에 읽는다(모래 `L_SAND` 새 텍스처 층 13, 흙 `L_DIRT`, 돌 `L_ROCK`은 비탈에도, 꽃밭은 짙은 잔디 + 꽃잎색 삼각형 약 20%). 도구는 같은 '지형' 카테고리 `TERRAIN_TOOLS`의 `paint_*`(`paint` 필드, 커서색 `cursor`). 누른 채 끌면 `beginPaintStroke` → `paintStrokeTo`(0.1 간격 보간) → 놓으면 `endPaintStroke`. 끄는 동안은 잔디 윗면 색만 다시 만들고(`repaintSurface` = `buildTurfGeometry(false)`, 높이 그대로, 프레임당 최대 1번), 놓을 때 `rebuildInstances` 한 번(풀포기는 모래·흙·돌에 안 남, 꽃밭 칸 42%에 작은 들꽃을 들꽃 인스턴스 메쉬 뒤에 추가 → draw call 그대로, `MAX_INSTANCES` 180 공유). 연못 안(칸 중심 SDF < 0.05)은 거부. 소리 `playPaint(mat)`(70ms 간격), 작은 먼지. 테스트 `tools/tests/terrain-paint.mjs`(잔디로 다시 칠하면 섬 메쉬가 처음과 정확히 같음 포함). 훅 `terrainMat`, `terrainPaintAt`, `terrainPainted`, `paintAllowed`, `instanceCount`.
+  - **③ 남은 확인 (사용자):** 재질 색·경계 모양, 꽃밭 들꽃 밀도, 끌 때 끊김(실기기), 칠하기 소리. 붓 크기는 ¼칸 하나(더 큰 붓은 아직 없음).
   - **위치를 직접 적어 둔 곳 (연못 관련은 4단계):** `rebuildInstances`의 물가 풀 (C)와 물가 조약돌이 연못 중심 (2.35, 2.35)에서 바깥으로 훑는다. 연잎 3개 좌표(1.9,2.0 / 3.1,2.3 / 2.3,3.0), 연못 안개 `pondMist` (2.3, 2.3) 5.6 크기. `getPondSDF`의 원 4개 중심·반지름. 높이와 관련된 것: `LAYER_EDGE`(층 윗면 y와 반폭, 윗층 y 0.0은 섬 바닥 높이라 언덕 편집과 무관), 시작 섬 배치 `populateStarterIsland`(나무·오두막 칸 좌표가 언덕 모양을 전제). 시작 조립의 연못 등장(`IT.water`)은 `waterMesh`·`lilyParts`를 그대로 쓴다.
-  - **이후 단계 메모:** 3단계 재질 칠하기는 같은 '지형' 카테고리에 도구를 더하고 `terrain`에 재질 배열을 더한 뒤 `turfColor`가 읽게 한다. 4단계 물은 `level` 음수(0 아래 파기)와 물 칸, 물에 잠긴 오브젝트 막기·지우기, 연못 SDF를 칸 데이터 거리장으로(위 '연못 관련' 고정 좌표도 함께). 성능: 편집 때만 다시 만들고 평소 프레임 비용 변화 없음. 배치 규칙(`snapRectBlocked`, `shoreOk`, `isBlockedForPoint`, `canPlaceAtHit`)과 선착장은 지형 함수를 쓰므로 데이터를 따라온다.
+  - **이후 단계 메모:** 4단계 물은 `level` 음수(0 아래 파기)와 물 칸, 물에 잠긴 오브젝트 막기·지우기, 연못 SDF를 칸 데이터 거리장으로(위 '연못 관련' 고정 좌표도 함께). 성능: 편집 때만 다시 만들고 평소 프레임 비용 변화 없음. 배치 규칙(`snapRectBlocked`, `shoreOk`, `isBlockedForPoint`, `canPlaceAtHit`)과 선착장은 지형 함수를 쓰므로 데이터를 따라온다.
 - **굴뚝 연기 (사용자 확인 끝, 2026-11-26):** 사용자 지적(조립 중 잔존, 증기기관차 같은 분출, 불투명, 회색 안쪽·아랫면)을 고친 `4921259`에 "좋네요" 답을 받았다. 다시 지적이 없으면 건드리지 않는다. 실기기 프레임만 미확인.
 - **배경(하늘) 품질 높이기 (적용했다가 취소, 2026-11-26):** ①②를 커밋하고(`6343b86`, `f7dbb69`) ⑥을 손보던 중 사용자가 전부 취소하고 복구해 달라고 해서 게임 코드를 작업 전(`eba554c`) 상태로 되돌렸다(`0721c72`). 취소 이유는 듣지 않았다. 사용자가 먼저 꺼내지 않으면 다시 시작하지 않는다. 아래는 작업 전의 분석과 제안이다.
   - 지금 하늘: atmo 패스의 `getSky(uv)` 하나. 화면 y 기준 `uSkyBottom`→`uSkyTop` 2색 그라데이션 + 밤 해시 별. 색은 `ATMOSPHERES`의 `skyTop`/`skyBottom`.

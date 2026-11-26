@@ -25,7 +25,7 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
   };
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
-  ok('terrain slot with two tools', (await J(`[...document.querySelectorAll('#hud-dock .item[data-category="terrain"]')].map(b => b.dataset.tool).join()`)) === 'raise,lower');
+  ok('terrain slot starts with raise and lower', (await J(`[...document.querySelectorAll('#hud-dock .item[data-category="terrain"]')].map(b => b.dataset.tool).join()`)).startsWith('raise,lower,'));
   const d0 = await J(`${M}.islandDigest()`);
   const h0 = (await J(`${M}.terrainDump(0.05, 1)`)).hash;
 

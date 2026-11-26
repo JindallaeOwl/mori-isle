@@ -556,9 +556,16 @@
     // The terrain functions keep their names and arguments and read this table; terrain editing changes it.
     // level: hill steps (x STEP_HEIGHT), signed so later steps can dig below the base ground.
     // The pond is still the getPondSDF formula: 12x12 tiles can't reproduce its round lobes (moves to
-    // tile data with water editing, step 4). Material per tile comes with painting (step 3).
+    // tile data with water editing, step 4).
+    // mat: painted ground per quarter tile (MAT_N x MAT_N, index qz * MAT_N + qx), 0 = grass = the
+    // default look (the turf colours exactly as before), painted: how many cells are not grass.
+    const MAT_RES = 4, MAT_N = GRID_SIZE * MAT_RES;
+    const MAT_GRASS = 0, MAT_SAND = 1, MAT_DIRT = 2, MAT_STONE = 3, MAT_FLOWERS = 4, MAT_KINDS = 5;
     const terrain = {
       level: new Int8Array(GRID_SIZE * GRID_SIZE),
+      mat: new Uint8Array(MAT_N * MAT_N),
+      bloomT: new Float32Array(MAT_N * MAT_N).fill(-100), // when a flower cell was painted (its flowers drop in)
+      painted: 0,
       version: 0 // bumped on every change (rebuild checks)
     };
 
@@ -579,9 +586,35 @@
       for (let gz = 0; gz < GRID_SIZE; gz++) for (let gx = 0; gx < GRID_SIZE; gx++) {
         terrain.level[gz * GRID_SIZE + gx] = defaultHillLevel(gx, gz);
       }
+      terrain.mat.fill(MAT_GRASS); terrain.bloomT.fill(-100); terrain.painted = 0;
       terrain.version++;
     }
     resetTerrainData();
+
+    // painted ground at a world point: the four nearest cells blend (bilinear coverage, frayed a
+    // little by noise) so a painted patch has soft round edges instead of square quarter tiles
+    const _matW = new Float32Array(MAT_KINDS);
+    function terrainMatCell(qx, qz) {
+      qx = qx < 0 ? 0 : (qx >= MAT_N ? MAT_N - 1 : qx); qz = qz < 0 ? 0 : (qz >= MAT_N ? MAT_N - 1 : qz);
+      return terrain.mat[qz * MAT_N + qx];
+    }
+    function terrainPaintAt(wx, wz) {
+      if (!terrain.painted) return MAT_GRASS;
+      const fx = (wx + HALF_GRID) * MAT_RES - 0.5, fz = (wz + HALF_GRID) * MAT_RES - 0.5;
+      const i = Math.floor(fx), j = Math.floor(fz), tx = fx - i, tz = fz - j;
+      _matW.fill(0);
+      _matW[terrainMatCell(i, j)] += (1 - tx) * (1 - tz);
+      _matW[terrainMatCell(i + 1, j)] += tx * (1 - tz);
+      _matW[terrainMatCell(i, j + 1)] += (1 - tx) * tz;
+      _matW[terrainMatCell(i + 1, j + 1)] += tx * tz;
+      let best = MAT_GRASS, bw = _matW[MAT_GRASS];
+      for (let k = 1; k < MAT_KINDS; k++) {
+        if (!_matW[k]) continue;
+        const w = _matW[k] + (vnoise(wx * 5.3, wz * 5.3, 160 + k) - 0.5) * 0.3;
+        if (w > bw) { best = k; bw = w; }
+      }
+      return best;
+    }
 
     // integer tile coords; outside the island = 0
     function getHillLevel(gx, gz) {
@@ -1211,6 +1244,25 @@
           this.noiseHit(t + 0.06 + i * 0.045 + Math.random() * 0.03, { freq: 1300 + Math.random() * 1500, q: 2.5, vol: 0.035, decay: 0.025, pan: pan + (Math.random() - 0.5) * 0.2 });
         }
       }
+      // ground paint: a soft brush swish coloured by the material (sand hiss, dirt scuff,
+      // stone click, flowers a tiny chime)
+      playPaint(mat = 0, pan = 0) {
+        if (!this.ctx || !this.enabled) return;
+        const t = this.ctx.currentTime;
+        const P = [[2600, 0.8, 0.05], [5200, 0.7, 0.05], [900, 0.9, 0.06], [1700, 2.5, 0.045], [3000, 1, 0.04]][mat] || [2600, 0.8, 0.05];
+        this.noiseHit(t, { freq: P[0] * (0.92 + Math.random() * 0.16), q: P[1], vol: P[2], decay: 0.07, pan });
+        if (mat === 3) this.noiseHit(t + 0.025, { freq: 2400 + Math.random() * 600, q: 6, vol: 0.05, decay: 0.018, pan });
+        if (mat === 4) {
+          const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+          o.type = 'sine';
+          o.frequency.value = [1046.5, 1174.7, 1318.5, 1568, 1760][Math.floor(Math.random() * 5)];
+          g.gain.setValueAtTime(0.0001, t);
+          g.gain.linearRampToValueAtTime(0.03, t + 0.008);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+          o.connect(g); this.out(g, pan);
+          o.start(t); o.stop(t + 0.32);
+        }
+      }
       // terrain edit refused: a dull wooden knock
       playTerrainBlocked(pan = 0) {
         if (!this.ctx || !this.enabled) return;
@@ -1514,7 +1566,8 @@
     const L_DIRT = 0, L_ROCK = 1, L_MASON = 2, L_WOOD = 3, L_COBBLE = 4, L_METAL = 5, L_SLATE = 6, L_CLOTH = 7, L_PLAIN = 8, L_PLASTER = 9, L_THATCH = 10;
     const L_GRASS = 11; // Mori addition: short tufted blades for the island turf
     const L_MOSS = 12;  // Mori addition: clumpy moss with bright fronds and dark gaps
-    const TEX_LAYERS = 13, TEX_N = 64;
+    const L_SAND = 13;  // Mori addition: fine grains in soft wind ripples (painted sand)
+    const TEX_LAYERS = 14, TEX_N = 64;
     function makeDetailTextures() {
       const N = TEX_N, data = new Uint8Array(N * N * 4 * TEX_LAYERS);
       const put = (layer, x, y, r, g, b, h) => {
@@ -1639,6 +1692,13 @@
           let m = .74 + .3 * n + (clump - .5) * .4 - cell * .05, h = .25 + .45 * clump + .2 * n - cell * .06;
           if (sp > .94) { m += .24; h += .18; } else if (sp < .07) { m -= .2; h -= .18; }
           put(L_MOSS, x, y, m * .92, m * 1.06, m * .78, h);
+        }
+        {
+          const n = pfbm(x / 8, y / 8, 8, 151, 3), g = h2(x, y, 153);
+          const rip = Math.sin((y + x * .25 + n * 6) * TAU / 16) * .5 + .5; // tiles: 4 ripples down, 1 across
+          let m = .92 + .12 * n + (rip - .5) * .12 + (g - .5) * .1, h = .38 + .3 * rip + (g - .5) * .18;
+          if (g > .984) { m -= .22; h -= .14; } else if (g < .025) { m += .14; h += .18; } // dark grit, glints
+          put(L_SAND, x, y, m * 1.03, m, m * .9, h);
         }
       }
       const mk = (linear) => {
@@ -2034,6 +2094,36 @@
       raise: [
         { el: 'path', d: 'M12.5 43c2.6-7.4 8-11 15.5-11s12.9 3.6 15.5 11z', f: '#8db35a' },
         { el: 'path', d: 'M28 27.5V12.5M22.5 18L28 12.5 33.5 18' }
+      ],
+      // ground paint: a dab of the material with its marks
+      p_grass: [
+        { el: 'ellipse', cx: 28, cy: 35, rx: 17, ry: 9, f: '#8db35a' },
+        { el: 'path', d: 'M20.5 35l-1.6-7.5M26.5 34V25M32.5 35l1.8-8M38 37l2.6-5.5' }
+      ],
+      p_sand: [
+        { el: 'ellipse', cx: 28, cy: 35, rx: 17, ry: 9, f: '#e2c98e' },
+        { el: 'path', d: 'M17.5 34.5c3-2 6-2 9 0s6 2 9 0M22 39.5c2.4-1.4 4.6-1.4 7 0' },
+        { el: 'circle', cx: 34, cy: 39, r: 1.2, f: '#5b3f27', ns: true },
+        { el: 'circle', cx: 21, cy: 30.5, r: 1.2, f: '#5b3f27', ns: true },
+        { el: 'circle', cx: 38.5, cy: 31.5, r: 1.2, f: '#5b3f27', ns: true }
+      ],
+      p_dirt: [
+        { el: 'ellipse', cx: 28, cy: 35, rx: 17, ry: 9, f: '#a8744a' },
+        { el: 'ellipse', cx: 22, cy: 33.5, rx: 3.4, ry: 2.2, f: '#7f5432' },
+        { el: 'ellipse', cx: 33, cy: 37.5, rx: 3, ry: 2, f: '#7f5432' },
+        { el: 'path', d: 'M30 31h4M18.5 38.5h3', ns: false }
+      ],
+      p_stone: [
+        { el: 'ellipse', cx: 28, cy: 35, rx: 17, ry: 9, f: '#b4b7bd' },
+        { el: 'ellipse', cx: 22.5, cy: 34, rx: 5.2, ry: 3.3, f: '#878c96' },
+        { el: 'ellipse', cx: 34, cy: 36.8, rx: 4.2, ry: 2.7, f: '#9da2ab' },
+        { el: 'ellipse', cx: 33, cy: 30.6, rx: 2.6, ry: 1.7, f: '#878c96' }
+      ],
+      p_flowers: [
+        { el: 'ellipse', cx: 28, cy: 35, rx: 17, ry: 9, f: '#8db35a' },
+        { el: 'circle', cx: 21.5, cy: 32, r: 3.3, f: '#f1a7bd' },
+        { el: 'circle', cx: 33.5, cy: 33.5, r: 3.3, f: '#f4d66b' },
+        { el: 'circle', cx: 27.5, cy: 39, r: 2.8, f: '#f3eee0' }
       ],
       lower: [
         { el: 'path', d: 'M12 33h8.5l3.2 6.5h8.6l3.2-6.5H44v10H12z', f: '#a8744a' },
@@ -3544,7 +3634,13 @@
     // raise or lower the clicked tile one step (TERRAIN EDITING in section 12)
     const TERRAIN_TOOLS = [
       { id: 'raise', name: '땅 올리기', category: 'terrain', glyph: 'raise', dir: 1 },
-      { id: 'lower', name: '땅 내리기', category: 'terrain', glyph: 'lower', dir: -1 }
+      { id: 'lower', name: '땅 내리기', category: 'terrain', glyph: 'lower', dir: -1 },
+      // ground paint (step 3): drag to paint quarter tiles; grass paints the default turf back
+      { id: 'paint_grass', name: '잔디', category: 'terrain', glyph: 'p_grass', paint: MAT_GRASS, cursor: '#a8ffbe' },
+      { id: 'paint_sand', name: '모래', category: 'terrain', glyph: 'p_sand', paint: MAT_SAND, cursor: '#ffe7a8' },
+      { id: 'paint_dirt', name: '흙', category: 'terrain', glyph: 'p_dirt', paint: MAT_DIRT, cursor: '#e8b88a' },
+      { id: 'paint_stone', name: '돌바닥', category: 'terrain', glyph: 'p_stone', paint: MAT_STONE, cursor: '#d6dde8' },
+      { id: 'paint_flowers', name: '꽃밭', category: 'terrain', glyph: 'p_flowers', paint: MAT_FLOWERS, cursor: '#ffb8d6' }
     ];
     const TERRAIN_MAX = 3; // steps above the meadow (digging below it comes with water, step 4)
     const terrainToolById = (id) => TERRAIN_TOOLS.find((t) => t.id === id);
@@ -4215,6 +4311,24 @@
       } };
       const tGrassA = C('#72b84f'), tGrassB = C('#5b9f43'), tGrassL = C('#93c95c'), tHill = C('#4f9140'), tMoss = C('#5d8a3c');
       const tCliff = C('#7d5a38'), tCliffD = C('#5a3f27'), tShore = C('#bca776'), tBed = C('#4a615c');
+      const tSand = C('#dcc48e'), tSandD = C('#c4a672'), tSoil = C('#8f6842'), tSoilD = C('#6c4a2d');
+      const tStone = C('#9a9da4'), tStoneD = C('#73777f'), tBloom = C('#62a647');
+      const tPetals = ['#f1a7bd', '#f4d66b', '#f3eee0', '#c7aae8'].map((h) => C(h));
+      // painted sand / dirt / stone (the pond bed stays as it is until water editing)
+      const paintedColor = (pm, x, z, ny, n1, n2, sdf) => {
+        if (pm === MAT_SAND) {
+          let c = mixC(tSandD, tSand, smooth(0.3, 0.7, n1));
+          if (ny < 0.86) c = mixC(mixC(tCliffD, tCliff, n1), c, 0.55); // sandy bank
+          if (sdf < 0.42) c = mulC(c, 1 - 0.16 * (1 - smooth(0.05, 0.42, sdf))); // damp by the water
+          return [mulC(c, 0.9 + 0.18 * n2), L_SAND, 0.98];
+        }
+        if (pm === MAT_DIRT) {
+          const c = ny < 0.86 ? mixC(tCliffD, tCliff, n1) : mixC(tSoilD, tSoil, n1);
+          return [mulC(c, 0.86 + 0.24 * n2), ny < 0.68 ? L_ROCK : L_DIRT, 0.95];
+        }
+        const c = mixC(tStoneD, tStone, smooth(0.25, 0.75, n1));
+        return [mulC(c, 0.84 + 0.3 * n2), L_ROCK, ny < 0.86 ? 0.9 : 0.8];
+      };
       const turfColor = (x, z, y, ny) => {
         const n1 = vnoise(x * 0.75, z * 0.75, 141) * 0.65 + vnoise(x * 2.1, z * 2.1, 143) * 0.35;
         const n2 = h2(Math.floor(x * 4 + 99), Math.floor(z * 4 + 99), 147);
@@ -4223,6 +4337,8 @@
           const c = mixC(tShore, tBed, smooth(0.05, -0.4, sdf) * 0.9);
           return [mulC(c, 0.88 + 0.2 * n2), L_DIRT, 0.7];
         }
+        const pm = terrainPaintAt(x, z);
+        if (pm === MAT_SAND || pm === MAT_DIRT || pm === MAT_STONE) return paintedColor(pm, x, z, ny, n1, n2, sdf);
         if (ny < 0.86) { // terrace cliff faces: packed earth, mossy where it flattens out
           let c = mixC(tCliffD, tCliff, n1);
           c = mixC(c, tMoss, smooth(0.62, 0.84, ny) * 0.55);
@@ -4232,12 +4348,17 @@
         c = mixC(c, tGrassL, smooth(0.66, 0.86, n1) * 0.55);
         if (y > 0.25) c = mixC(c, tHill, clamp((y - 0.25) * 0.7, 0, 0.5));
         if (sdf < 0.42) c = mixC(c, tShore, (1 - smooth(0.05, 0.42, sdf)) * 0.78);
+        if (pm === MAT_FLOWERS) { // flower bed: lush green dotted with petal-coloured facets
+          const p = h2(Math.floor(x * 9 + 99), Math.floor(z * 9 + 99), 149);
+          if (p > 0.8) return [mulC(tPetals[Math.floor(h2(Math.floor(x * 9 + 99), Math.floor(z * 9 + 99), 151) * 4)], 0.9 + 0.2 * n2), L_PLAIN, 0.85];
+          c = mixC(c, tBloom, 0.45);
+        }
         return [mulC(c, 0.86 + 0.26 * n2), L_GRASS, 0.95];
       };
       const tv = (i, j) => { const o = (j * TNV + i) * 3; return [TV[o], TV[o + 1], TV[o + 2]]; };
       const _ta = new THREE.Vector3(), _tb = new THREE.Vector3();
-      const buildTurfGeometry = () => {
-      fillTurfVerts();
+      const buildTurfGeometry = (refit = true) => { // refit = false: same heights, only the colours changed
+      if (refit) fillTurfVerts();
       const turf = new Soup();
       for (let j = 0; j < TNV - 1; j++) for (let i = 0; i < TNV - 1; i++) {
         const a = tv(i, j), b = tv(i + 1, j), c = tv(i + 1, j + 1), d = tv(i, j + 1);
@@ -4549,8 +4670,13 @@
         placeRoots();
         fitGridHeights(gridGeo);
       }
+      // ground paint: only the turf colours change (same vertices)
+      function repaintSurface() {
+        topMesh.geometry.dispose();
+        topMesh.geometry = buildTurfGeometry(false);
+      }
 
-      return { chunkTopSurface, chunkSubsoil, chunkBedrock, pondMist, mistMat, gridMat, waterMesh, lilyParts, rebuildSurface };
+      return { chunkTopSurface, chunkSubsoil, chunkBedrock, pondMist, mistMat, gridMat, waterMesh, lilyParts, rebuildSurface, repaintSurface };
     }
 
     /* =========================================================================
@@ -5169,7 +5295,7 @@
       /* =======================================================================
          10. ISLAND, AUTO-TILING PATH/FENCE, SPRITE STACKS & CONTACT SHADOWS
          ======================================================================= */
-      const { chunkTopSurface, chunkSubsoil, chunkBedrock, pondMist, mistMat, gridMat, waterMesh, lilyParts, rebuildSurface: rebuildTerrainSurface } = buildMiniatureIsland(scene);
+      const { chunkTopSurface, chunkSubsoil, chunkBedrock, pondMist, mistMat, gridMat, waterMesh, lilyParts, rebuildSurface: rebuildTerrainSurface, repaintSurface: repaintTerrainSurface } = buildMiniatureIsland(scene);
 
       // Height-Proportional Contact Shadow InstancedMesh (shifts & fades as layers float!)
       const csCanvas = document.createElement('canvas');
@@ -6518,6 +6644,23 @@
           }
         });
 
+        // 2b. Flower beds: small wildflower clumps on painted flower cells (the 들꽃 instanced mesh,
+        // after the placed ones, so no extra draw call)
+        if (terrain.painted && buckets.flowers) {
+          const fl = buckets.flowers;
+          for (let q = 0; q < MAT_N * MAT_N && fl.length < MAX_INSTANCES; q++) {
+            if (terrain.mat[q] !== MAT_FLOWERS) continue;
+            const qx = q % MAT_N, qz = (q - qx) / MAT_N;
+            if (h2(qx, qz, 171) > 0.42) continue;
+            const wx = (qx + 0.5) / MAT_RES - HALF_GRID + (h2(qx, qz, 172) - 0.5) * 0.12;
+            const wz = (qz + 0.5) / MAT_RES - HALF_GRID + (h2(qx, qz, 173) - 0.5) * 0.12;
+            const tile = placedItems.get(`${Math.floor(wx + HALF_GRID)},${Math.floor(wz + HALF_GRID)}`);
+            if (tile && (tile.id === 'path' || tile.id === 'cabin')) continue;
+            if (isBlockedForPoint(wx, wz, 0.05, false)) continue;
+            fl.push({ wx, wy: getContinuousTerrainHeight(wx, wz), wz, rotation: Math.floor(h2(qx, qz, 174) * 4), scale: 0.4 + 0.16 * h2(qx, qz, 175), spawnT: terrain.bloomT[q] });
+          }
+        }
+
         // Apply InstancedMeshes
         ITEM_DEFS.forEach((def) => {
           if (!isInstancedDef(def)) return;
@@ -6558,6 +6701,8 @@
         function isGrassSpotValid(tx, tz) {
           if (Math.abs(tx) > HALF_GRID - 0.18 || Math.abs(tz) > HALF_GRID - 0.18) return false;
           if (getPondSDF(tx, tz) < 0.16) return false;
+          const pm = terrainPaintAt(tx, tz);
+          if (pm === MAT_SAND || pm === MAT_DIRT || pm === MAT_STONE) return false;
           const gx = Math.floor(tx + HALF_GRID);
           const gz = Math.floor(tz + HALF_GRID);
           const tileItem = placedItems.get(`${gx},${gz}`);
@@ -6821,7 +6966,71 @@
         audio.playTerrain(dir, screenPan(cx, y, cz));
         return true;
       }
+      /* ---- GROUND PAINT (step 3: drag a quarter-tile brush) ---- */
+      // Only the turf colours change while dragging (one rebuild per frame at most); grass tufts and
+      // flower-bed flowers follow when the stroke ends. Refused: under the pond.
+      let paintStroke = null, repaintPending = false;
+      const paintCellAt = (wx, wz) => [Math.floor((wx + HALF_GRID) * MAT_RES), Math.floor((wz + HALF_GRID) * MAT_RES)];
+      const paintCellCentre = (qx, qz) => [(qx + 0.5) / MAT_RES - HALF_GRID, (qz + 0.5) / MAT_RES - HALF_GRID];
+      function paintAllowed(qx, qz) {
+        if (qx < 0 || qx >= MAT_N || qz < 0 || qz >= MAT_N) return false;
+        const [cx, cz] = paintCellCentre(qx, qz);
+        return getPondSDF(cx, cz) >= 0.05;
+      }
+      function paintCell(qx, qz, mat) { // true when the cell changed
+        if (!paintAllowed(qx, qz)) return false;
+        const q = qz * MAT_N + qx, old = terrain.mat[q];
+        if (old === mat) return false;
+        terrain.mat[q] = mat;
+        terrain.painted += (old === MAT_GRASS ? 1 : 0) - (mat === MAT_GRASS ? 1 : 0);
+        if (mat === MAT_FLOWERS) terrain.bloomT[q] = performance.now() * 0.001;
+        terrain.version++;
+        return true;
+      }
+      function flushRepaint() { if (repaintPending) { repaintPending = false; repaintTerrainSurface(); } }
+      function queueRepaint() {
+        if (repaintPending) return;
+        repaintPending = true;
+        requestAnimationFrame(flushRepaint);
+      }
+      function paintStrokeTo(wx, wz) {
+        const st = paintStroke, dx = wx - st.wx, dz = wz - st.wz;
+        const n = Math.max(1, Math.ceil(Math.hypot(dx, dz) / 0.1)); // fast drags don't skip cells
+        for (let k = st.started ? 1 : 0; k <= n; k++) {
+          const [qx, qz] = paintCellAt(st.wx + dx * k / n, st.wz + dz * k / n);
+          if (qx === st.qx && qz === st.qz) continue;
+          st.qx = qx; st.qz = qz;
+          if (!paintCell(qx, qz, st.mat)) { if (!paintAllowed(qx, qz)) st.blocked = true; continue; }
+          st.changed++;
+          const now = performance.now();
+          if (now - st.lastFx > 70) {
+            st.lastFx = now;
+            const [cx, cz] = paintCellCentre(qx, qz), cy = getContinuousTerrainHeight(cx, cz);
+            audio.playPaint(st.mat, screenPan(cx, cy, cz));
+            if (st.mat !== MAT_STONE) burstDust(cx, cy, cz, 3, 0.12);
+          }
+        }
+        st.started = true; st.wx = wx; st.wz = wz;
+        if (st.changed > st.shown) { st.shown = st.changed; queueRepaint(); }
+      }
+      function beginPaintStroke(hit, mat) {
+        paintStroke = { mat, wx: hit.wx, wz: hit.wz, qx: -1, qz: -1, started: false, changed: 0, shown: 0, blocked: false, lastFx: 0 };
+        paintStrokeTo(hit.wx, hit.wz);
+      }
+      function endPaintStroke() {
+        const st = paintStroke;
+        if (!st) return;
+        paintStroke = null;
+        flushRepaint();
+        if (st.changed) rebuildInstances(); // tufts leave bare ground, flower beds bloom (+ shadow refresh)
+        else if (st.blocked) {
+          const [cx, cz] = paintCellCentre(st.qx, st.qz);
+          audio.playTerrainBlocked(screenPan(cx, 0, cz));
+        }
+      }
+
       function terrainIsDefault() {
+        if (terrain.painted) return false;
         for (let gz = 0; gz < GRID_SIZE; gz++) for (let gx = 0; gx < GRID_SIZE; gx++) {
           if (terrain.level[gz * GRID_SIZE + gx] !== defaultHillLevel(gx, gz)) return false;
         }
@@ -6834,7 +7043,7 @@
           return;
         }
         const tt = terrainToolById(selectedTool);
-        if (tt) { editTerrainAt(hit.gx, hit.gz, tt.dir); return; }
+        if (tt) { if (tt.paint !== undefined) beginPaintStroke(hit, tt.paint); else editTerrainAt(hit.gx, hit.gz, tt.dir); return; }
         if (!canPlaceAtHit(selectedTool, hit)) {
           return; // Blocked by collision/water; red ghost provides clear visual feedback
         }
@@ -6909,6 +7118,16 @@
         }
 
         const tt = terrainToolById(selectedTool);
+        if (tt && tt.paint !== undefined) { // ground paint: the quarter tile under the brush
+          const [qx, qz] = paintCellAt(wx, wz), [cx, cz] = paintCellCentre(qx, qz), r = 0.5 / MAT_RES;
+          let y = -1e9;
+          for (const [ox, oz] of [[-r, -r], [r, -r], [-r, r], [r, r], [0, 0]]) y = Math.max(y, getTurfHeight(cx + ox, cz + oz));
+          cursorTile.visible = true;
+          cursorTile.scale.set(1.12 / MAT_RES / 0.98, 1.12 / MAT_RES / 0.98, 1);
+          cursorTile.position.set(cx, y + 0.03, cz);
+          cursorMat.color.set(paintAllowed(qx, qz) ? tt.cursor : '#ff5252');
+          return;
+        }
         if (tt) { // terrain tool: the tile lights up (green up, gold down) or red when blocked
           cursorTile.visible = true;
           cursorTile.position.set(gx - HALF_GRID + 0.5, getTileElevation(gx, gz) + 0.025, gz - HALF_GRID + 0.5);
@@ -7354,6 +7573,7 @@
           }
         } else if (!isPhotoMode && !isExploded) {
           const hit = getHitUnderClient(e.clientX, e.clientY);
+          if (paintStroke && hit && (e.buttons & 1)) paintStrokeTo(hit.wx, hit.wz);
           hoveredHit = hit;
           updateHoverVisuals();
         }
@@ -7364,7 +7584,9 @@
         updateHoverVisuals();
       });
 
+      window.addEventListener('pointercancel', () => endPaintStroke()); // a cancelled touch still finishes the stroke
       window.addEventListener('pointerup', (e) => {
+        if (paintStroke && e.button === 0) endPaintStroke();
         if (isOrbiting && e.button === orbitButton) {
           if (orbitButton === 2 && !isPanning && !hasMovedSignificantly && performance.now() - dragStartTime < 350 && !isPhotoMode && !isExploded) {
             const hit = getHitUnderClient(e.clientX, e.clientY);
@@ -8267,6 +8489,11 @@
           terrainLevel: (gx, gz) => getHillLevel(gx, gz),
           terrainVersion: () => terrain.version,
           terrainAllowed: (gx, gz, dir) => terrainEditAllowed(gx, gz, dir),
+          terrainMat: (qx, qz) => terrain.mat[qz * MAT_N + qx],
+          terrainPaintAt: (x, z) => terrainPaintAt(x, z),
+          terrainPainted: () => terrain.painted,
+          paintAllowed: (qx, qz) => paintAllowed(qx, qz),
+          instanceCount: (id) => instancedById[id].count,
           islandDigest: () => { // like meshDigest, island layers only (no cursor / ghosts / particles)
             const fnv = (arr, h) => { const u8 = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength); for (let k = 0; k < u8.length; k++) { h ^= u8[k]; h = Math.imul(h, 16777619) >>> 0; } return h; };
             const out = [];
