@@ -119,6 +119,18 @@ $env:SHOT='night'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#d
     - UI(글자 최소, 나무 토큰 아이콘 규칙)
 
     `localStorage` 접근은 try/catch로 감싼다(사생활 모드). 테스트는 `tools/tests/save.mjs`(저장 → 새로고침 → 섬 메쉬 `islandDigest`·오브젝트 목록이 같은지, 깨진 데이터는 무시)로 한다.
+  - **⑤ 기획 결정 (사용자 2026-11-27, 구현은 아직 안 함):** 자동 1칸 + 수동 3칸. 지금 섬은 숨은 자동 칸에 계속 저장되고, 다시 열면 그 섬으로 시작 조립을 한다(성능 질문에 "몇 KB, 편집 때만 1초 뒤 한 번 저장, 평소 프레임 비용 없음"이라고 답함). 수동 3칸은 원할 때 남기는 스냅샷이고, 불러오면 그 섬이 지금 섬이 된다. 창은 오른쪽 위 새 나무 토큰 → `.panel` 안에 크림색 종이 카드 3장(섬 미리보기 그림, 카드마다 저장·불러오기·지우기 토큰). 시간대도 기억한다(카메라·소리는 안 함). 파일 내보내기·가져오기는 나중에. "처음 섬으로"·"모두 비우기"는 다른 편집처럼 자동 저장되고 수동 칸은 그대로 둔다.
+  - **⑤ 구현 설계 (코드 조사 끝, 이대로 하면 됨):**
+    - 키: `mori-isle.v1.auto`, `mori-isle.v1.slot1~3`(`{v:1, savedAt, island, thumb}`), 시간대는 따로 `mori-isle.prefs`(`{time}`, 칸마다가 아닌 설정). `#save=0`이면 읽기·쓰기 모두 끔. cdp는 실행마다 새 프로필이라 기존 테스트에 영향 없음(테스트 첫 줄의 `location.reload()`는 빈 저장소 상태에서 돎).
+    - `island`: `level`·`mat`는 base64, `placed` [id,gx,gz,rotation], `snap` [id,wx,wz,rotation], `free` [id,wx,wz,rotation,scale], `seeds` [wx,wz,rot,scale,tint](`erased`는 뺌). 좌표는 반올림하지 않는다(다시 불러온 섬이 정확히 같도록, 씨앗 640송이여도 약 60KB).
+    - 검증: 버전, 배열 길이, level 0~`TERRAIN_MAX`, mat 0~4가 틀리면 저장본 전체를 버린다. 오브젝트는 하나씩(`assetsById`에 있고, 배치 방식이 맞고, 숫자가 유한하고 섬 안) 걸러낸다.
+    - 적용 `applyIsland(data, rebuild)`: `terrain.level/mat` set → `painted`·`water` 다시 세기 → `rebuildWaterField()` → `terrain.version++` → `rebuildTerrainSurface()` → `markShadowsDirty(1.0)` → 목록 채우기 → `rebuildInstances()`(`populateStarterIsland`와 같은 모양).
+    - 부팅(16번, `setTimeOfDay(0); populateStarterIsland();` 자리): 자동 칸이 유효하면 `applyIsland`, 아니면 처음 섬. 시간대는 `#time=`처럼 바로 맞춤(9500줄 근처 `curAtmo` 복사 코드를 함수로 빼서 같이 씀). `#time=`이 있으면 그쪽이 이김.
+    - 자동 저장: `queueAutosave()`(1초 디바운스)를 `rebuildInstances` 끝과 `rebuildSeedFlowers`에서 부름. 실행될 때 `intro.phase !== 'done'`이면 다시 미룸. 시간대 버튼 클릭 때 prefs 저장.
+    - 수동 칸 불러오기: `resetIsland`를 `resetIsland(apply = populateStarterIsland)`로 일반화(흔들림 → 낙하 → `apply(false)` → `startAssembly(false)`). `startAssembly`는 지금 `seedFlowers`의 `spawnT`를 안 건드리니, 씨앗도 `IT.small` 시각으로 자라게 추가한다.
+    - 미리보기: `animate`의 마지막 `renderer.render(upScene, postCamera)` 바로 뒤에 대기 중인 요청이 있으면 `renderer.domElement`를 작은 캔버스(약 150×100, 가운데 3:2로 자름)에 그려 JPEG dataURL로(같은 작업 안이라 `preserveDrawingBuffer` 불필요). 찍기 전 `hoveredHit = null; updateHoverVisuals()`.
+    - UI: `#sys`의 구분선 뒤, 초기화 앞에 `#btn-save`(빈 자리, `setToken`). 새 그림 `GLYPHS`: `book`(시스템 버튼, 리본 끈 달린 펼친 책), `save_in`(쟁반으로 내려가는 화살표), `load`(쟁반에서 올라오는 화살표), 지우기는 기존 `trash`. 빈 칸은 빈 종이 + 저장 토큰만. 덮어쓰기·지우기는 두 번 눌러야 함(첫 클릭에 `arm` 클래스 + `data-hint` 바꿈). 불러오기는 한 번. 패널 열고 닫기는 `reset-popover`와 같은 방식(바깥 클릭 닫기, 도움말과 서로 닫기). `data-hint` 리스너는 8288줄 근처에서 처음 한 번만 붙으니, 새 버튼은 그 전에 HTML에 있어야 한다.
+    - 테스트 `tools/tests/save.mjs` + 디버그 훅(`saveSlots`, `autosaveNow` 같은 것): 편집 → 자동 저장 → `Page.reload` → `islandDigest`·목록·시간대가 같은지, 깨진 JSON이나 길이가 틀린 데이터는 무시하고 처음 섬, 수동 칸 저장 → 편집 → 불러오기로 복구, 지우기, 콘솔 오류 0.
   - **이후 단계 메모 (옛 계획, ④ 끝난 부분 포함):** 4단계 물은 `level` 음수(0 아래 파기)와 물 칸, 물에 잠긴 오브젝트 막기·지우기, 연못 SDF를 칸 데이터 거리장으로(위 '연못 관련' 고정 좌표도 함께). 성능: 편집 때만 다시 만들고 평소 프레임 비용 변화 없음. 배치 규칙(`snapRectBlocked`, `shoreOk`, `isBlockedForPoint`, `canPlaceAtHit`)과 선착장은 지형 함수를 쓰므로 데이터를 따라온다.
 - **굴뚝 연기 (사용자 확인 끝, 2026-11-26):** 사용자 지적(조립 중 잔존, 증기기관차 같은 분출, 불투명, 회색 안쪽·아랫면)을 고친 `4921259`에 "좋네요" 답을 받았다. 다시 지적이 없으면 건드리지 않는다. 실기기 프레임만 미확인.
 - **배경(하늘) 품질 높이기 (적용했다가 취소, 2026-11-26):** ①②를 커밋하고(`6343b86`, `f7dbb69`) ⑥을 손보던 중 사용자가 전부 취소하고 복구해 달라고 해서 게임 코드를 작업 전(`eba554c`) 상태로 되돌렸다(`0721c72`). 취소 이유는 듣지 않았다. 사용자가 먼저 꺼내지 않으면 다시 시작하지 않는다. 아래는 작업 전의 분석과 제안이다.
