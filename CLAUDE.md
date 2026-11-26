@@ -22,6 +22,7 @@
 ## 코드 구조 (mori_isle.html)
 - 상단 상수: `HASH`(URL 옵션), `LOWRES`(저해상도 설정), `ATMOSPHERES`(낮·노을·밤), `ITEM_DEFS`(오브젝트 정의, `drawSlice`로 적층 레이어를 그림).
 - **4B. SOUP MESH KIT** (Cinderwatch에서 옮김, MIT 고지 포함): `Soup`으로 도형을 조립하고, 꼭짓점마다 `aSurf`(재질 종류, 거칠기, 흔들림, 발광)를 넣는다. 재질은 64×64 텍스처 11장 묶음(`L_WOOD`, `L_METAL` 등) + 요철 셰이더 하나를 공유한다. `add()` 한 번이 부품 하나이고, 부품을 높이순으로 묶어 `aLayerH`에 넣기 때문에 적층과 같은 낙하·분해 셰이더가 그대로 동작한다. 하위 조립품은 `merge()`로 붙이면 한 덩어리로 떨어진다.
+- **도는 부품 (`def.spin`):** `aSurf.z`(sway)가 음수인 꼭짓점은 셰이더에서 `def.spin.pivot`(로컬 x, y)을 지나는 로컬 z축으로 `speed` rad/s만큼 돈다(`SPIN_OFF`, `soupSpin`). draw call 추가 없음, 낙하·분해 연출을 그대로 따른다. 그림자 패스에는 회전이 없다(바람 흔들림과 같음). `soupSpin`은 `uTime`을 인자로 받는다(어떤 재질에서는 `uTime` 선언이 뒤에 와서 직접 쓰면 컴파일 실패, 실제로 겪음). 셰이더를 고치면 콘솔 오류를 꼭 확인한다(테스트는 통과해도 조립 오브젝트 전체가 사라질 수 있음).
 - **조립 오브젝트 추가:** `SOUP_ITEMS`에 `type: 'soup'`, `build(S, rng)`로 정의하고 같은 id의 `ITEM_DEFS` 항목을 대체한다. 적층 버전이 없는 새 오브젝트(예: `woodpile`)는 `SOUP_ITEMS`에 `name`·`category`·`freePlace`까지 넣으면 팔레트에 추가된다. 충돌 반경은 `solidRadius`(칸 배치·자유 배치 모두). 매달린 천처럼 위가 고정되고 아래가 흔들리는 부품은 `soupSwayBelow`. `deform`은 크기를 곱한 뒤(실제 크기) 꼭짓점에 적용된다. 아이콘은 실제 모델을 찍어 만든다(`renderSoupIcon`). 불빛이 칸 중앙에 있지 않으면 `glow.offsetX/offsetZ`를 준다. 색은 `MCOL`, 금속은 `metalness` 대신 낮은 거칠기(0.3~0.5)로 반사를 낸다.
 - **UI (14. HUD):** 글자를 최소로 둔다(사용자 결정). 아래는 카테고리 슬롯(`catSlots`, 호버 90ms 뒤 열림·220ms 유예 뒤 닫힘, 터치는 클릭으로 토글) + 지우개 + 회전, 오른쪽 위는 아이콘만. 이름은 호버·선택 때 `showItemName`으로 잠깐만 띄운다. 색은 CSS 변수(`--ink`, `--glow`, 시간대별 `--scrim`·`--halo`), 글꼴은 Galmuri(jsDelivr). **HUD 아이콘은 "손으로 깎은 나무 토큰"**(사용자 결정: Tiny Glade·동물의 숲처럼 일관된 코지 스큐어모피즘이되 고유하게). `4C. COZY UI TOKENS`의 `GLYPHS`(56×56, 진한 갈색 선 + 홈에 채운 차분한 색)와 `makeToken(name, {round})`로 만든다. 카테고리 슬롯은 오브젝트 그림이 아니라 카테고리 토큰. 새 아이콘도 이 방식으로만 추가한다. 트레이의 오브젝트는 크림색 종이 카드 위의 실제 3D 모델 아이콘(`renderObjectIcon` + `fitIconCanvas`, 소나무·참나무·들꽃·갈대·버섯은 적층 그림). 새 텍스트 배너나 상자형 패널을 늘리지 말 것. 사용자 결정: 아이콘 밑 숫자·키 표시 없음, 브라우저 `title` 툴팁 금지(아이콘 버튼은 `data-hint` 이름표, 카테고리는 이름표 없음). 4초 유휴 흐림(`ui-idle`)은 `.panel`을 제외해야 한다(아니면 닫힌 창이 보인다).
 - **지형 (8. 섬):** 윗면은 0.2 간격 격자를 살짝 흔들고 삼각형마다 평면 법선·색 하나(`turfColor`, 잔디는 `L_GRASS`, 비탈은 흙·바위). 높이는 `getTurfHeight`(= `getContinuousTerrainHeight` + 가장자리 경사 + ±약 3cm 요철). 지층 세 덩어리는 `buildStrataChunk`(띠 + 위 밝고 아래 어두운 턱, 표토 윗선은 잔디 가장자리 꼭짓점과 정확히 맞춤 → 가장자리 꼭짓점은 흔들지 않는다). 돌길은 `pathMesh` 하나를 `rebuildInstances`에서 `buildPathGeometry`로 다시 만든다. 셋 다 공유 재질 `makeTerrainMaterial`(Soup 텍스처 묶음 + 요철 + 안개·바람, `userData.shared`). 매끈한 `topGeo`는 격자 오버레이 전용. 접지 그림자는 요철 위로 `wy + 0.026`.
@@ -92,7 +93,7 @@ $env:SHOT='night'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#d
 
   | 카테고리 | 추가할 것 |
   | --- | --- |
-  | 건물 | 장작 창고, 우물, 작은 다리, 풍차 |
+  | 건물 | 완료: 장작 창고, 우물, 풍차(작은 크기, 도는 날개). 남음: 작은 다리(연못이 폭 약 3칸의 둥근 덩어리라 양 끝이 땅에 닿는 짧은 다리 자리가 없음, 대안 사용자에게 물음) |
   | 나무·식물 | 자작나무, 벚나무, 덤불, 그루터기, 텃밭 |
   | 길·담 | 돌담, 징검다리, 나무 계단 |
   | 생활 소품 | 완료: 장작더미, 우편함, 손수레, 빨랫줄, 화분(자유 배치) |
