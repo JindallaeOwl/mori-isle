@@ -4825,6 +4825,7 @@
           for (const [ox, oz] of [[0, 0], [s, 0], [0, s], [s, s]]) d = Math.min(d, getPondSDF(x0 + ox, z0 + oz));
           if (d > reach) continue;
           const y = getTileElevation(Math.floor(qx / MAT_RES), Math.floor(qz / MAT_RES)), b = pos.length / 3;
+          if (getHillHeight(x0 + s / 2, z0 + s / 2) < y - 0.02) continue; // over a slope down (a waterfall lip): the fall strip covers it
           for (const [ox, oz] of [[0, 0], [s, 0], [0, s], [s, s]]) {
             const x = x0 + ox, z = z0 + oz;
             pos.push(x, y, z); uv.push((x + HALF_GRID) / GRID_SIZE, (HALF_GRID - z) / GRID_SIZE);
@@ -5031,11 +5032,44 @@
           for (let k = 1; k <= 14; k++) { const t = k / 14; pts.push([edgeFallS(t), ys - Hd * t, t]); }
           return { pts, foot: [edgeFallS(0.7), ys - Hd * 0.7] };
         }
-        const ys = seg.top + FALL_SURF, yb = seg.bot + FALL_SURF, H = ys - yb;
-        const Lf = 0.2 + 0.05 * Math.min(3, H / STEP_HEIGHT), pts = [[-0.16, ys, -0.6], [-0.08, ys, -0.3], [0, ys, 0]];
-        for (let k = 1; k <= 10; k++) { const t = k / 10; pts.push([Lf * t, ys - H * t * t, t]); }
-        pts.push([Lf + 0.07, yb, 1.25], [Lf + 0.16, yb, 1.6]);
-        return { pts, foot: [Lf, yb] };
+        // between terraces the water rolls over a round crest where the terrace slope starts (0.28
+        // before the edge) and falls in a gentle arc a little clear of the bank, never under a thin
+        // sheet on it (ground = the highest point across the strip's middle), held between the two
+        // pond surfaces and smoothed into one curve
+        const ys = seg.top + FALL_SURF, yb = seg.bot + FALL_SURF, H = ys - yb, sd = seg.sx || seg.sz;
+        const am = (seg.a0 + seg.a1) / 2, ah = Math.max(0, (seg.a1 - seg.a0) / 2 - 0.02), DS = 0.025, S0 = -0.5;
+        const groundAt = (s) => {
+          let g = -9;
+          for (let k = -2; k <= 2; k++) {
+            const a = am + ah * k / 2, l = seg.line + sd * s;
+            g = Math.max(g, getContinuousTerrainHeight(seg.sx ? l : a, seg.sx ? a : l));
+          }
+          return g;
+        };
+        const gTop = groundAt(-0.3), dTop = Math.max(0.06, ys - gTop), ysA = [];
+        const nS = Math.round((0.28 * Math.max(1, H / STEP_HEIGHT) + 0.5 + 0.3) / DS);
+        const SC = -0.26, Lf = 0.33 * Math.sqrt(H / STEP_HEIGHT); // a gentle arc off a round crest, ~0.1 clear of the bank
+        for (let k = 0; k <= nS; k++) {
+          const s = S0 + k * DS, f = THREE.MathUtils.smoothstep(s, -0.3, -0.1), u = Math.max(0, s - SC) / Lf;
+          const hug = groundAt(s) + dTop + (0.06 - dTop) * f; // never below a thin sheet on the bank
+          ysA.push(Math.min(ys, Math.max(yb, hug, ys - H * u * u)));
+        }
+        for (let pass = 0; pass < 3; pass++) { // round off the crest and the foot
+          const c = ysA.slice();
+          for (let k = 1; k < nS; k++) ysA[k] = (c[k - 1] + 2 * c[k] + c[k + 1]) / 4;
+        }
+        let kc = ysA.findIndex((y) => y < ys - 0.003), kf = ysA.findIndex((y) => y <= yb + 0.003);
+        if (kc < 0) kc = 12;
+        if (kf < kc) kf = nS;
+        const sc = S0 + kc * DS, sf = S0 + kf * DS, pts = [];
+        for (let k = 0; k <= nS; k++) {
+          const s = S0 + k * DS;
+          if (s > sf + 0.17) break;
+          const t = s < sc ? (s - sc) * 2.4 : (s > sf ? 1 + (s - sf) * 3.6 : Math.max(0, Math.min(1, (ys - ysA[k]) / H)));
+          if (t < -0.62) continue;
+          pts.push([s, ysA[k], t]);
+        }
+        return { pts, foot: [sf, yb] };
       };
       const fallFeet = []; // where the falls land, every ~0.5 along them: { x, y, z, dx, dz: the way it falls, w: width, edge }
       const buildFallGeometry = () => {
@@ -9369,6 +9403,7 @@
           fallPool: () => fallPool.reduce((n, v) => n + v, 0),
           fallSheet: () => ({ visible: fallMesh.visible, verts: fallMesh.geometry.attributes.position.count, spray: sprayPoints.visible ? sprayPoints.geometry.attributes.position.count : 0, feet: fallFeet.length, ripples: waterMat.uniforms.uRipN.value, k: fallMat.uniforms.uK.value, sound: audio.fallLevel || 0 }),
           lipInfo: (qx, qz) => lipInfo(qx, qz),
+          fallVerts: () => Array.from(fallMesh.geometry.attributes.position.array, (v) => Math.round(v * 1000) / 1000),
           waterSheet: () => ({ water: waterMesh.geometry.index.count / 6, mist: pondMist.geometry.index.count / 6, lilies: lilyParts.map((lp) => lp.meshes[0].visible) }),
           instanceCount: (id) => instancedById[id].count,
           instanceVisible: (id) => instancedById[id].visible,
