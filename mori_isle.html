@@ -560,11 +560,10 @@
     // mat: painted ground per quarter tile (MAT_N x MAT_N, index qz * MAT_N + qx), 0 = grass = the
     // default look (the turf colours exactly as before), painted: how many cells are not grass.
     const MAT_RES = 4, MAT_N = GRID_SIZE * MAT_RES;
-    const MAT_GRASS = 0, MAT_SAND = 1, MAT_DIRT = 2, MAT_STONE = 3, MAT_FLOWERS = 4, MAT_KINDS = 5;
+    const MAT_GRASS = 0, MAT_SAND = 1, MAT_DIRT = 2, MAT_STONE = 3, MAT_KINDS = 4;
     const terrain = {
       level: new Int8Array(GRID_SIZE * GRID_SIZE),
       mat: new Uint8Array(MAT_N * MAT_N),
-      bloomT: new Float32Array(MAT_N * MAT_N).fill(-100), // when a flower cell was painted (its flowers drop in)
       painted: 0,
       version: 0 // bumped on every change (rebuild checks)
     };
@@ -586,7 +585,7 @@
       for (let gz = 0; gz < GRID_SIZE; gz++) for (let gx = 0; gx < GRID_SIZE; gx++) {
         terrain.level[gz * GRID_SIZE + gx] = defaultHillLevel(gx, gz);
       }
-      terrain.mat.fill(MAT_GRASS); terrain.bloomT.fill(-100); terrain.painted = 0;
+      terrain.mat.fill(MAT_GRASS); terrain.painted = 0;
       terrain.version++;
     }
     resetTerrainData();
@@ -1244,24 +1243,29 @@
           this.noiseHit(t + 0.06 + i * 0.045 + Math.random() * 0.03, { freq: 1300 + Math.random() * 1500, q: 2.5, vol: 0.035, decay: 0.025, pan: pan + (Math.random() - 0.5) * 0.2 });
         }
       }
-      // ground paint: a soft brush swish coloured by the material (sand hiss, dirt scuff,
-      // stone click, flowers a tiny chime)
+      // ground paint: a soft brush swish coloured by the material (sand hiss, dirt scuff, stone click)
       playPaint(mat = 0, pan = 0) {
         if (!this.ctx || !this.enabled) return;
         const t = this.ctx.currentTime;
-        const P = [[2600, 0.8, 0.05], [5200, 0.7, 0.05], [900, 0.9, 0.06], [1700, 2.5, 0.045], [3000, 1, 0.04]][mat] || [2600, 0.8, 0.05];
+        const P = [[2600, 0.8, 0.05], [5200, 0.7, 0.05], [900, 0.9, 0.06], [1700, 2.5, 0.045]][mat] || [2600, 0.8, 0.05];
         this.noiseHit(t, { freq: P[0] * (0.92 + Math.random() * 0.16), q: P[1], vol: P[2], decay: 0.07, pan });
         if (mat === 3) this.noiseHit(t + 0.025, { freq: 2400 + Math.random() * 600, q: 6, vol: 0.05, decay: 0.018, pan });
-        if (mat === 4) {
-          const o = this.ctx.createOscillator(), g = this.ctx.createGain();
-          o.type = 'sine';
-          o.frequency.value = [1046.5, 1174.7, 1318.5, 1568, 1760][Math.floor(Math.random() * 5)];
-          g.gain.setValueAtTime(0.0001, t);
-          g.gain.linearRampToValueAtTime(0.03, t + 0.008);
-          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
-          o.connect(g); this.out(g, pan);
-          o.start(t); o.stop(t + 0.32);
+      }
+      // wildflower seeds: a patter of tiny seeds, then a soft chime as the flowers come up
+      playSeeds(pan = 0) {
+        if (!this.ctx || !this.enabled) return;
+        const t = this.ctx.currentTime;
+        for (let i = 0; i < 6; i++) {
+          this.noiseHit(t + i * 0.028 + Math.random() * 0.02, { freq: 3800 + Math.random() * 2600, q: 5, vol: 0.03, decay: 0.012, pan: pan + (Math.random() - 0.5) * 0.3 });
         }
+        const o = this.ctx.createOscillator(), g = this.ctx.createGain(), t1 = t + 0.22;
+        o.type = 'sine';
+        o.frequency.value = [1046.5, 1174.7, 1318.5, 1568, 1760][Math.floor(Math.random() * 5)];
+        g.gain.setValueAtTime(0.0001, t1);
+        g.gain.linearRampToValueAtTime(0.028, t1 + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, t1 + 0.38);
+        o.connect(g); this.out(g, pan);
+        o.start(t1); o.stop(t1 + 0.4);
       }
       // terrain edit refused: a dull wooden knock
       playTerrainBlocked(pan = 0) {
@@ -2119,12 +2123,6 @@
         { el: 'ellipse', cx: 34, cy: 36.8, rx: 4.2, ry: 2.7, f: '#9da2ab' },
         { el: 'ellipse', cx: 33, cy: 30.6, rx: 2.6, ry: 1.7, f: '#878c96' }
       ],
-      p_flowers: [
-        { el: 'ellipse', cx: 28, cy: 35, rx: 17, ry: 9, f: '#8db35a' },
-        { el: 'circle', cx: 21.5, cy: 32, r: 3.3, f: '#f1a7bd' },
-        { el: 'circle', cx: 33.5, cy: 33.5, r: 3.3, f: '#f4d66b' },
-        { el: 'circle', cx: 27.5, cy: 39, r: 2.8, f: '#f3eee0' }
-      ],
       lower: [
         { el: 'path', d: 'M12 33h8.5l3.2 6.5h8.6l3.2-6.5H44v10H12z', f: '#a8744a' },
         { el: 'path', d: 'M11.5 31h9.5v2.6h-9.5zM35 31h9.5v2.6H35z', f: '#8db35a' },
@@ -2607,6 +2605,43 @@
               px(ctx, b.x, b.y, b.center);
             } else if (layer === b.h) px(ctx, b.x, b.y, b.center);
           }
+        }
+      },
+      {
+        // 들꽃 씨앗 (not the 들꽃 clump above): scattered by the handful, each one a single little
+        // flower that grows out of the ground. The white petals take each flower's own colour
+        // (per-instance aTint, SEED_TINTS); kept in seedFlowers, not freeProps.
+        id: 'seeds',
+        name: '들꽃 씨앗',
+        category: 'nature',
+        type: 'stack',
+        freePlace: true,
+        seedScatter: true,
+        maxInstances: 640,
+        size: 9,
+        layers: 10,
+        layerStep: 0.024,
+        scale: 0.27,
+        roughness: 0.85,
+        metalness: 0.0,
+        windStrength: 0.08,
+        explodeSliceFactor: 0.3,
+        explodeTier: 0,
+        canopySplit: 0.0,
+        glow: null,
+        contactRadius: 0,
+        drawSlice(ctx, emCtx, layer, total, s) {
+          const c = 4;
+          if (layer <= 6) px(ctx, c, c, layer < 2 ? '#3f7838' : '#579a47'); // stem
+          if (layer === 2) { px(ctx, c - 1, c + 1, '#5fa34a'); px(ctx, c - 2, c + 1, '#4f8f3e'); } // leaves
+          if (layer === 4) { px(ctx, c + 1, c - 1, '#5fa34a'); px(ctx, c + 2, c - 1, '#4f8f3e'); }
+          const ring = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+          if (layer === 7) { for (const [dx, dy] of ring) px(ctx, c + dx, c + dy, '#f2f2f2'); px(ctx, c, c, '#e3b443'); }
+          if (layer === 8) {
+            for (const [dx, dy] of ring.concat([[-1, -1], [1, -1], [-1, 1], [1, 1], [-2, 0], [2, 0], [0, -2], [0, 2]])) px(ctx, c + dx, c + dy, '#ffffff');
+            px(ctx, c, c, '#f2c443');
+          }
+          if (layer === 9) px(ctx, c, c, '#f9d65a');
         }
       },
       {
@@ -3639,8 +3674,7 @@
       { id: 'paint_grass', name: '잔디', category: 'terrain', glyph: 'p_grass', paint: MAT_GRASS, cursor: '#a8ffbe' },
       { id: 'paint_sand', name: '모래', category: 'terrain', glyph: 'p_sand', paint: MAT_SAND, cursor: '#ffe7a8' },
       { id: 'paint_dirt', name: '흙', category: 'terrain', glyph: 'p_dirt', paint: MAT_DIRT, cursor: '#e8b88a' },
-      { id: 'paint_stone', name: '돌바닥', category: 'terrain', glyph: 'p_stone', paint: MAT_STONE, cursor: '#d6dde8' },
-      { id: 'paint_flowers', name: '꽃밭', category: 'terrain', glyph: 'p_flowers', paint: MAT_FLOWERS, cursor: '#ffb8d6' }
+      { id: 'paint_stone', name: '돌바닥', category: 'terrain', glyph: 'p_stone', paint: MAT_STONE, cursor: '#d6dde8' }
     ];
     const TERRAIN_MAX = 3; // steps above the meadow (digging below it comes with water, step 4)
     const terrainToolById = (id) => TERRAIN_TOOLS.find((t) => t.id === id);
@@ -3742,6 +3776,43 @@
 
       const iconCanvas = renderMiniIsoIcon(sliceCanvases, size);
       return { def, geometry, colorTex, emTex, iconCanvas };
+    }
+
+    // seed flower colours (petals are white in the sprite and multiplied by one of these)
+    const SEED_TINT_HEX = ['#f49ab8', '#f7d95e', '#f6f1e4', '#b79cf0', '#9cc6f5'];
+    function renderSeedIcon(def) {
+      const N = 40, { size, layers } = def;
+      const c = document.createElement('canvas'); c.width = N; c.height = N;
+      const ctx = c.getContext('2d'); ctx.imageSmoothingEnabled = false;
+      const em = document.createElement('canvas').getContext('2d');
+      const tinted = SEED_TINT_HEX.map((hex) => {
+        const t = new THREE.Color(hex), out = [];
+        for (let i = 0; i < layers; i++) {
+          const sc = document.createElement('canvas'); sc.width = size; sc.height = size;
+          const sctx = sc.getContext('2d'); sctx.imageSmoothingEnabled = false;
+          def.drawSlice(sctx, em, i, layers, size);
+          const img = sctx.getImageData(0, 0, size, size), d = img.data;
+          for (let k = 0; k < d.length; k += 4) {
+            if (d[k + 3] && Math.min(d[k], d[k + 1], d[k + 2]) > 200) { d[k] *= t.r ** (1 / 2.2); d[k + 1] *= t.g ** (1 / 2.2); d[k + 2] *= t.b ** (1 / 2.2); }
+          }
+          sctx.putImageData(img, 0, 0);
+          out.push(sc);
+        }
+        return out;
+      });
+      const spots = [[-11, -6, 4], [10, -5, 0], [-1, -3, 2], [-9, 4, 1], [8, 5, 3], [1, 8, 0], [-3, 13, 1]];
+      for (const [dx, dy, ti] of spots) {
+        for (let i = 0; i < layers; i++) {
+          ctx.save();
+          ctx.translate(N / 2 + dx, 24 + dy * 0.7 - i * 1.3);
+          ctx.scale(1.15, 1.15 * 0.56);
+          ctx.rotate(Math.PI / 4);
+          ctx.filter = `brightness(${(0.78 + 0.3 * i / (layers - 1)).toFixed(2)})`;
+          ctx.drawImage(tinted[ti][i], -size / 2, -size / 2);
+          ctx.restore();
+        }
+      }
+      return c;
     }
 
     function renderMiniIsoIcon(sliceCanvases, size) {
@@ -4312,8 +4383,7 @@
       const tGrassA = C('#72b84f'), tGrassB = C('#5b9f43'), tGrassL = C('#93c95c'), tHill = C('#4f9140'), tMoss = C('#5d8a3c');
       const tCliff = C('#7d5a38'), tCliffD = C('#5a3f27'), tShore = C('#bca776'), tBed = C('#4a615c');
       const tSand = C('#dcc48e'), tSandD = C('#c4a672'), tSoil = C('#8f6842'), tSoilD = C('#6c4a2d');
-      const tStone = C('#9a9da4'), tStoneD = C('#73777f'), tBloom = C('#62a647');
-      const tPetals = ['#f1a7bd', '#f4d66b', '#f3eee0', '#c7aae8'].map((h) => C(h));
+      const tStone = C('#9a9da4'), tStoneD = C('#73777f');
       // painted sand / dirt / stone (the pond bed stays as it is until water editing)
       const paintedColor = (pm, x, z, ny, n1, n2, sdf) => {
         if (pm === MAT_SAND) {
@@ -4338,7 +4408,7 @@
           return [mulC(c, 0.88 + 0.2 * n2), L_DIRT, 0.7];
         }
         const pm = terrainPaintAt(x, z);
-        if (pm === MAT_SAND || pm === MAT_DIRT || pm === MAT_STONE) return paintedColor(pm, x, z, ny, n1, n2, sdf);
+        if (pm !== MAT_GRASS) return paintedColor(pm, x, z, ny, n1, n2, sdf);
         if (ny < 0.86) { // terrace cliff faces: packed earth, mossy where it flattens out
           let c = mixC(tCliffD, tCliff, n1);
           c = mixC(c, tMoss, smooth(0.62, 0.84, ny) * 0.55);
@@ -4348,11 +4418,6 @@
         c = mixC(c, tGrassL, smooth(0.66, 0.86, n1) * 0.55);
         if (y > 0.25) c = mixC(c, tHill, clamp((y - 0.25) * 0.7, 0, 0.5));
         if (sdf < 0.42) c = mixC(c, tShore, (1 - smooth(0.05, 0.42, sdf)) * 0.78);
-        if (pm === MAT_FLOWERS) { // flower bed: lush green dotted with petal-coloured facets
-          const p = h2(Math.floor(x * 9 + 99), Math.floor(z * 9 + 99), 149);
-          if (p > 0.8) return [mulC(tPetals[Math.floor(h2(Math.floor(x * 9 + 99), Math.floor(z * 9 + 99), 151) * 4)], 0.9 + 0.2 * n2), L_PLAIN, 0.85];
-          c = mixC(c, tBloom, 0.45);
-        }
         return [mulC(c, 0.86 + 0.26 * n2), L_GRASS, 0.95];
       };
       const tv = (i, j) => { const o = (j * TNV + i) * 3; return [TV[o], TV[o + 1], TV[o + 2]]; };
@@ -5465,6 +5530,8 @@
 
         const asset = buildSpriteStackAsset(def);
         assetsById[def.id] = asset;
+        const maxN = def.maxInstances || MAX_INSTANCES;
+        if (def.seedScatter) asset.iconCanvas = renderSeedIcon(def);
 
         const mat = enhanceStandardMaterial(
           new THREE.MeshStandardMaterial({
@@ -5485,16 +5552,41 @@
             explodeSliceFactor: def.explodeSliceFactor || 0.4,
             explodeTier: def.explodeTier || 0,
             canopySplit: def.canopySplit || 0.0,
-            dropLayers: def.layers
+            dropLayers: def.seedScatter ? 0 : def.layers // seed flowers grow instead of dropping
           }
         );
 
-        const spawnAttr = new THREE.InstancedBufferAttribute(new Float32Array(MAX_INSTANCES).fill(-100), 1);
+        const spawnAttr = new THREE.InstancedBufferAttribute(new Float32Array(maxN).fill(-100), 1);
         asset.geometry.setAttribute('aSpawn', spawnAttr);
+        if (def.seedScatter) {
+          const tintAttr = new THREE.InstancedBufferAttribute(new Float32Array(maxN * 3).fill(1), 3);
+          asset.geometry.setAttribute('aTint', tintAttr);
+          const base = mat.onBeforeCompile;
+          mat.onBeforeCompile = (sh, r) => {
+            base(sh, r);
+            sh.vertexShader = sh.vertexShader
+              .replace('#include <common>', '#include <common>\nattribute float aSpawn;\nattribute vec3 aTint;\nvarying vec3 vTint;')
+              .replace('#include <begin_vertex>', `#include <begin_vertex>
+              vTint = aTint;
+              { // grows out of the ground: rises with a little overshoot, opening wider as it comes up
+                float gt = clamp((uTime - aSpawn) / 0.85, 0.0, 1.0);
+                if (gt < 1.0) {
+                  float e = 1.0 - pow(1.0 - gt, 3.0), b = sin(gt * 3.14159);
+                  transformed.y *= e + b * 0.14;
+                  transformed.xz *= mix(0.3, 1.0, e) + b * 0.06;
+                }
+              }`);
+            sh.fragmentShader = sh.fragmentShader
+              .replace('#include <common>', '#include <common>\nvarying vec3 vTint;')
+              .replace('#include <map_fragment>', `#include <map_fragment>
+              { float lo = min(diffuseColor.r, min(diffuseColor.g, diffuseColor.b)); // white petals take the tint
+                diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vTint, smoothstep(0.72, 0.9, lo)); }`);
+          };
+        }
 
-        const instMesh = new THREE.InstancedMesh(asset.geometry, mat, MAX_INSTANCES);
+        const instMesh = new THREE.InstancedMesh(asset.geometry, mat, maxN);
         instMesh.count = 0;
-        instMesh.castShadow = true;
+        instMesh.castShadow = !def.seedScatter; // tiny flowers: no shadow pass (no extra draw call)
         instMesh.receiveShadow = true;
         instMesh.frustumCulled = false;
         instMesh.customDepthMaterial = new THREE.MeshDepthMaterial({
@@ -5512,6 +5604,7 @@
             .replace('#include <begin_vertex>', '#include <begin_vertex>' + dropVertexGLSL(false));
         };
         instMesh.userData.spawnAttr = spawnAttr;
+        if (def.seedScatter) { instMesh.userData.tintAttr = asset.geometry.attributes.aTint; instMesh.userData.digestSkip = true; }
         scene.add(instMesh);
         instancedById[def.id] = instMesh;
 
@@ -5526,6 +5619,7 @@
         });
         const ghostMesh = new THREE.Mesh(asset.geometry, ghostMat);
         ghostMesh.visible = false;
+        if (def.seedScatter) ghostMesh.userData.digestSkip = true; // seeds show a sowing circle, never this
         scene.add(ghostMesh);
         ghostMeshesById[def.id] = ghostMesh;
       });
@@ -5958,6 +6052,7 @@
       const placedItems = new Map(); // Grid-snapped: key "gx,gz" -> { id, gx, gz, rotation }
       const freeProps = [];          // Free-placed overlapping decor: { id, wx, wz, rotation, scale }
       const snapProps = [];          // Quarter-tile snapped props with a real footprint: { id, wx, wz, rotation }
+      const seedFlowers = [];        // 들꽃 씨앗 flowers: { wx, wz, rot, scale, tint, spawnT } (ground cover, block nothing)
 
       let selectedTool = 'cabin';
       let currentRotation = 0;
@@ -6644,26 +6739,9 @@
           }
         });
 
-        // 2b. Flower beds: small wildflower clumps on painted flower cells (the 들꽃 instanced mesh,
-        // after the placed ones, so no extra draw call)
-        if (terrain.painted && buckets.flowers) {
-          const fl = buckets.flowers;
-          for (let q = 0; q < MAT_N * MAT_N && fl.length < MAX_INSTANCES; q++) {
-            if (terrain.mat[q] !== MAT_FLOWERS) continue;
-            const qx = q % MAT_N, qz = (q - qx) / MAT_N;
-            if (h2(qx, qz, 171) > 0.42) continue;
-            const wx = (qx + 0.5) / MAT_RES - HALF_GRID + (h2(qx, qz, 172) - 0.5) * 0.12;
-            const wz = (qz + 0.5) / MAT_RES - HALF_GRID + (h2(qx, qz, 173) - 0.5) * 0.12;
-            const tile = placedItems.get(`${Math.floor(wx + HALF_GRID)},${Math.floor(wz + HALF_GRID)}`);
-            if (tile && (tile.id === 'path' || tile.id === 'cabin')) continue;
-            if (isBlockedForPoint(wx, wz, 0.05, false)) continue;
-            fl.push({ wx, wy: getContinuousTerrainHeight(wx, wz), wz, rotation: Math.floor(h2(qx, qz, 174) * 4), scale: 0.4 + 0.16 * h2(qx, qz, 175), spawnT: terrain.bloomT[q] });
-          }
-        }
-
         // Apply InstancedMeshes
         ITEM_DEFS.forEach((def) => {
-          if (!isInstancedDef(def)) return;
+          if (!isInstancedDef(def) || def.seedScatter) return;
           const list = buckets[def.id];
           const mesh = instancedById[def.id];
           for (let i = 0; i < list.length && i < MAX_INSTANCES; i++) {
@@ -6701,8 +6779,7 @@
         function isGrassSpotValid(tx, tz) {
           if (Math.abs(tx) > HALF_GRID - 0.18 || Math.abs(tz) > HALF_GRID - 0.18) return false;
           if (getPondSDF(tx, tz) < 0.16) return false;
-          const pm = terrainPaintAt(tx, tz);
-          if (pm === MAT_SAND || pm === MAT_DIRT || pm === MAT_STONE) return false;
+          if (terrainPaintAt(tx, tz) !== MAT_GRASS) return false;
           const gx = Math.floor(tx + HALF_GRID);
           const gz = Math.floor(tz + HALF_GRID);
           const tileItem = placedItems.get(`${gx},${gz}`);
@@ -6831,7 +6908,83 @@
         }
         grassClutterInst.count = grassIdx; grassClutterInst.instanceMatrix.needsUpdate = true;
         pebbleClutterInst.count = pebbleIdx; pebbleClutterInst.instanceMatrix.needsUpdate = true;
+        rebuildSeedFlowers();
       }
+
+      /* ---- WILDFLOWER SEEDS (들꽃 씨앗) ---- */
+      // A click sows a handful (spaced apart, denser in the middle, colours in loose patches);
+      // dragging keeps sowing. Only the seed mesh is refilled while sowing. Flowers stay in the
+      // list under things placed later or ground painted over them, and show again when uncovered.
+      const SEED_R = 0.5, SEED_GAP = 0.085, SEED_PER_SOW = 8;
+      const SEED_TINTS = SEED_TINT_HEX.map((h) => new THREE.Color(h));
+      function seedSpotFree(x, z, r) {
+        if (Math.abs(x) > HALF_GRID - 0.08 || Math.abs(z) > HALF_GRID - 0.08) return false;
+        if (getPondSDF(x, z) < 0.1 || terrainPaintAt(x, z) !== MAT_GRASS) return false;
+        const tile = placedItems.get(`${Math.floor(x + HALF_GRID)},${Math.floor(z + HALF_GRID)}`);
+        if (tile && tile.id === 'path') return false;
+        return !isBlockedForPoint(x, z, r, false);
+      }
+      function rebuildSeedFlowers() {
+        const mesh = instancedById.seeds;
+        if (!mesh) return;
+        const max = assetsById.seeds.def.maxInstances, tint = mesh.userData.tintAttr.array, sp = mesh.userData.spawnAttr.array;
+        let n = 0;
+        for (const f of seedFlowers) {
+          if (n >= max) break;
+          if (!seedSpotFree(f.wx, f.wz, 0.02)) continue;
+          dummyObj.position.set(f.wx, getContinuousTerrainHeight(f.wx, f.wz) - 0.005, f.wz);
+          dummyObj.rotation.set(0, f.rot, 0);
+          dummyObj.scale.setScalar(f.scale);
+          dummyObj.updateMatrix();
+          mesh.setMatrixAt(n, dummyObj.matrix);
+          const c = SEED_TINTS[f.tint];
+          tint[n * 3] = c.r; tint[n * 3 + 1] = c.g; tint[n * 3 + 2] = c.b;
+          sp[n] = f.spawnT;
+          n++;
+        }
+        mesh.count = n;
+        mesh.visible = n > 0; // nothing sown: no draw call
+        mesh.instanceMatrix.needsUpdate = true;
+        mesh.userData.spawnAttr.needsUpdate = true;
+        mesh.userData.tintAttr.needsUpdate = true;
+      }
+      function sowSeedsAt(cx, cz) { // how many flowers came up
+        const max = assetsById.seeds.def.maxInstances, now = performance.now() * 0.001;
+        const reach = (SEED_R + SEED_GAP) * (SEED_R + SEED_GAP);
+        const near = seedFlowers.filter((f) => dist2(f.wx, f.wz, cx, cz) < reach);
+        let made = 0;
+        for (let k = 0; k < 48 && made < SEED_PER_SOW && seedFlowers.length < max; k++) {
+          const a = Math.random() * TAU, r = SEED_R * Math.pow(Math.random(), 0.75);
+          const x = cx + Math.cos(a) * r, z = cz + Math.sin(a) * r;
+          if (near.some((f) => dist2(f.wx, f.wz, x, z) < SEED_GAP * SEED_GAP)) continue;
+          if (!seedSpotFree(x, z, 0.03)) continue;
+          const tint = Math.random() < 0.65 ? Math.min(SEED_TINTS.length - 1, Math.floor(vnoise(x * 1.3, z * 1.3, 181) * SEED_TINTS.length)) : Math.floor(Math.random() * SEED_TINTS.length);
+          const f = { wx: x, wz: z, rot: Math.random() * TAU, scale: 0.8 + Math.random() * 0.45, tint, spawnT: now + made * 0.05 + Math.random() * 0.12 };
+          seedFlowers.push(f); near.push(f); made++;
+        }
+        return made;
+      }
+      let seedStroke = null;
+      function sowStep(wx, wz) {
+        const n = sowSeedsAt(wx, wz);
+        if (!n) return 0;
+        seedStroke.made += n;
+        rebuildSeedFlowers();
+        const y = getContinuousTerrainHeight(wx, wz);
+        audio.playSeeds(screenPan(wx, y, wz));
+        burstDust(wx, y, wz, 4, 0.3);
+        return n;
+      }
+      function beginSeedStroke(hit) {
+        seedStroke = { wx: hit.wx, wz: hit.wz, made: 0 };
+        if (!sowStep(hit.wx, hit.wz)) audio.playTerrainBlocked(screenPan(hit.wx, hit.wy, hit.wz));
+      }
+      function seedStrokeTo(wx, wz) {
+        if (Math.hypot(wx - seedStroke.wx, wz - seedStroke.wz) < 0.32) return;
+        seedStroke.wx = wx; seedStroke.wz = wz;
+        sowStep(wx, wz);
+      }
+      function endSeedStroke() { seedStroke = null; }
 
       /* ---- STORYTELLING CLUSTERED STARTER DIORAMA ---- */
       function populateStarterIsland(rebuild = true) {
@@ -6839,6 +6992,7 @@
         placedItems.clear();
         freeProps.length = 0;
         snapProps.length = 0;
+        seedFlowers.length = 0;
 
         const starterGrid = [
           // 1. Dense Forest & Rocks clustered tightly on the elevated back hills!
@@ -6983,7 +7137,6 @@
         if (old === mat) return false;
         terrain.mat[q] = mat;
         terrain.painted += (old === MAT_GRASS ? 1 : 0) - (mat === MAT_GRASS ? 1 : 0);
-        if (mat === MAT_FLOWERS) terrain.bloomT[q] = performance.now() * 0.001;
         terrain.version++;
         return true;
       }
@@ -7022,7 +7175,7 @@
         if (!st) return;
         paintStroke = null;
         flushRepaint();
-        if (st.changed) rebuildInstances(); // tufts leave bare ground, flower beds bloom (+ shadow refresh)
+        if (st.changed) rebuildInstances(); // tufts and seed flowers leave bare ground (+ shadow refresh)
         else if (st.blocked) {
           const [cx, cz] = paintCellCentre(st.qx, st.qz);
           audio.playTerrainBlocked(screenPan(cx, 0, cz));
@@ -7042,6 +7195,7 @@
           removeAtHit(hit);
           return;
         }
+        if (assetsById[selectedTool]?.def.seedScatter) { beginSeedStroke(hit); return; }
         const tt = terrainToolById(selectedTool);
         if (tt) { if (tt.paint !== undefined) beginPaintStroke(hit, tt.paint); else editTerrainAt(hit.gx, hit.gz, tt.dir); return; }
         if (!canPlaceAtHit(selectedTool, hit)) {
@@ -7093,6 +7247,16 @@
           audio.playRemove();
           return;
         }
+        // seed flowers: a little patch at a time
+        const seedsBefore = seedFlowers.length;
+        for (let i = seedFlowers.length - 1; i >= 0; i--) {
+          if (dist2(seedFlowers[i].wx, seedFlowers[i].wz, hit.wx, hit.wz) < 0.3 * 0.3) seedFlowers.splice(i, 1);
+        }
+        if (seedFlowers.length < seedsBefore) {
+          rebuildSeedFlowers();
+          audio.playRemove();
+          return;
+        }
         const key = `${hit.gx},${hit.gz}`;
         if (placedItems.has(key)) {
           placedItems.delete(key);
@@ -7106,6 +7270,7 @@
         cursorTile.visible = false;
         cursorTile.scale.set(1, 1, 1);
         freeCursorRing.visible = false;
+        freeCursorRing.scale.set(1, 1, 1);
 
         if (!hoveredHit || isPhotoMode || isExploded) return;
 
@@ -7152,6 +7317,11 @@
             ghost.rotation.y = p.rot * (Math.PI / 2);
             setGhostValidityColor(ghost, p.valid);
           }
+        } else if (def.seedScatter) { // the sowing circle, no ghost
+          freeCursorRing.visible = true;
+          freeCursorRing.scale.set(SEED_R / 0.27, 1, SEED_R / 0.27);
+          freeCursorRing.position.set(wx, wy + 0.03, wz);
+          ringMat.color.set(seedSpotFree(wx, wz, 0.03) ? '#ffe29c' : '#ff5252');
         } else if (def.freePlace) {
           freeCursorRing.visible = true;
           freeCursorRing.position.set(wx, wy + 0.03, wz);
@@ -7495,6 +7665,7 @@
         placedItems.clear();
         freeProps.length = 0;
         snapProps.length = 0;
+        seedFlowers.length = 0;
         rebuildInstances();
         resetPopover.classList.remove('open');
         audio.playRemove();
@@ -7574,6 +7745,7 @@
         } else if (!isPhotoMode && !isExploded) {
           const hit = getHitUnderClient(e.clientX, e.clientY);
           if (paintStroke && hit && (e.buttons & 1)) paintStrokeTo(hit.wx, hit.wz);
+          if (seedStroke && hit && (e.buttons & 1)) seedStrokeTo(hit.wx, hit.wz);
           hoveredHit = hit;
           updateHoverVisuals();
         }
@@ -7584,9 +7756,10 @@
         updateHoverVisuals();
       });
 
-      window.addEventListener('pointercancel', () => endPaintStroke()); // a cancelled touch still finishes the stroke
+      window.addEventListener('pointercancel', () => { endPaintStroke(); endSeedStroke(); }); // a cancelled touch still finishes the stroke
       window.addEventListener('pointerup', (e) => {
         if (paintStroke && e.button === 0) endPaintStroke();
+        if (e.button === 0) endSeedStroke();
         if (isOrbiting && e.button === orbitButton) {
           if (orbitButton === 2 && !isPanning && !hasMovedSignificantly && performance.now() - dragStartTime < 350 && !isPhotoMode && !isExploded) {
             const hit = getHitUnderClient(e.clientX, e.clientY);
@@ -8468,7 +8641,7 @@
           state: () => ({
             pan: [camPan.x, camPan.y], targetPan: [targetPan.x, targetPan.y],
             dist: camDist, targetDist: targetCamDist, elev: camElev * 180 / Math.PI, orbit: orbitAngle,
-            placed: placedItems.size, free: freeProps.length, snap: snapProps.length, photo: isPhotoMode, exploded: isExploded,
+            placed: placedItems.size, free: freeProps.length, snap: snapProps.length, seeds: seedFlowers.length, photo: isPhotoMode, exploded: isExploded,
             intro: intro.phase
           }),
           // startup assembly hooks for tools/tests/intro.mjs
@@ -8494,6 +8667,8 @@
           terrainPainted: () => terrain.painted,
           paintAllowed: (qx, qz) => paintAllowed(qx, qz),
           instanceCount: (id) => instancedById[id].count,
+          instanceVisible: (id) => instancedById[id].visible,
+          seedFlowers: () => ({ now: performance.now() * 0.001, list: seedFlowers.map((f) => [f.wx, f.wz, f.tint, f.spawnT]) }),
           islandDigest: () => { // like meshDigest, island layers only (no cursor / ghosts / particles)
             const fnv = (arr, h) => { const u8 = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength); for (let k = 0; k < u8.length; k++) { h ^= u8[k]; h = Math.imul(h, 16777619) >>> 0; } return h; };
             const out = [];
@@ -8541,6 +8716,7 @@
             scene.updateMatrixWorld(true);
             scene.traverse((o) => {
               if (!(o.isMesh || o.isPoints)) return;
+              if (o.userData.digestSkip) return; // added after the terrain baseline, empty on the default island
               let h = 0x811c9dc5 >>> 0;
               const g = o.geometry;
               for (const name of Object.keys(g.attributes).sort()) h = fnv(g.attributes[name].array, h);

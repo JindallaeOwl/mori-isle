@@ -1,7 +1,6 @@
 // Ground paint test (terrain step 3): the terrain slot's paint tools paint quarter tiles by dragging,
-// only the turf colours change (topsoil, clay, bedrock and heights stay), the pond is refused, flower
-// beds grow wildflowers, bare ground drops grass tufts, painting grass back gives exactly the default
-// turf, and "처음 섬으로" clears the paint. Also fails on any console error or warning.
+// only the turf colours change (topsoil, clay, bedrock and heights stay), the pond is refused, painting
+// grass back gives exactly the default turf, and "처음 섬으로" clears the paint. Also fails on any console error or warning.
 // usage: node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/terrain-paint.mjs
 export default async ({ wait, evaluate, mouse, send, log }) => {
   await send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__errs = []; for (const k of ['error', 'warn']) { const o = console[k].bind(console); console[k] = (...a) => { window.__errs.push(k + ': ' + a.map(String).join(' ').slice(0, 400)); o(...a); }; } window.addEventListener('error', (e) => window.__errs.push('onerror: ' + e.message));` });
@@ -35,10 +34,9 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
   const matRow = async (qx0, qx1, qz) => { const r = []; for (let q = qx0; q <= qx1; q++) r.push(await J(`${M}.terrainMat(${q}, ${qz})`)); return r; };
 
   const tools = await J(`[...document.querySelectorAll('#hud-dock .item[data-category="terrain"]')].map(b => b.dataset.tool).join()`);
-  ok('terrain slot has the five paint tools', tools === 'raise,lower,paint_grass,paint_sand,paint_dirt,paint_stone,paint_flowers', tools);
+  ok('terrain slot has the four paint tools (no flower bed: flowers come from 들꽃 씨앗)', tools === 'raise,lower,paint_grass,paint_sand,paint_dirt,paint_stone', tools);
   const d0 = await J(`${M}.islandDigest()`);
   const h0 = (await J(`${M}.terrainDump(0.05, 1)`)).hash;
-  const fl0 = await J(`${M}.instanceCount('flowers')`);
   ok('nothing painted at start', (await J(`${M}.terrainPainted()`)) === 0);
 
   // sand across an open lawn strip (z = -2.6, x 2.8 .. 4.2 -> cells 35..40 in row 13)
@@ -62,24 +60,17 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
   await drag([2.2, 2.3], [2.5, 2.3], 3);
   ok('a stroke over the water paints nothing', (await J(`${M}.terrainMat(${pq[0]}, ${pq[1]})`)) === 0);
 
-  // flower bed: a few strokes grow wildflowers in the 들꽃 mesh
-  await tool('paint_flowers');
-  for (const z of [-1.4, -1.2, -1.0, -0.8]) await drag([2.6, z], [4.6, z], 10);
-  const fl1 = await J(`${M}.instanceCount('flowers')`);
-  ok('꽃밭 grows wildflowers', fl1 > fl0 + 4, `${fl0} -> ${fl1}`);
-
   // stone and dirt work too
   await tool('paint_stone'); await drag([2.8, -0.3], [3.6, -0.3], 4);
   ok('돌바닥 paints stone', (await J(`${M}.terrainMat(${cell(3.2, -0.3).join(', ')})`)) === 3);
   await tool('paint_dirt'); await drag([2.8, 0.15], [3.6, 0.15], 4);
   ok('흙 paints dirt', (await J(`${M}.terrainMat(${cell(3.2, 0.15).join(', ')})`)) === 2);
 
-  // painting grass over everything gives back exactly the default turf and flowers
+  // painting grass over everything gives back exactly the default turf
   await tool('paint_grass');
-  for (const [a, b] of [[A, B], [[2.6, -1.4], [4.6, -1.4]], [[2.6, -1.2], [4.6, -1.2]], [[2.6, -1.0], [4.6, -1.0]], [[2.6, -0.8], [4.6, -0.8]], [[2.8, -0.3], [3.6, -0.3]], [[2.8, 0.15], [3.6, 0.15]]]) await drag(a, b, 10);
+  for (const [a, b] of [[A, B], [[2.8, -0.3], [3.6, -0.3]], [[2.8, 0.15], [3.6, 0.15]]]) await drag(a, b, 10);
   const left = await J(`${M}.terrainPainted()`);
   ok('잔디 paints the default turf back', left === 0 && same(d0, await J(`${M}.islandDigest()`)), `left ${left}`);
-  ok('and the flowers are gone again', (await J(`${M}.instanceCount('flowers')`)) === fl0);
 
   // "처음 섬으로" clears paint
   await tool('paint_sand'); await drag(A, B);
