@@ -2922,6 +2922,102 @@
           // grass growing up around a leg: it hasn't moved in a while
           S.ico(.035, -.28, .01, .14, MCOL.moss, { sc: [1.4, .5, 1.1], d: 0, rough: 1 });
         }
+      },
+      clothesline: {
+        name: '빨랫줄',
+        category: 'living',
+        freePlace: false,
+        type: 'soup',
+        seed: 167,
+        windStrength: 0.0,
+        explodeSliceFactor: 0.50,
+        explodeTier: 1,
+        glow: null,
+        contactRadius: 0.42,
+        solidRadius: 0.30,
+        build(S, rng) {
+          const ROPE = C('#cdbb92'), SHEET = C('#efe6d2'), GING = C('#8fb0c8'), TOWEL = C('#6f95ad'), SHIRT = MCOL.clothR, PIN = C('#c79a64'), WICKER = C('#b08a52');
+          // rope sags between the posts: height and slope along x
+          const X0 = .405, Y0 = .64, SAG = .045;
+          const ry = (x) => Y0 - SAG * (1 - (x / X0) * (x / X0)), sl = (x) => 2 * SAG * x / (X0 * X0);
+          // two T-posts leaning in a little under the rope's pull, stones at their feet
+          for (const s of [-1, 1]) {
+            for (let k = 0; k < 3; k++) {
+              const a = rng() * TAU, st = S.verts;
+              S.rock(rng.range(.035, .05), s * .43 + Math.cos(a) * .06, .01, Math.sin(a) * .06, mixC(MCOL.stoneD, MCOL.stoneL, rng()), { sq: .6, flat: .3, rough: .8 });
+              if (k === 0) S.cover(st, mixC(MOSS_D, MCOL.moss, .5), .78, L_MOSS, 3);
+            }
+            S.box(.05, .72, .05, s * .43, .36, 0, mixC(MCOL.wood, MCOL.woodG, .3), { l: L_WOOD, rough: .9, r: [0, 0, s * .025] });
+            S.box(.04, .03, .17, s * .421, .705, 0, MCOL.woodD, { l: L_WOOD, rough: .9 });
+            for (const z of [-.06, .06]) S.seg([s * .421, .69, z], [s * .425, .64, z * .2], .008, .008, MCOL.woodD, { n: 4, l: L_WOOD }); // little braces
+            S.torus(.03, s * .416, Y0, 0, ROPE, { n: 8, t: .28, m: 3, l: L_CLOTH, rough: 1, r: [Math.PI / 2, 0, 0] }); // knot
+            S.seg([s * .41, Y0 - .01, .02], [s * .405, Y0 - .07, .025], .004, .004, ROPE, { n: 3, l: L_CLOTH, rough: 1, sway: .3 }); // loose end
+          }
+          // the rope itself
+          for (let k = 0; k < 10; k++) {
+            const xa = -X0 + k * .081, xb = xa + .081;
+            S.seg([xa, ry(xa), 0], [xb, ry(xb), 0], .0045, .0045, ROPE, { n: 4, l: L_CLOTH, rough: 1, jit: .02 });
+          }
+          // laundry: each piece built hanging from y=0 and hung along the rope's slope; pinned top, swinging hem
+          const hang = (G, xc, swing) => {
+            const st = S.verts, top = ry(xc) - .003;
+            S.merge(G, { p: [xc, top, 0], r: [0, 0, sl(xc)] });
+            soupSwayBelow(S, st, top + .01, .3, swing);
+          };
+          const pin = (x) => {
+            S.box(.012, .034, .017, x, ry(x) - .006, 0, mixC(PIN, MCOL.woodL, rng() * .5), { l: L_WOOD, rough: .7, r: [0, 0, sl(x)] });
+            S.box(.013, .005, .018, x, ry(x) - .01, 0, MCOL.ironL, { l: L_METAL, rough: .4, r: [0, 0, sl(x)], jit: 0 }); // spring
+          };
+          // 1) a big cream sheet with a gingham hem, folded accordion-wise by the breeze
+          const G1 = new Soup();
+          for (let k = 0; k < 4; k++) {
+            const lx = -.1004 + k * .0669, h = .3 + rng.range(-.012, .012), ry1 = k % 2 ? -.3 : .3;
+            G1.box(.07, h, .007, lx, -h / 2, 0, mixC(SHEET, C('#ffffff'), rng() * .3), { l: L_CLOTH, rough: 1, r: [0, ry1, 0], jit: .02 });
+            G1.box(.07, .018, .009, lx, -h + .035, 0, GING, { l: L_CLOTH, rough: 1, r: [0, ry1, 0], jit: .02 });
+            G1.box(.07, .008, .009, lx, -h + .06, 0, mulC(GING, 1.08), { l: L_CLOTH, rough: 1, r: [0, ry1, 0], jit: .02 });
+          }
+          hang(G1, -.19, .9);
+          for (const x of [-.325, -.19, -.055]) pin(x);
+          // 2) a striped blue towel folded over the rope, fringed
+          const G2 = new Soup();
+          G2.box(.14, .2, .007, 0, -.1, .006, TOWEL, { l: L_CLOTH, rough: 1 });
+          G2.box(.14, .12, .007, 0, -.06, -.006, mulC(TOWEL, .9), { l: L_CLOTH, rough: 1 });
+          for (const y of [-.045, -.07]) G2.box(.142, .012, .02, 0, y, 0, C('#efe2c6'), { l: L_CLOTH, rough: 1, jit: 0 });
+          for (let k = 0; k < 7; k++) G2.box(.006, .014, .004, -.06 + k * .02, -.206, .006, mulC(TOWEL, 1.1), { l: L_CLOTH, rough: 1, jit: .05 });
+          hang(G2, .07, .8);
+          for (const x of [.015, .125]) pin(x);
+          // 3) a little red shirt with a cream collar, buttons and a patched pocket
+          const G3 = new Soup();
+          G3.box(.1, .14, .007, 0, -.075, 0, SHIRT, { l: L_CLOTH, rough: 1 });
+          G3.box(.13, .035, .0072, 0, -.0175, 0, SHIRT, { l: L_CLOTH, rough: 1 });
+          for (const s of [-1, 1]) {
+            G3.box(.045, .075, .0072, s * .075, -.055, 0, mulC(SHIRT, .93), { l: L_CLOTH, rough: 1, r: [0, 0, s * .45] });
+            G3.box(.046, .012, .0085, s * .088, -.086, 0, mulC(SHIRT, .8), { l: L_CLOTH, rough: 1, r: [0, 0, s * .45], jit: 0 }); // cuffs
+            G3.box(.03, .02, .009, s * .015, -.009, 0, C('#efe2c6'), { l: L_CLOTH, rough: 1, r: [0, 0, s * .6], jit: 0 });
+          }
+          for (const y of [-.04, -.075, -.11]) G3.ico(.005, 0, y, .005, C('#efe2c6'), { d: 0, rough: .6, jit: 0 });
+          G3.box(.026, .026, .009, -.026, -.055, 0, C('#d9a441'), { l: L_CLOTH, rough: 1, r: [0, 0, .08], jit: 0 });
+          hang(G3, .26, .75);
+          for (const x of [.215, .305]) pin(x);
+          // 4) one lonely sock
+          const G4 = new Soup();
+          G4.box(.024, .065, .008, 0, -.035, 0, SHEET, { l: L_CLOTH, rough: 1 });
+          G4.box(.04, .022, .008, .008, -.074, 0, SHEET, { l: L_CLOTH, rough: 1 });
+          G4.box(.026, .014, .009, 0, -.008, 0, SHIRT, { l: L_CLOTH, rough: 1, jit: 0 });
+          G4.box(.016, .02, .009, -.006, -.075, 0, SHIRT, { l: L_CLOTH, rough: 1, jit: 0 }); // heel
+          hang(G4, .365, .7);
+          pin(.365);
+          // wicker basket with folded laundry and a couple of dropped pegs
+          const BX = .12, BZ = .2;
+          S.cyl(.088, .08, BX, .04, BZ, WICKER, { n: 10, rt: 1.15, l: L_THATCH, rough: 1 });
+          S.torus(.1, BX, .08, BZ, mulC(WICKER, .8), { n: 10, t: .1, m: 3, l: L_THATCH, rough: 1, r: [Math.PI / 2, 0, 0] });
+          for (const s of [-1, 1]) S.torus(.026, BX + s * .1, .084, BZ, mulC(WICKER, .75), { n: 7, t: .2, m: 3, l: L_THATCH, rough: 1 });
+          S.box(.12, .024, .1, BX, .092, BZ, SHEET, { l: L_CLOTH, rough: 1, r: [0, .3, 0] });
+          S.box(.11, .022, .09, BX + .005, .114, BZ - .005, TOWEL, { l: L_CLOTH, rough: 1, r: [0, -.2, 0] });
+          S.box(.1, .006, .02, BX + .005, .118, BZ + .02, C('#efe2c6'), { l: L_CLOTH, rough: 1, r: [0, -.2, 0], jit: 0 });
+          S.box(.012, .034, .017, BX - .14, .008, BZ + .04, PIN, { l: L_WOOD, r: [Math.PI / 2, .7, 0] });
+          S.box(.012, .034, .017, BX - .11, .008, BZ + .09, PIN, { l: L_WOOD, r: [Math.PI / 2, 2.2, 0] });
+        }
       }
     };
     if (HASH.stack !== '1') { // #stack=1 keeps the old sprite-stack versions for comparison
