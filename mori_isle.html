@@ -612,9 +612,6 @@
         dotColor: '#8fd18a',
         skyTop: new THREE.Color('#4f92d6'),
         skyBottom: new THREE.Color('#cfe9ff'),
-        skyHalo: new THREE.Color('#eef4f2'),   // backdrop glow behind the island
-        skyCorner: 0.26,                       // how much the backdrop corners darken
-        skyHorizon: new THREE.Color('#fff3da'), // band of light along the far horizon (shows at low tilts)
         keyColor: new THREE.Color('#fff2d6'),
         keyIntensity: 2.35,
         fillColor: new THREE.Color('#8bb8eb'),
@@ -639,9 +636,6 @@
         dotColor: '#f7b267',
         skyTop: new THREE.Color('#5b4678'),
         skyBottom: new THREE.Color('#ffae6e'),
-        skyHalo: new THREE.Color('#ffd49c'),
-        skyCorner: 0.30,
-        skyHorizon: new THREE.Color('#ffc477'),
         keyColor: new THREE.Color('#ff9d4f'),
         keyIntensity: 2.5,
         fillColor: new THREE.Color('#6a7fb8'),
@@ -666,9 +660,6 @@
         dotColor: '#8ea8ff',
         skyTop: new THREE.Color('#090e21'),
         skyBottom: new THREE.Color('#1d2a4f'),
-        skyHalo: new THREE.Color('#1e2a54'),
-        skyCorner: 0.62,
-        skyHorizon: new THREE.Color('#2b3566'),
         keyColor: new THREE.Color('#7a96dc'),  // cold moonlight
         keyIntensity: 0.8,
         fillColor: new THREE.Color('#24365f'),
@@ -728,9 +719,6 @@
       uWaterFoam: { value: ATMOSPHERES.day.waterFoam.clone() },
       uSkyTop: { value: ATMOSPHERES.day.skyTop.clone() },
       uSkyBottom: { value: ATMOSPHERES.day.skyBottom.clone() },
-      uSkyHalo: { value: ATMOSPHERES.day.skyHalo.clone() },
-      uSkyCorner: { value: ATMOSPHERES.day.skyCorner },
-      uSkyHorizon: { value: ATMOSPHERES.day.skyHorizon.clone() },
       uGradeTint: { value: ATMOSPHERES.day.gradeTint.clone() },
       uGradeWarmth: { value: ATMOSPHERES.day.gradeWarmth },
       uPointScale: { value: 0.5 }, // scene pixels per CSS pixel (for gl_PointSize)
@@ -3948,31 +3936,17 @@
         uniform sampler2D tColor; uniform sampler2D tDepth;
         uniform mat4 uInvVP; uniform vec3 uCamDir; uniform vec2 uPx;
         uniform vec3 uSkyTop; uniform vec3 uSkyBottom; uniform float uNightFactor; uniform float uTime;
-        uniform vec3 uSkyHalo; uniform float uSkyCorner;
-        uniform vec4 uHalo;                          // xy island centre (uv), z island radius (uv height), w aspect
-        uniform vec3 uSkyHorizon; uniform vec2 uHorizon; // x horizon height (uv, sinks as the camera tilts down), y band strength
         uniform vec3 uLightPos[${NL}]; uniform vec3 uLightCol[${NL}];
         uniform vec3 uMistAmb; uniform vec4 uMist;   // x base height, y falloff, z density, w lamp gain
         uniform vec3 uAO;                            // x strength, y radius (scene px), z radius (world)
         uniform vec2 uDitherOfs; uniform vec2 uWind;
         ${GLSL_COMMON}
         vec3 getSky(vec2 uv) {
-          // the gradient starts at the horizon, so looking straight down leaves mostly the upper sky tone
-          float yH = uHorizon.x;
-          vec3 sky = mix(uSkyBottom, uSkyTop, pow(clamp((uv.y - yH) / max(1.0 - yH, 0.3), 0.0, 1.0), 0.85));
-          sky *= 1.0 - 0.12 * clamp((yH - uv.y) / 0.5, 0.0, 1.0);   // a touch deeper below the horizon
-          float hb = (uv.y - yH) / (uv.y > yH ? 0.11 : 0.05);         // soft above, tighter below
-          sky = mix(sky, uSkyHorizon, exp(-hb * hb) * uHorizon.y * 0.75);
-          // storybook backdrop: a soft oval of light behind the island, corners sinking into shade
-          vec2 q = (uv - uHalo.xy) * vec2(uHalo.w * 0.62, 1.0) / uHalo.z;
-          float hk = exp(-dot(q, q) * 1.6);
-          sky = mix(sky, uSkyHalo, hk * 0.8);
-          vec2 e = uv * 2.0 - 1.0;
-          sky *= 1.0 - uSkyCorner * smoothstep(0.15, 1.7, dot(e, e)) * (1.0 - hk);
+          vec3 sky = mix(uSkyBottom, uSkyTop, pow(clamp(uv.y, 0.0, 1.0), 0.85));
           if (uNightFactor > 0.35) {
             vec2 starCell = floor(uv * vec2(220.0, 130.0));
             float h = fract(sin(dot(starCell, vec2(127.1, 311.7))) * 43758.5453);
-            if (h > 0.995 && uv.y > yH + 0.06) {
+            if (h > 0.995 && uv.y > 0.30) {
               float twinkle = 0.55 + 0.45 * sin(h * 120.0 + uTime * 2.2);
               sky += vec3(0.85, 0.9, 1.0) * (uNightFactor - 0.35) * twinkle * 0.9;
             }
@@ -4021,8 +3995,6 @@
         tColor: { value: renderTarget.texture }, tDepth: { value: renderTarget.depthTexture },
         uInvVP: { value: new THREE.Matrix4() }, uCamDir: { value: new THREE.Vector3() }, uPx: { value: new THREE.Vector2() },
         uSkyTop: sharedUniforms.uSkyTop, uSkyBottom: sharedUniforms.uSkyBottom,
-        uSkyHalo: sharedUniforms.uSkyHalo, uSkyCorner: sharedUniforms.uSkyCorner,
-        uSkyHorizon: sharedUniforms.uSkyHorizon, uHorizon: { value: new THREE.Vector2(0.35, 1.0) }, uHalo: { value: new THREE.Vector4(0.5, 0.5, 0.4, 1.6) },
         uNightFactor: sharedUniforms.uNightFactor, uTime: sharedUniforms.uTime,
         uLightPos: { value: mistLightPos }, uLightCol: { value: mistLightCol },
         uMistAmb: { value: new THREE.Vector3(0.8, 0.85, 0.9) }, uMist: { value: new THREE.Vector4(0.0, 0.32, 0.22, 1.0) },
@@ -4140,7 +4112,6 @@
       });
 
       const _invVP = new THREE.Matrix4();
-      const _haloP = new THREE.Vector3();
       function runPostPipeline() {
         const px = atmoMat.uniforms.uPx.value.set(1 / rtSize.w, 1 / rtSize.h);
         const vh = camera.top - camera.bottom;
@@ -4153,13 +4124,6 @@
         _invVP.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).invert();
         u.uInvVP.value.copy(_invVP);
         camera.getWorldDirection(u.uCamDir.value);
-        // backdrop glow sits behind the island's middle and scales with the zoom (it ignores the reset fall)
-        _haloP.set(0, 0.4, 0).project(camera);
-        u.uHalo.value.set(_haloP.x * 0.5 + 0.5, _haloP.y * 0.5 + 0.5, 6.5 / vh, rtSize.w / rtSize.h);
-        // horizon band: sits behind the island's flanks at the default tilt, sinks off screen as the view turns top-down
-        const tiltK = THREE.MathUtils.smoothstep(camElev, ELEV_MIN, ELEV_MAX);
-        u.uHorizon.value.set(THREE.MathUtils.lerp(0.36, -1.5, tiltK),
-          1 - THREE.MathUtils.smoothstep(camElev, ELEV_MIN, 70 * Math.PI / 180));
         u.uAO.value.set(POST.ao && !POST.lite ? 1.5 : 0.0, 0.38 / worldPx, 0.38);
         u.uWind.value.set(sharedUniforms.uTime.value * 0.05, sharedUniforms.uTime.value * 0.021);
         u.uMist.value.set(0.0, 0.28, THREE.MathUtils.lerp(0.055, 0.2, night), 1.0);
@@ -5813,9 +5777,6 @@
       const curAtmo = {
         skyTop: ATMOSPHERES.day.skyTop.clone(),
         skyBottom: ATMOSPHERES.day.skyBottom.clone(),
-        skyHalo: ATMOSPHERES.day.skyHalo.clone(),
-        skyCorner: ATMOSPHERES.day.skyCorner,
-        skyHorizon: ATMOSPHERES.day.skyHorizon.clone(),
         keyColor: ATMOSPHERES.day.keyColor.clone(),
         keyIntensity: ATMOSPHERES.day.keyIntensity,
         fillColor: ATMOSPHERES.day.fillColor.clone(),
@@ -6465,9 +6426,6 @@
         const lr = Math.min(1, dt * 2.5);
         curAtmo.skyTop.lerp(targetAtmo.skyTop, lr);
         curAtmo.skyBottom.lerp(targetAtmo.skyBottom, lr);
-        curAtmo.skyHalo.lerp(targetAtmo.skyHalo, lr);
-        curAtmo.skyHorizon.lerp(targetAtmo.skyHorizon, lr);
-        curAtmo.skyCorner += (targetAtmo.skyCorner - curAtmo.skyCorner) * lr;
         curAtmo.keyColor.lerp(targetAtmo.keyColor, lr);
         curAtmo.keyIntensity += (targetAtmo.keyIntensity - curAtmo.keyIntensity) * lr;
         curAtmo.fillColor.lerp(targetAtmo.fillColor, lr);
@@ -6495,9 +6453,6 @@
 
         sharedUniforms.uSkyTop.value.copy(curAtmo.skyTop);
         sharedUniforms.uSkyBottom.value.copy(curAtmo.skyBottom);
-        sharedUniforms.uSkyHalo.value.copy(curAtmo.skyHalo);
-        sharedUniforms.uSkyHorizon.value.copy(curAtmo.skyHorizon);
-        sharedUniforms.uSkyCorner.value = curAtmo.skyCorner;
         sharedUniforms.uFogColor.value.copy(curAtmo.fogColor);
         sharedUniforms.uFogDensity.value = curAtmo.fogDensity;
         sharedUniforms.uWaterDeep.value.copy(curAtmo.waterDeep);
