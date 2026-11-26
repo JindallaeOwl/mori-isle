@@ -532,9 +532,9 @@
       return Math.min(a, b) - h * h * k * 0.25;
     }
 
-    // Signed Distance Field of the organic rounded pond in world XZ space
-    // Returns < 0 inside water, 0 at shoreline, > 0 on land
-    function getPondSDF(wx, wz) {
+    // The starter island's rounded pond (four soft circles): only used to fill the default water
+    // cells (resetTerrainData); the live pond is getPondSDF, built from terrain.mat
+    function defaultPondSDF(wx, wz) {
       const d1 = Math.hypot(wx - 2.35, wz - 2.35) - 1.72;
       const d2 = Math.hypot(wx - 3.35, wz - 1.75) - 1.18;
       const d3 = Math.hypot(wx - 1.45, wz - 2.95) - 1.12;
@@ -555,18 +555,100 @@
     // --- Terrain data: one entry per tile (GRID_SIZE x GRID_SIZE, index gz * GRID_SIZE + gx) ---
     // The terrain functions keep their names and arguments and read this table; terrain editing changes it.
     // level: hill steps (x STEP_HEIGHT), signed so later steps can dig below the base ground.
-    // The pond is still the getPondSDF formula: 12x12 tiles can't reproduce its round lobes (moves to
-    // tile data with water editing, step 4).
     // mat: painted ground per quarter tile (MAT_N x MAT_N, index qz * MAT_N + qx), 0 = grass = the
-    // default look (the turf colours exactly as before), painted: how many cells are not grass.
+    // default look (the turf colours exactly as before), painted: how many cells are sand / dirt / stone.
+    // MAT_WATER cells are the ponds (step 4): the basin digs itself under them (getPondSDF), water:
+    // how many there are. Painting any ground over water dries it.
     const MAT_RES = 4, MAT_N = GRID_SIZE * MAT_RES;
-    const MAT_GRASS = 0, MAT_SAND = 1, MAT_DIRT = 2, MAT_STONE = 3, MAT_KINDS = 4;
+    const MAT_GRASS = 0, MAT_SAND = 1, MAT_DIRT = 2, MAT_STONE = 3, MAT_KINDS = 4, MAT_WATER = 4;
     const terrain = {
       level: new Int8Array(GRID_SIZE * GRID_SIZE),
       mat: new Uint8Array(MAT_N * MAT_N),
       painted: 0,
+      water: 0,
       version: 0 // bumped on every change (rebuild checks)
     };
+
+    // --- Pond distance field (from the MAT_WATER cells) ---
+    // Nodes every 1/16 (4 per quarter tile). The cells' coverage is blurred a little (corners round
+    // off, a single cell is a small round puddle) and its 0.5 contour is the shoreline; distances
+    // come from a squared distance transform both ways, refined right at the shore from the
+    // coverage gradient so the line is smooth. < 0 in the water, 0 on the shore, > 0 on land.
+    const WF_RES = 16, WF_N = GRID_SIZE * WF_RES + 1, WF_FAR = 9, WF_BLUR = 0.1;
+    const waterField = new Float32Array(WF_N * WF_N);
+    let waterFieldEmpty = true;
+    const _wfCov = new Float32Array(WF_N * WF_N), _wfTmp = new Float32Array(WF_N * WF_N);
+    const _wfIn = new Float64Array(WF_N * WF_N), _wfOut = new Float64Array(WF_N * WF_N);
+    const _edF = new Float64Array(WF_N), _edD = new Float64Array(WF_N), _edV = new Int32Array(WF_N), _edZ = new Float64Array(WF_N + 1);
+    const _wfKer = (() => { const r = Math.ceil(WF_BLUR * WF_RES * 2.5), s = WF_BLUR * WF_RES, k = []; let t = 0;
+      for (let i = -r; i <= r; i++) { const w = Math.exp(-i * i / (2 * s * s)); k.push(w); t += w; } return k.map((w) => w / t); })();
+    function wfBlur(src, dst, tmp, ker) { // separable, edges clamped
+      const N = WF_N, r = (ker.length - 1) >> 1;
+      for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+        let s = 0; for (let k = -r; k <= r; k++) { const ii = i + k < 0 ? 0 : (i + k >= N ? N - 1 : i + k); s += src[j * N + ii] * ker[k + r]; }
+        tmp[j * N + i] = s;
+      }
+      for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+        let s = 0; for (let k = -r; k <= r; k++) { const jj = j + k < 0 ? 0 : (j + k >= N ? N - 1 : j + k); s += tmp[jj * N + i] * ker[k + r]; }
+        dst[j * N + i] = s;
+      }
+    }
+    function edt1d(n) { // Felzenszwalb & Huttenlocher: _edF (squared costs) -> _edD
+      const f = _edF, d = _edD, v = _edV, z = _edZ;
+      let k = 0; v[0] = 0; z[0] = -1e30; z[1] = 1e30;
+      for (let q = 1; q < n; q++) {
+        let s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+        while (s <= z[k]) { k--; s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]); }
+        k++; v[k] = q; z[k] = s; z[k + 1] = 1e30;
+      }
+      k = 0;
+      for (let q = 0; q < n; q++) { while (z[k + 1] < q) k++; d[q] = (q - v[k]) * (q - v[k]) + f[v[k]]; }
+    }
+    function edt2d(g) { // in place, squared node distances
+      const N = WF_N;
+      for (let i = 0; i < N; i++) { for (let j = 0; j < N; j++) _edF[j] = g[j * N + i]; edt1d(N); for (let j = 0; j < N; j++) g[j * N + i] = _edD[j]; }
+      for (let j = 0; j < N; j++) { for (let i = 0; i < N; i++) _edF[i] = g[j * N + i]; edt1d(N); for (let i = 0; i < N; i++) g[j * N + i] = _edD[i]; }
+    }
+    function rebuildWaterField() {
+      const N = WF_N, h = 1 / WF_RES;
+      waterFieldEmpty = !terrain.water;
+      if (waterFieldEmpty) { waterField.fill(WF_FAR); return; }
+      const cov = _wfCov, isW = (x, z) => {
+        const qx = Math.floor((x + HALF_GRID) * MAT_RES), qz = Math.floor((z + HALF_GRID) * MAT_RES);
+        return qx >= 0 && qx < MAT_N && qz >= 0 && qz < MAT_N && terrain.mat[qz * MAT_N + qx] === MAT_WATER ? 1 : 0;
+      };
+      const e = h * 0.25; // 2x2 sub-samples: nodes on a cell edge get half
+      for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+        const x = i * h - HALF_GRID, z = j * h - HALF_GRID;
+        cov[j * N + i] = (isW(x - e, z - e) + isW(x + e, z - e) + isW(x - e, z + e) + isW(x + e, z + e)) * 0.25;
+      }
+      wfBlur(cov, cov, _wfTmp, _wfKer);
+      for (let k = 0; k < N * N; k++) { const wet = cov[k] > 0.5; _wfOut[k] = wet ? 0 : 1e20; _wfIn[k] = wet ? 1e20 : 0; }
+      edt2d(_wfOut); edt2d(_wfIn);
+      for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+        const k = j * N + i, c = cov[k];
+        let s = c > 0.5 ? -(Math.sqrt(_wfIn[k]) - 0.5) * h : (Math.sqrt(_wfOut[k]) - 0.5) * h;
+        const gx = (cov[j * N + Math.min(N - 1, i + 1)] - cov[j * N + Math.max(0, i - 1)]) / (2 * h);
+        const gz = (cov[Math.min(N - 1, j + 1) * N + i] - cov[Math.max(0, j - 1) * N + i]) / (2 * h);
+        const g = Math.hypot(gx, gz);
+        if (g > 0.5) { // at the shore: linear estimate from the soft coverage, faded into the transform
+          const sl = (0.5 - c) / g, w = 1 - Math.min(1, Math.max(0, (Math.abs(sl) - 0.5 * h) / h));
+          if (w > 0) s = s + (sl - s) * w;
+        }
+        waterField[k] = s;
+      }
+    }
+    // Signed distance to the pond(s) at a world point: < 0 inside water, 0 at the shoreline, > 0 on land
+    function getPondSDF(wx, wz) {
+      if (waterFieldEmpty) return WF_FAR;
+      const N = WF_N, m = N - 1 - 1e-6;
+      let fx = (wx + HALF_GRID) * WF_RES, fz = (wz + HALF_GRID) * WF_RES;
+      fx = fx < 0 ? 0 : (fx > m ? m : fx); fz = fz < 0 ? 0 : (fz > m ? m : fz);
+      const i = Math.floor(fx), j = Math.floor(fz), tx = fx - i, tz = fz - j, k = j * N + i;
+      const a = waterField[k] + (waterField[k + 1] - waterField[k]) * tx;
+      const b = waterField[k + N] + (waterField[k + N + 1] - waterField[k + N]) * tx;
+      return a + (b - a) * tz;
+    }
 
     // Default island: Cozy Back-Hill Framing (Terraced 1~2 steps on the back two edges: gx <= 2, gz <= 2)
     function defaultHillLevel(gx, gz) {
@@ -581,11 +663,18 @@
       return 0;
     }
 
+    // default ground: all grass, water where the old round pond was (cell centre inside it)
+    const DEFAULT_MAT = new Uint8Array(MAT_N * MAT_N);
+    for (let qz = 0; qz < MAT_N; qz++) for (let qx = 0; qx < MAT_N; qx++) {
+      if (defaultPondSDF((qx + 0.5) / MAT_RES - HALF_GRID, (qz + 0.5) / MAT_RES - HALF_GRID) < 0) DEFAULT_MAT[qz * MAT_N + qx] = MAT_WATER;
+    }
     function resetTerrainData() {
       for (let gz = 0; gz < GRID_SIZE; gz++) for (let gx = 0; gx < GRID_SIZE; gx++) {
         terrain.level[gz * GRID_SIZE + gx] = defaultHillLevel(gx, gz);
       }
-      terrain.mat.fill(MAT_GRASS); terrain.painted = 0;
+      terrain.mat.set(DEFAULT_MAT); terrain.painted = 0;
+      terrain.water = 0; for (let q = 0; q < DEFAULT_MAT.length; q++) if (DEFAULT_MAT[q] === MAT_WATER) terrain.water++;
+      rebuildWaterField();
       terrain.version++;
     }
     resetTerrainData();
@@ -595,7 +684,8 @@
     const _matW = new Float32Array(MAT_KINDS);
     function terrainMatCell(qx, qz) {
       qx = qx < 0 ? 0 : (qx >= MAT_N ? MAT_N - 1 : qx); qz = qz < 0 ? 0 : (qz >= MAT_N ? MAT_N - 1 : qz);
-      return terrain.mat[qz * MAT_N + qx];
+      const m = terrain.mat[qz * MAT_N + qx];
+      return m === MAT_WATER ? MAT_GRASS : m; // the pond bed is coloured from getPondSDF
     }
     function terrainPaintAt(wx, wz) {
       if (!terrain.painted) return MAT_GRASS;
@@ -626,8 +716,8 @@
       return getHillLevel(gx, gz) * STEP_HEIGHT;
     }
 
-    // Smooth continuous surface height at any world (wx, wz) for hills + rounded pond basin
-    function getContinuousTerrainHeight(wx, wz) {
+    // Hill terraces only (no pond basin): flat on each tile's middle, sloped 0.28 either side of a step
+    function getHillHeight(wx, wz) {
       const gx = THREE.MathUtils.clamp(wx + HALF_GRID - 0.5, 0, GRID_SIZE - 1);
       const gz = THREE.MathUtils.clamp(wz + HALF_GRID - 0.5, 0, GRID_SIZE - 1);
       const x0 = Math.floor(gx), z0 = Math.floor(gz);
@@ -641,12 +731,16 @@
       const h10 = getTileElevation(x1, z0);
       const h01 = getTileElevation(x0, z1);
       const h11 = getTileElevation(x1, z1);
-      const hillH = THREE.MathUtils.lerp(
+      return THREE.MathUtils.lerp(
         THREE.MathUtils.lerp(h00, h10, fx),
         THREE.MathUtils.lerp(h01, h11, fx),
         fz
       );
+    }
 
+    // Smooth continuous surface height at any world (wx, wz) for hills + rounded pond basin
+    function getContinuousTerrainHeight(wx, wz) {
+      const hillH = getHillHeight(wx, wz);
       // Organic smooth depression for the rounded pond basin
       const sdf = getPondSDF(wx, wz);
       const basin = THREE.MathUtils.smoothstep(sdf, -0.35, 0.36); // 0 deep inside pond .. 1 on land
@@ -1247,6 +1341,19 @@
       playPaint(mat = 0, pan = 0) {
         if (!this.ctx || !this.enabled) return;
         const t = this.ctx.currentTime;
+        if (mat === 4) { // water: a small wet bloop over a soft trickle
+          const o = this.ctx.createOscillator(), g = this.ctx.createGain(), p = 0.9 + Math.random() * 0.35;
+          o.type = 'sine';
+          o.frequency.setValueAtTime(300 * p, t);
+          o.frequency.exponentialRampToValueAtTime(720 * p, t + 0.06);
+          g.gain.setValueAtTime(0.0001, t);
+          g.gain.linearRampToValueAtTime(0.07, t + 0.008);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.1);
+          o.connect(g); this.out(g, pan);
+          o.start(t); o.stop(t + 0.11);
+          this.noiseHit(t, { freq: 1500 + Math.random() * 500, q: 1.2, vol: 0.025, decay: 0.09, pan });
+          return;
+        }
         const P = [[2600, 0.8, 0.05], [5200, 0.7, 0.05], [900, 0.9, 0.06], [1700, 2.5, 0.045]][mat] || [2600, 0.8, 0.05];
         this.noiseHit(t, { freq: P[0] * (0.92 + Math.random() * 0.16), q: P[1], vol: P[2], decay: 0.07, pan });
         if (mat === 3) this.noiseHit(t + 0.025, { freq: 2400 + Math.random() * 600, q: 6, vol: 0.05, decay: 0.018, pan });
@@ -2122,6 +2229,11 @@
         { el: 'ellipse', cx: 22.5, cy: 34, rx: 5.2, ry: 3.3, f: '#878c96' },
         { el: 'ellipse', cx: 34, cy: 36.8, rx: 4.2, ry: 2.7, f: '#9da2ab' },
         { el: 'ellipse', cx: 33, cy: 30.6, rx: 2.6, ry: 1.7, f: '#878c96' }
+      ],
+      p_water: [
+        { el: 'ellipse', cx: 28, cy: 35, rx: 17, ry: 9, f: '#86bcd8' },
+        { el: 'path', d: 'M17.5 34.5c2.5-1.8 5-1.8 7.5 0s5 1.8 7.5 0M23.5 39.5c2-1.3 4-1.3 6 0' },
+        { el: 'circle', cx: 37.6, cy: 31.4, r: 1.5, f: '#f2fbff', ns: true }
       ],
       lower: [
         { el: 'path', d: 'M12 33h8.5l3.2 6.5h8.6l3.2-6.5H44v10H12z', f: '#a8744a' },
@@ -3674,9 +3786,11 @@
       { id: 'paint_grass', name: '잔디', category: 'terrain', glyph: 'p_grass', paint: MAT_GRASS, cursor: '#a8ffbe' },
       { id: 'paint_sand', name: '모래', category: 'terrain', glyph: 'p_sand', paint: MAT_SAND, cursor: '#ffe7a8' },
       { id: 'paint_dirt', name: '흙', category: 'terrain', glyph: 'p_dirt', paint: MAT_DIRT, cursor: '#e8b88a' },
-      { id: 'paint_stone', name: '돌바닥', category: 'terrain', glyph: 'p_stone', paint: MAT_STONE, cursor: '#d6dde8' }
+      { id: 'paint_stone', name: '돌바닥', category: 'terrain', glyph: 'p_stone', paint: MAT_STONE, cursor: '#d6dde8' },
+      // water (step 4): painted like ground, the basin digs itself; other ground paints it dry
+      { id: 'paint_water', name: '물', category: 'terrain', glyph: 'p_water', paint: MAT_WATER, cursor: '#a6dcff' }
     ];
-    const TERRAIN_MAX = 3; // steps above the meadow (digging below it comes with water, step 4)
+    const TERRAIN_MAX = 3; // steps above the meadow (water digs its own basin, no steps below 0)
     const terrainToolById = (id) => TERRAIN_TOOLS.find((t) => t.id === id);
     // Shared fields every item has, whatever it is built with:
     //   id, name, category, type ('stack' | 'soup' | '3d_cabin' | 'auto_path' | 'auto_fence'),
@@ -4543,6 +4657,7 @@
       sdfCanvas.height = sdfSize;
       const sCtx = sdfCanvas.getContext('2d');
       const imgData = sCtx.createImageData(sdfSize, sdfSize);
+      const fillSdfCanvas = () => {
       for (let py = 0; py < sdfSize; py++) {
         for (let pxIdx = 0; pxIdx < sdfSize; pxIdx++) {
           const wx = (pxIdx / (sdfSize - 1) - 0.5) * GRID_SIZE;
@@ -4558,12 +4673,37 @@
         }
       }
       sCtx.putImageData(imgData, 0, 0);
+      };
+      fillSdfCanvas();
       const sdfTex = new THREE.CanvasTexture(sdfCanvas);
       sdfTex.minFilter = THREE.LinearFilter;
       sdfTex.magFilter = THREE.LinearFilter;
 
-      const waterGeo = new THREE.PlaneGeometry(GRID_SIZE, GRID_SIZE, 32, 32);
-      waterGeo.rotateX(-Math.PI / 2);
+      // water (and its mist) are quads over the quarter tiles the water or its soft edge reaches,
+      // each at its own terrace's height (a pond sits on one flat terrace); uv = the sdf texture's
+      const buildPondSheet = (reach) => {
+        const pos = [], uv = [], idx = [], s = 1 / MAT_RES;
+        for (let qz = 0; qz < MAT_N; qz++) for (let qx = 0; qx < MAT_N; qx++) {
+          const x0 = qx * s - HALF_GRID, z0 = qz * s - HALF_GRID;
+          let d = getPondSDF(x0 + s / 2, z0 + s / 2);
+          if (d > reach + s) continue;
+          for (const [ox, oz] of [[0, 0], [s, 0], [0, s], [s, s]]) d = Math.min(d, getPondSDF(x0 + ox, z0 + oz));
+          if (d > reach) continue;
+          const y = getTileElevation(Math.floor(qx / MAT_RES), Math.floor(qz / MAT_RES)), b = pos.length / 3;
+          for (const [ox, oz] of [[0, 0], [s, 0], [0, s], [s, s]]) {
+            const x = x0 + ox, z = z0 + oz;
+            pos.push(x, y, z); uv.push((x + HALF_GRID) / GRID_SIZE, (HALF_GRID - z) / GRID_SIZE);
+          }
+          idx.push(b, b + 2, b + 1, b + 1, b + 2, b + 3);
+        }
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+        g.setIndex(idx);
+        g.computeBoundingSphere();
+        return g;
+      };
+      const waterGeo = buildPondSheet(0.1);
       const waterMat = new THREE.ShaderMaterial({
         uniforms: {
           uSdf: { value: sdfTex },
@@ -4638,7 +4778,7 @@
         { x: 1.9, z: 2.0, flower: true },
         { x: 3.1, z: 2.3, flower: false },
         { x: 2.3, z: 3.0, flower: true }
-      ].forEach((lp) => {
+      ].forEach((lp) => { // starter pond only: hidden when the water there is gone (placeLilies)
         const pad = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.025, 10, 1, false, 0.2, Math.PI * 1.85), lilyMat);
         pad.position.set(lp.x, -0.075, lp.z);
         pad.rotation.y = lp.x * 1.7;
@@ -4650,28 +4790,59 @@
           chunkTopSurface.add(fl);
           part.push(fl);
         }
-        lilyParts.push({ meshes: part, x: lp.x, z: lp.z });
+        lilyParts.push({ meshes: part, x: lp.x, z: lp.z, y: part.map((m) => m.position.y) });
       });
+      const placeLilies = () => lilyParts.forEach((lp) => {
+        const on = getPondSDF(lp.x, lp.z) < -0.24;
+        const y = getTileElevation(Math.floor(lp.x + HALF_GRID), Math.floor(lp.z + HALF_GRID));
+        lp.meshes.forEach((m, i) => { m.visible = on; m.position.y = lp.y[i] + y; });
+      });
+      placeLilies();
 
-      // Low-lying valley mist sheet drifting over the pond
-      const mistCanvas = document.createElement('canvas');
-      mistCanvas.width = 64; mistCanvas.height = 64;
-      const mCtx = mistCanvas.getContext('2d');
-      const mGrad = mCtx.createRadialGradient(32, 32, 2, 32, 32, 32);
-      mGrad.addColorStop(0, 'rgba(255,255,255,0.42)');
-      mGrad.addColorStop(0.6, 'rgba(255,255,255,0.14)');
-      mGrad.addColorStop(1, 'rgba(255,255,255,0.0)');
-      mCtx.fillStyle = mGrad; mCtx.fillRect(0, 0, 64, 64);
-      const mistMat = new THREE.MeshBasicMaterial({
-        map: new THREE.CanvasTexture(mistCanvas),
-        color: ATMOSPHERES.day.fogColor,
+      // Low-lying valley mist drifting over the water: thickest over open water, thinning past the shore
+      const mistMat = new THREE.ShaderMaterial({
+        uniforms: {
+          uSdf: { value: sdfTex },
+          uTime: sharedUniforms.uTime,
+          uColor: { value: new THREE.Color(ATMOSPHERES.day.fogColor) },
+          uOpacity: { value: 0.24 }
+        },
+        vertexShader: `
+          varying vec2 vUv;
+          varying vec2 vXZ;
+          void main() {
+            vUv = uv;
+            vXZ = position.xz;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform sampler2D uSdf;
+          uniform float uTime;
+          uniform vec3 uColor;
+          uniform float uOpacity;
+          varying vec2 vUv;
+          varying vec2 vXZ;
+          float mh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+          float mn(vec2 p) {
+            vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+            return mix(mix(mh(i), mh(i + vec2(1.0, 0.0)), f.x), mix(mh(i + vec2(0.0, 1.0)), mh(i + 1.0), f.x), f.y);
+          }
+          void main() {
+            float sdf = (texture2D(uSdf, vUv).r - 0.5) * 3.0;
+            float a = smoothstep(0.32, -0.9, sdf);
+            if (a < 0.01) discard;
+            vec2 drift = vec2(sin(uTime * 0.25), cos(uTime * 0.2)) * 0.35;
+            float n = mn((vXZ - drift) * 0.55) * 0.65 + mn((vXZ + drift) * 1.3 + 7.0) * 0.35;
+            a *= 0.42 * (0.45 + 0.75 * n) * uOpacity;
+            gl_FragColor = vec4(uColor, a);
+          }
+        `,
         transparent: true,
-        opacity: 0.24,
         depthWrite: false
       });
-      const pondMist = new THREE.Mesh(new THREE.PlaneGeometry(5.6, 5.6), mistMat);
-      pondMist.rotation.x = -Math.PI / 2;
-      pondMist.position.set(2.3, 0.12, 2.3);
+      const pondMist = new THREE.Mesh(buildPondSheet(0.32), mistMat);
+      pondMist.position.y = 0.12;
       chunkTopSurface.add(pondMist);
 
       // --- 8E. Subtle Context-Sensitive Terrain Grid Overlay (>50% lower contrast, auto-hides!) ---
@@ -4726,15 +4897,23 @@
       chunkTopSurface.add(gridOverlay);
 
       // terrain edits: rebuild everything that follows the ground height (the meshes stay, so
-      // chunkTopSurface.children[0] is still the turf). Clay, bedrock and the pond don't depend on it.
-      function rebuildSurface() {
+      // chunkTopSurface.children[0] is still the turf). Clay and bedrock don't depend on it.
+      // The water follows terrain.mat (call rebuildWaterField first); soil = false skips the island
+      // rim (topsoil wall, roots), which water never reaches (it keeps WATER_EDGE off the rim).
+      function rebuildSurface(soil = true) {
         topMesh.geometry.dispose();
         topMesh.geometry = buildTurfGeometry();
-        const soil = buildTopsoil();
-        topsoilMesh.geometry.dispose();
-        topsoilMesh.geometry = soil.geometry;
-        placeRoots();
+        if (soil) {
+          const s = buildTopsoil();
+          topsoilMesh.geometry.dispose();
+          topsoilMesh.geometry = s.geometry;
+          placeRoots();
+        }
         fitGridHeights(gridGeo);
+        fillSdfCanvas(); sdfTex.needsUpdate = true;
+        waterMesh.geometry.dispose(); waterMesh.geometry = buildPondSheet(0.1);
+        pondMist.geometry.dispose(); pondMist.geometry = buildPondSheet(0.32);
+        placeLilies();
       }
       // ground paint: only the turf colours change (same vertices)
       function repaintSurface() {
@@ -6869,17 +7048,11 @@
           }
         });
 
-        // (C) Cluster organically around the Rounded Pond Rim
-        for (let a = 0; a < 18; a++) {
-          const ang = (a / 18) * Math.PI * 2 + 0.12;
-          for (let step = 0.6; step < 3.6; step += 0.08) {
-            const tx = 2.35 + Math.cos(ang) * step;
-            const tz = 2.35 + Math.sin(ang) * step;
-            if (getPondSDF(tx, tz) > 0.24) {
-              spawnGrassCluster(tx, tz, clusterSeed++);
-              break;
-            }
-          }
+        // (C) Grass clusters along every shoreline (a lattice of spots in the band just past the wet rim)
+        if (terrain.water) for (let j = 0; j < GRID_SIZE * 4; j++) for (let i = 0; i < GRID_SIZE * 4; i++) {
+          const tx = (i + 0.5) / 4 - HALF_GRID + (hash2D(i, j, 61) - 0.5) * 0.12, tz = (j + 0.5) / 4 - HALF_GRID + (hash2D(i, j, 62) - 0.5) * 0.12;
+          const d = getPondSDF(tx, tz);
+          if (d >= 0.22 && d < 0.38 && hash2D(i, j, 63) < 0.6) spawnGrassCluster(tx, tz, clusterSeed++);
         }
 
         // (D) Light natural accents on back-hill ledges (keeps central meadow clean & airy)
@@ -6893,21 +7066,17 @@
           }
         }
 
-        // Cluster smooth wet pebbles tightly along the organic rounded pond rim!
-        for (let a = 0; a < 90 && pebbleIdx < 110; a++) {
-          const ang = (a / 90) * Math.PI * 2;
-          // March radially outward from pond center until right on the curved shoreline!
-          let rx = 2.35, rz = 2.35;
-          for (let step = 0.5; step < 3.4; step += 0.08) {
-            const tx = 2.35 + Math.cos(ang) * step;
-            const tz = 2.35 + Math.sin(ang) * step;
-            if (getPondSDF(tx, tz) > 0.08) {
-              rx = tx + (hash2D(a, 1, 5) - 0.5) * 0.28;
-              rz = tz + (hash2D(a, 2, 5) - 0.5) * 0.28;
-              break;
-            }
-          }
+        // Smooth wet pebbles strewn along every shoreline (evenly thinned when there's more shore than pebbles)
+        const pebbleSpots = [];
+        if (terrain.water) for (let j = 0; j < GRID_SIZE * 8; j++) for (let i = 0; i < GRID_SIZE * 8; i++) {
+          const rx = (i + 0.5) / 8 - HALF_GRID + (hash2D(i, j, 5) - 0.5) * 0.1, rz = (j + 0.5) / 8 - HALF_GRID + (hash2D(i, j, 6) - 0.5) * 0.1;
           if (Math.abs(rx) > HALF_GRID - 0.2 || Math.abs(rz) > HALF_GRID - 0.2) continue;
+          const d = getPondSDF(rx, rz);
+          if (d >= 0.04 && d < 0.17 && hash2D(i, j, 7) < 0.8) pebbleSpots.push([rx, rz, i * 7 + j * 13]);
+        }
+        const pebbleStride = Math.max(1, pebbleSpots.length / 110);
+        for (let f = 0; f < pebbleSpots.length && pebbleIdx < 110; f += pebbleStride) {
+          const [rx, rz, a] = pebbleSpots[Math.floor(f)];
           const py = getContinuousTerrainHeight(rx, rz);
           const sc = 0.65 + hash2D(a, 3, 5) * 0.95;
           dummyObj.position.set(rx, py + 0.02, rz);
@@ -6918,6 +7087,7 @@
         }
         grassClutterInst.count = grassIdx; grassClutterInst.instanceMatrix.needsUpdate = true;
         pebbleClutterInst.count = pebbleIdx; pebbleClutterInst.instanceMatrix.needsUpdate = true;
+        pebbleClutterInst.visible = pebbleIdx > 0; // no water, no pebbles: no draw call
         rebuildSeedFlowers();
       }
 
@@ -7133,13 +7303,14 @@
         for (let i = -4; i <= 4; i++) for (let j = -4; j <= 4; j++) {
           if (getPondSDF(cx + i * TERRAIN_REACH / 4, cz + j * TERRAIN_REACH / 4) < 0.1) return false;
         }
-        const rects = flatFootprintsNear(cx, cz);
-        if (!rects.length) return true;
+        const rects = flatFootprintsNear(cx, cz), wet = waterCellsNear(cx, cz, 1.6);
+        if (!rects.length && !wet.length) return true;
         const before = rects.map(rectDeviation);
         terrain.level[k] = next; // try it, measure, put it back
         const after = rects.map(rectDeviation);
+        const pondsFlat = wet.every(([wx, wz]) => waterFlatAt(wx, wz));
         terrain.level[k] = cur;
-        return after.every((d, i) => d <= Math.max(0.04, before[i] + 1e-6));
+        return pondsFlat && after.every((d, i) => d <= Math.max(0.04, before[i] + 1e-6));
       }
       function editTerrainAt(gx, gz, dir) {
         const cx = gx - HALF_GRID + 0.5, cz = gz - HALF_GRID + 0.5;
@@ -7154,30 +7325,96 @@
         audio.playTerrain(dir, screenPan(cx, y, cz));
         return true;
       }
-      /* ---- GROUND PAINT (step 3: drag a quarter-tile brush) ---- */
+      /* ---- GROUND PAINT (step 3: drag a quarter-tile brush) + WATER (step 4) ---- */
       // Only the turf colours change while dragging (one rebuild per frame at most); grass tufts and
-      // flower-bed flowers follow when the stroke ends. Refused: under the pond.
-      let paintStroke = null, repaintPending = false;
+      // seed flowers follow when the stroke ends. Water is painted the same way: the basin digs itself
+      // (rebuildWaterField + turf heights, water and mist sheets, once a frame); painting any ground
+      // over water dries it.
+      let paintStroke = null, repaintPending = false, waterDirty = false;
       const paintCellAt = (wx, wz) => [Math.floor((wx + HALF_GRID) * MAT_RES), Math.floor((wz + HALF_GRID) * MAT_RES)];
       const paintCellCentre = (qx, qz) => [(qx + 0.5) / MAT_RES - HALF_GRID, (qz + 0.5) / MAT_RES - HALF_GRID];
-      function paintAllowed(qx, qz) {
+      // Water rules. A pond lies on one terrace: the hill ground is flat within WATER_FLAT of every water
+      // cell centre (a terrace slope runs 0.28 either side of a step; WATER_FLAT is 0.175 past the cell's
+      // edge, where the water sheet has long faded out (sdf 0.08), so water never hangs over a slope;
+      // no waterfalls yet). WATER_EDGE keeps it off the island rim. Nothing
+      // standing on dry ground may end up wet (cabins, paths, trees, fences, props: refused, red cursor);
+      // seed flowers just sink. Drying is refused only under a dock's water end.
+      const WATER_FLAT = 0.3, WATER_EDGE = 0.6, CELL_R = Math.SQRT1_2 / MAT_RES;
+      function waterFlatAt(cx, cz) {
+        const y0 = getHillHeight(cx, cz);
+        for (let i = -2; i <= 2; i++) for (let j = -2; j <= 2; j++) {
+          if (Math.abs(getHillHeight(cx + i * WATER_FLAT / 2, cz + j * WATER_FLAT / 2) - y0) > 1e-4) return false;
+        }
+        return true;
+      }
+      function waterCellsNear(cx, cz, r) { // centres of the water cells within r (square)
+        const out = [];
+        if (!terrain.water) return out;
+        const [q0x, q0z] = paintCellAt(cx - r, cz - r), [q1x, q1z] = paintCellAt(cx + r, cz + r);
+        for (let qz = Math.max(0, q0z); qz <= Math.min(MAT_N - 1, q1z); qz++) for (let qx = Math.max(0, q0x); qx <= Math.min(MAT_N - 1, q1x); qx++) {
+          if (terrain.mat[qz * MAT_N + qx] === MAT_WATER) out.push(paintCellCentre(qx, qz));
+        }
+        return out;
+      }
+      function waterHitsObject(cx, cz) { // would water in the cell at (cx, cz) wet something standing nearby?
+        const R = CELL_R + 0.1;
+        for (const c of cabinRects()) if (rectHitsCircle(c, cx, cz, R)) return true;
+        for (const e of placedItems.values()) {
+          if (e.id === 'cabin') continue;
+          const ex = e.gx - HALF_GRID + 0.5, ez = e.gz - HALF_GRID + 0.5;
+          if (e.id === 'path') { if (rectHitsCircle({ x0: ex - 0.46, x1: ex + 0.46, z0: ez - 0.46, z1: ez + 0.46 }, cx, cz, CELL_R + 0.04)) return true; }
+          else if (Math.hypot(cx - ex, cz - ez) < Math.max(0.18, gridSolidR(e.id)) + R) return true; // stays off isPondTile
+        }
+        for (const rail of fenceRailRects()) if (rectHitsCircle(rail, cx, cz, R)) return true;
+        for (const o of snapProps) {
+          const def = assetsById[o.id].def;
+          if (def.shore) { if (rectHitsCircle(localRect(def.shore.land, o.wx, o.wz, o.rotation), cx, cz, CELL_R + 0.32)) return true; }
+          else if (rectHitsCircle(footprintRect(def, o.wx, o.wz, o.rotation), cx, cz, R)) return true;
+        }
+        for (const fp of freeProps) {
+          const solid = fp.id === 'rocks' ? 0.34 : assetsById[fp.id]?.def.solidRadius;
+          if (Math.hypot(cx - fp.wx, cz - fp.wz) < (solid ? solid * (fp.scale || 1) : 0.12) + R) return true;
+        }
+        return false;
+      }
+      function dryHitsDock(cx, cz) { // drying this cell would leave a dock's water end on land
+        for (const o of snapProps) {
+          const def = assetsById[o.id].def;
+          if (def.shore && rectHitsCircle(localRect(def.shore.water, o.wx, o.wz, o.rotation), cx, cz, CELL_R + 0.3)) return true;
+        }
+        return false;
+      }
+      function paintAllowed(qx, qz, mat = MAT_GRASS) {
         if (qx < 0 || qx >= MAT_N || qz < 0 || qz >= MAT_N) return false;
-        const [cx, cz] = paintCellCentre(qx, qz);
-        return getPondSDF(cx, cz) >= 0.05;
+        const [cx, cz] = paintCellCentre(qx, qz), old = terrain.mat[qz * MAT_N + qx];
+        if (old === mat) return true;
+        if (mat === MAT_WATER) {
+          if (Math.abs(cx) > HALF_GRID - WATER_EDGE || Math.abs(cz) > HALF_GRID - WATER_EDGE) return false;
+          return waterFlatAt(cx, cz) && !waterHitsObject(cx, cz);
+        }
+        return old !== MAT_WATER || !dryHitsDock(cx, cz);
       }
       function paintCell(qx, qz, mat) { // true when the cell changed
-        if (!paintAllowed(qx, qz)) return false;
+        if (!paintAllowed(qx, qz, mat)) return false;
         const q = qz * MAT_N + qx, old = terrain.mat[q];
         if (old === mat) return false;
         terrain.mat[q] = mat;
-        terrain.painted += (old === MAT_GRASS ? 1 : 0) - (mat === MAT_GRASS ? 1 : 0);
+        const ground = (m) => (m !== MAT_GRASS && m !== MAT_WATER ? 1 : 0);
+        terrain.painted += ground(mat) - ground(old);
+        terrain.water += (mat === MAT_WATER ? 1 : 0) - (old === MAT_WATER ? 1 : 0);
+        if (mat === MAT_WATER || old === MAT_WATER) waterDirty = true;
         terrain.version++;
         return true;
       }
       function flushRepaint() {
         if (!repaintPending) return;
         repaintPending = false;
-        repaintTerrainSurface();
+        if (waterDirty) { // the basin moved: heights, water and mist sheets (the island rim stays)
+          waterDirty = false;
+          rebuildWaterField();
+          rebuildTerrainSurface(false);
+          markShadowsDirty(0.3);
+        } else repaintTerrainSurface();
         if (seedFlowers.length) rebuildSeedFlowers(); // flowers sink as the brush passes, not on release
       }
       function queueRepaint() {
@@ -7192,14 +7429,14 @@
           const [qx, qz] = paintCellAt(st.wx + dx * k / n, st.wz + dz * k / n);
           if (qx === st.qx && qz === st.qz) continue;
           st.qx = qx; st.qz = qz;
-          if (!paintCell(qx, qz, st.mat)) { if (!paintAllowed(qx, qz)) st.blocked = true; continue; }
+          if (!paintCell(qx, qz, st.mat)) { if (!paintAllowed(qx, qz, st.mat)) st.blocked = true; continue; }
           st.changed++;
           const now = performance.now();
           if (now - st.lastFx > 70) {
             st.lastFx = now;
             const [cx, cz] = paintCellCentre(qx, qz), cy = getContinuousTerrainHeight(cx, cz);
             audio.playPaint(st.mat, screenPan(cx, cy, cz));
-            if (st.mat !== MAT_STONE) burstDust(cx, cy, cz, 3, 0.12);
+            if (st.mat !== MAT_STONE && st.mat !== MAT_WATER) burstDust(cx, cy, cz, 3, 0.12);
           }
         }
         st.started = true; st.wx = wx; st.wz = wz;
@@ -7223,6 +7460,7 @@
 
       function terrainIsDefault() {
         if (terrain.painted) return false;
+        for (let q = 0; q < DEFAULT_MAT.length; q++) if (terrain.mat[q] !== DEFAULT_MAT[q]) return false;
         for (let gz = 0; gz < GRID_SIZE; gz++) for (let gx = 0; gx < GRID_SIZE; gx++) {
           if (terrain.level[gz * GRID_SIZE + gx] !== defaultHillLevel(gx, gz)) return false;
         }
@@ -7329,7 +7567,7 @@
           cursorTile.visible = true;
           cursorTile.scale.set(1.12 / MAT_RES / 0.98, 1.12 / MAT_RES / 0.98, 1);
           cursorTile.position.set(cx, y + 0.03, cz);
-          cursorMat.color.set(paintAllowed(qx, qz) ? tt.cursor : '#ff5252');
+          cursorMat.color.set(paintAllowed(qx, qz, tt.paint) ? tt.cursor : '#ff5252');
           return;
         }
         if (tt) { // terrain tool: the tile lights up (green up, gold down) or red when blocked
@@ -8102,10 +8340,8 @@
         sharedUniforms.uGradeWarmth.value = curAtmo.gradeWarmth;
         sharedUniforms.uNightFactor.value = curAtmo.nightFactor;
 
-        mistMat.color.copy(curAtmo.fogColor);
-        mistMat.opacity = curAtmo.fogDensity * 0.42;
-        pondMist.position.x = 2.3 + Math.sin(elapsed * 0.25) * 0.35;
-        pondMist.position.z = 2.3 + Math.cos(elapsed * 0.2) * 0.35;
+        mistMat.uniforms.uColor.value.copy(curAtmo.fogColor); // drifts in its shader (uTime)
+        mistMat.uniforms.uOpacity.value = curAtmo.fogDensity * 0.42;
 
         // 6. Warm PointLights & Glowing Halos synced with exploded elevation
         const glowPower = THREE.MathUtils.smoothstep(curAtmo.nightFactor, 0.15, 0.9);
@@ -8572,7 +8808,7 @@
         });
         // pond
         introFx(t0 + IT.water + 0.05, () => audio.introPlop(screenPan(2.4, 0, 2.4), 0.85));
-        lilyParts.forEach((lp, i) => introFx(t0 + IT.water + 0.3 + i * 0.09, () => audio.introPlop(screenPan(lp.x, 0, lp.z), 1.15 + i * 0.12)));
+        lilyParts.filter((lp) => lp.meshes[0].visible).forEach((lp, i) => introFx(t0 + IT.water + 0.3 + i * 0.09, () => audio.introPlop(screenPan(lp.x, 0, lp.z), 1.15 + i * 0.12)));
         // objects: dust when the first slice lands, one "tok" when the top lands; the pitch climbs
         // through the whole sequence instead of restarting per object. Cabins also get a ring.
         events.sort((a, b) => a.top - b.top);
@@ -8704,7 +8940,10 @@
           terrainMat: (qx, qz) => terrain.mat[qz * MAT_N + qx],
           terrainPaintAt: (x, z) => terrainPaintAt(x, z),
           terrainPainted: () => terrain.painted,
-          paintAllowed: (qx, qz) => paintAllowed(qx, qz),
+          paintAllowed: (qx, qz, mat = 0) => paintAllowed(qx, qz, mat),
+          terrainWater: () => terrain.water,
+          ground: (x, z) => getContinuousTerrainHeight(x, z),
+          waterSheet: () => ({ water: waterMesh.geometry.index.count / 6, mist: pondMist.geometry.index.count / 6, lilies: lilyParts.map((lp) => lp.meshes[0].visible) }),
           instanceCount: (id) => instancedById[id].count,
           instanceVisible: (id) => instancedById[id].visible,
           seedFlowers: () => ({ now: performance.now() * 0.001, list: seedFlowers.filter((f) => !f.erased).map((f) => [f.wx, f.wz, f.tint, f.spawnT, f.goneAt == null ? 0 : 1]) }),

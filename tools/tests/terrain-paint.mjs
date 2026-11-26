@@ -1,5 +1,5 @@
 // Ground paint test (terrain step 3): the terrain slot's paint tools paint quarter tiles by dragging,
-// only the turf colours change (topsoil, clay, bedrock and heights stay), the pond is refused, painting
+// only the turf colours change (topsoil, clay, bedrock and heights stay), painting
 // grass back gives exactly the default turf, and "처음 섬으로" clears the paint. Also fails on any console error or warning.
 // usage: node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/terrain-paint.mjs
 export default async ({ wait, evaluate, mouse, send, log }) => {
@@ -34,7 +34,7 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
   const matRow = async (qx0, qx1, qz) => { const r = []; for (let q = qx0; q <= qx1; q++) r.push(await J(`${M}.terrainMat(${q}, ${qz})`)); return r; };
 
   const tools = await J(`[...document.querySelectorAll('#hud-dock .item[data-category="terrain"]')].map(b => b.dataset.tool).join()`);
-  ok('terrain slot has the four paint tools (no flower bed: flowers come from 들꽃 씨앗)', tools === 'raise,lower,paint_grass,paint_sand,paint_dirt,paint_stone', tools);
+  ok('terrain slot has the four paint tools + water (no flower bed: flowers come from 들꽃 씨앗)', tools === 'raise,lower,paint_grass,paint_sand,paint_dirt,paint_stone,paint_water', tools);
   const d0 = await J(`${M}.islandDigest()`);
   const h0 = (await J(`${M}.terrainDump(0.05, 1)`)).hash;
   ok('nothing painted at start', (await J(`${M}.terrainPainted()`)) === 0);
@@ -54,11 +54,9 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
   ok('only the turf mesh changed (topsoil, roots, clay, bedrock as before)', d1[0] !== d0[0] && same(d0.slice(1), d1.slice(1)));
   ok('ground heights unchanged by painting', same(h0, (await J(`${M}.terrainDump(0.05, 1)`)).hash));
 
-  // pond refused
+  // ground paint over the pond dries it (step 4: tools/tests/terrain-water.mjs tests the strokes)
   const pq = cell(2.35, 2.35);
-  ok('the pond can not be painted', !(await J(`${M}.paintAllowed(${pq[0]}, ${pq[1]})`)));
-  await drag([2.2, 2.3], [2.5, 2.3], 3);
-  ok('a stroke over the water paints nothing', (await J(`${M}.terrainMat(${pq[0]}, ${pq[1]})`)) === 0);
+  ok('ground paint over the pond is allowed (it dries the water)', await J(`${M}.paintAllowed(${pq[0]}, ${pq[1]}, 1)`));
 
   // stone and dirt work too
   await tool('paint_stone'); await drag([2.8, -0.3], [3.6, -0.3], 4);

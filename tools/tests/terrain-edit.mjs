@@ -57,7 +57,7 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
   // refusals
   const v1 = await ver();
   await click(...T); // lower below the meadow
-  ok('cannot dig below the meadow (water editing comes later)', (await lvl(...T)) === 0 && (await ver()) === v1);
+  ok('cannot dig below the meadow (water digs its own basin)', (await lvl(...T)) === 0 && (await ver()) === v1);
   ok('pond tiles are refused', !(await J(`${M}.terrainAllowed(8, 8, 1)`)) && !(await J(`${M}.terrainAllowed(7, 9, 1)`)));
   ok('the cabin tile is refused (cabin needs flat ground)', !(await J(`${M}.terrainAllowed(4, 4, 1)`)));
   await tool('raise');
