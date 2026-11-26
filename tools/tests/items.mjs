@@ -6,7 +6,7 @@ export default async ({ wait, evaluate, mouse, key, log }) => {
   await wait(2500);
   const ok = (name, cond, extra = '') => log((cond ? 'PASS ' : 'FAIL ') + name + (extra ? '  ' + extra : ''));
   const J = (expr) => evaluate(`JSON.stringify(${expr})`).then(JSON.parse);
-  const total = async () => { const s = await J('window.__mori.state()'); return s.placed + s.free; };
+  const total = async () => { const s = await J('window.__mori.state()'); return s.placed + s.free + (s.snap || 0); };
 
   // 1) categories
   const items = await J('window.__mori.items()');

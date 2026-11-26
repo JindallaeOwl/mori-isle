@@ -36,6 +36,7 @@
 ## 지켜야 할 규칙 (어기면 조용히 깨짐)
 - **그림자는 필요할 때만 갱신한다** (`renderer.shadowMap.autoUpdate = false`). 그림자를 드리우는 물체를 움직이는 코드를 넣으면 반드시 `markShadowsDirty(초)`를 부른다. 지금은 `rebuildInstances`(1.0초)와 분해 보기 전환(1.4초)에서 부른다.
 - **포인트 라이트 8개는 항상 `visible = true`**로 두고, 안 쓰면 `intensity = 0`, 사용 여부는 `pl.userData.active`로 구분한다. 보이는 조명 수가 바뀌면 모든 셰이더가 다시 컴파일되어 끊긴다. 불빛 오브젝트는 몇 개든 `lightSources`에 모이고, `updatePointLights`가 0.3초마다 화면 중심에 가까운 8개를 골라 조명을 빌려 준다(바뀔 때 0.2초 페이드). 조명을 직접 배정하지 말 것.
+- **배치 방식 세 가지:** ① 1칸 격자(`placedItems`, 오두막·나무·돌길·울타리) ② ¼칸 맞춤(`snapProps`, `snapPlace: true` + `footprint: [x0, x1, z0, z1]` 바닥 크기, 벤치·가로등·모닥불·생활 소품. 사용자 결정 2026-11-26: 소품이 칸 가운데 떠 보여서 바꿈, 나무는 아직 1칸 유지) ③ 자유 배치(`freeProps`, 꽃·버섯·바위·화분). ¼칸 맞춤은 `snapPlacement`가 ¼칸에 맞추되 오두막 벽·다른 소품 가장자리가 `SNAP_PULL`(0.16) 안이면 거기에 붙이고, `snapRectBlocked`가 네모 바닥으로 충돌(연못, 비탈·턱, 섬 밖, 돌길 중심, 나무·울타리 기둥과 가로대, 바위·꽃, 다른 소품)을 본다. 1칸·자유 배치 쪽도 `snapProps`를 피한다(`canPlaceAtHit`, `isBlockedForPoint`). 접지 그림자·모닥불·불빛은 공통 `addItemExtras`. 새 소품의 `footprint`는 땅에 닿는 부분만 잡는다(위로 뻗은 팔·처마는 빼도 됨).
 - **오브젝트 정의 공통 항목:** `id`, `name`(설명 없이 이름만), `category`(`CATEGORIES`의 id), `type`, `freePlace`, `autoConnect`, `contactRadius`, `glow`, `explodeTier`. 카테고리가 없으면 콘솔 경고가 뜨고 `items.mjs` 테스트가 실패한다. 도구 막대는 카테고리 순으로 정렬된다.
 - **오두막 합치기:** 낙하가 끝나면 `mergeChunkToOneMesh`가 덩어리마다 재질 값을 꼭짓점에 넣어 메쉬 1~2개로 합친다(공유 재질 `getCabinMergedMaterial`, `userData.shared`라 해제하지 않음). 오두막에 새 재질을 쓸 때는 불투명·단면 `MeshStandardMaterial`이어야 하고, 야간 발광 배율은 `enhanceStandardMaterial`의 `emissiveNightBoost`로 준다.
 - **카메라 상하 각도는 30° ~ 86°**(`ELEV_MIN`/`ELEV_MAX`). 스프라이트 적층은 낮은 각도에서 층이 갈라져 보여서 사용자가 수평·아래 시점을 막기로 결정했다. 넓히지 말 것.
@@ -57,6 +58,7 @@ node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/audio.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/items.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/ui.mjs
+node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/snap.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1&intro=1" tools/tests/intro.mjs
 $env:AUTOPLAY='0'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1&intro=1" tools/tests/sound-unlock.mjs; $env:AUTOPLAY=$null
 $env:SHOT='night'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1&time=night" tools/tests/screenshot.mjs

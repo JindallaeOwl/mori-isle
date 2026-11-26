@@ -45,7 +45,7 @@ export default async ({ wait, evaluate, mouse, key, shot, log }) => {
   await wait(300);
   const held = await st();
   ok('keys do nothing mid-assembly', !held.exploded && !(await J(`document.getElementById('btn-eraser').classList.contains('active')`)));
-  ok('a click places nothing mid-assembly', held.placed === before.placed && held.free === before.free);
+  ok('a click places nothing mid-assembly', held.placed === before.placed && held.free === before.free && held.snap === before.snap);
   ok('no skipping', held.intro === 'assemble', held.intro);
 
   await evaluate('window.__mori.introClock(null)');
@@ -72,5 +72,5 @@ export default async ({ wait, evaluate, mouse, key, shot, log }) => {
   ok('then assembles again', (await st()).intro === 'assemble');
   for (let i = 0; i < 80; i++) { if ((await st()).intro === 'done') break; await wait(250); }
   const s3 = await st();
-  ok('reset finishes with the same island', s3.intro === 'done' && s3.placed === s2.placed && s3.free === s2.free, `${s3.intro} ${s3.placed}/${s3.free}`);
+  ok('reset finishes with the same island', s3.intro === 'done' && s3.placed === s2.placed && s3.free === s2.free && s3.snap === s2.snap, `${s3.intro} ${s3.placed}/${s3.free}`);
 };

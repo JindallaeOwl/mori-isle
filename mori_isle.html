@@ -2529,6 +2529,8 @@
       lantern: {
         type: 'soup',
         seed: 31,
+        snapPlace: true,
+        footprint: [-.27, .08, -.18, .18],
         windStrength: 0.0,
         explodeSliceFactor: 0.55,
         explodeTier: 1,
@@ -2575,6 +2577,8 @@
       bench: {
         type: 'soup',
         seed: 57,
+        snapPlace: true,
+        footprint: [-.45, .45, -.2, .18],
         windStrength: 0.0,
         explodeSliceFactor: 0.40,
         explodeTier: 0,
@@ -2613,6 +2617,8 @@
       campfire: {
         type: 'soup',
         seed: 83,
+        snapPlace: true,
+        footprint: [-.38, .38, -.38, .38],
         windStrength: 0.0,
         explodeSliceFactor: 0.40,
         explodeTier: 0,
@@ -2675,9 +2681,10 @@
       woodpile: {
         name: '장작더미',
         category: 'living',
-        freePlace: false,
         type: 'soup',
         seed: 113,
+        snapPlace: true,
+        footprint: [-.34, .42, -.27, .26],
         windStrength: 0.0,
         explodeSliceFactor: 0.40,
         explodeTier: 0,
@@ -2781,9 +2788,10 @@
       mailbox: {
         name: '우편함',
         category: 'living',
-        freePlace: false,
         type: 'soup',
         seed: 131,
+        snapPlace: true,
+        footprint: [-.14, .14, -.16, .16],
         windStrength: 0.0,
         explodeSliceFactor: 0.50,
         explodeTier: 1,
@@ -2845,9 +2853,10 @@
       cart: {
         name: '손수레',
         category: 'living',
-        freePlace: false,
         type: 'soup',
         seed: 149,
+        snapPlace: true,
+        footprint: [-.49, .28, -.25, .25],
         windStrength: 0.0,
         explodeSliceFactor: 0.45,
         explodeTier: 0,
@@ -2926,9 +2935,10 @@
       clothesline: {
         name: '빨랫줄',
         category: 'living',
-        freePlace: false,
         type: 'soup',
         seed: 167,
+        snapPlace: true,
+        footprint: [-.47, .47, -.1, .3],
         windStrength: 0.0,
         explodeSliceFactor: 0.50,
         explodeTier: 1,
@@ -3120,6 +3130,7 @@
     ITEM_DEFS.forEach((def) => {
       if (!CATEGORIES.some((c) => c.id === def.category)) console.warn('[mori] item without a valid category:', def.id);
       def.freePlace = !!def.freePlace;
+      def.snapPlace = !!def.snapPlace && !def.freePlace; // quarter-tile snap + real-size footprint (see SNAP PLACEMENT)
       def.autoConnect = !!def.autoConnect;
       def.contactRadius = def.contactRadius || 0;
       def.glow = def.glow || null;
@@ -5365,6 +5376,7 @@
          ======================================================================= */
       const placedItems = new Map(); // Grid-snapped: key "gx,gz" -> { id, gx, gz, rotation }
       const freeProps = [];          // Free-placed overlapping decor: { id, wx, wz, rotation, scale }
+      const snapProps = [];          // Quarter-tile snapped props with a real footprint: { id, wx, wz, rotation }
 
       let selectedTool = 'cabin';
       let currentRotation = 0;
@@ -5637,9 +5649,125 @@
         return false;
       }
 
+      /* ---- SNAP PLACEMENT: quarter-tile props that sit right up against walls and each other ----
+         Each snap prop has a ground footprint rectangle (def.footprint, local [x0, x1, z0, z1]);
+         rotations are quarter turns, so the world footprint stays an axis-aligned rectangle. */
+      const SNAP_STEP = 0.25, SNAP_GAP = 0.012, SNAP_PULL = 0.16;
+      function footprintRect(def, wx, wz, rot) {
+        const f = def.footprint || [-0.3, 0.3, -0.3, 0.3], th = rot * Math.PI / 2;
+        const c = Math.round(Math.cos(th)), s = Math.round(Math.sin(th));
+        let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+        for (const lx of [f[0], f[1]]) for (const lz of [f[2], f[3]]) { // same turn as the instance matrix (rotation.y)
+          const x = lx * c + lz * s, z = -lx * s + lz * c;
+          x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z);
+        }
+        return { x0: wx + x0, x1: wx + x1, z0: wz + z0, z1: wz + z1 };
+      }
+      const rectsOverlap = (a, b) => a.x0 < b.x1 && a.x1 > b.x0 && a.z0 < b.z1 && a.z1 > b.z0;
+      const rectHitsCircle = (r, cx, cz, rad) => Math.hypot(Math.max(r.x0 - cx, 0, cx - r.x1), Math.max(r.z0 - cz, 0, cz - r.z1)) < rad;
+      function cabinRects() {
+        const out = [];
+        for (const e of placedItems.values()) {
+          if (e.id !== 'cabin') continue;
+          const cx = e.gx - HALF_GRID + 0.5, cz = e.gz - HALF_GRID + 0.5, rot = e.rotation % 2 === 1;
+          const hx = rot ? 0.48 : 0.52, hz = rot ? 0.52 : 0.48;
+          out.push({ x0: cx - hx, x1: cx + hx, z0: cz - hz, z1: cz + hz });
+        }
+        return out;
+      }
+      function gridSolidR(id) {
+        if (id === 'pine' || id === 'oak') return 0.24;
+        if (id === 'fence') return 0.16;
+        return assetsById[id]?.def.solidRadius || 0.24;
+      }
+      // fence rails as thin rectangles between neighbouring posts
+      function fenceRailRects() {
+        const out = [];
+        for (const e of placedItems.values()) {
+          if (e.id !== 'fence') continue;
+          const cx = e.gx - HALF_GRID + 0.5, cz = e.gz - HALF_GRID + 0.5;
+          if (placedItems.get(`${e.gx + 1},${e.gz}`)?.id === 'fence') out.push({ x0: cx, x1: cx + 1, z0: cz - 0.05, z1: cz + 0.05 });
+          if (placedItems.get(`${e.gx},${e.gz + 1}`)?.id === 'fence') out.push({ x0: cx - 0.05, x1: cx + 0.05, z0: cz, z1: cz + 1 });
+        }
+        return out;
+      }
+      // can a snap prop with world footprint `r` stand here? (skipIdx: a snapProps entry to ignore)
+      function snapRectBlocked(r, skipIdx = -1) {
+        const lim = HALF_GRID - 0.04;
+        if (r.x0 < -lim || r.x1 > lim || r.z0 < -lim || r.z1 > lim) return true;
+        // flat, dry ground under the whole footprint (no terrace edge, no pond basin)
+        const cx = (r.x0 + r.x1) / 2, cz = (r.z0 + r.z1) / 2, h0 = getContinuousTerrainHeight(cx, cz);
+        for (const fx of [0, 0.5, 1]) for (const fz of [0, 0.5, 1]) {
+          const px = r.x0 + (r.x1 - r.x0) * fx, pz = r.z0 + (r.z1 - r.z0) * fz;
+          if (isPondWorld(px, pz, 0.04) || Math.abs(getContinuousTerrainHeight(px, pz) - h0) > 0.04) return true;
+        }
+        for (const c of cabinRects()) if (rectsOverlap(r, c)) return true;
+        for (const e of placedItems.values()) {
+          if (e.id === 'cabin') continue;
+          const ex = e.gx - HALF_GRID + 0.5, ez = e.gz - HALF_GRID + 0.5;
+          if (e.id === 'path') { // may brush the path's edge, not stand on it
+            if (rectsOverlap(r, { x0: ex - 0.3, x1: ex + 0.3, z0: ez - 0.3, z1: ez + 0.3 })) return true;
+          } else if (rectHitsCircle(r, ex, ez, gridSolidR(e.id))) return true;
+        }
+        for (const rail of fenceRailRects()) if (rectsOverlap(r, rail)) return true;
+        for (const fp of freeProps) {
+          const solid = fp.id === 'rocks' ? 0.3 : assetsById[fp.id]?.def.solidRadius;
+          if (rectHitsCircle(r, fp.wx, fp.wz, solid ? solid * (fp.scale || 1) : 0.05)) return true;
+        }
+        for (let i = 0; i < snapProps.length; i++) {
+          if (i === skipIdx) continue;
+          const o = snapProps[i];
+          if (rectsOverlap(r, footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation))) return true;
+        }
+        return false;
+      }
+      // where a snap prop would go for this cursor hit: quarter-tile grid, but pulled flush against
+      // a nearby cabin wall or another snap prop when an edge is within SNAP_PULL
+      function snapPlacement(def, hit, rot = currentRotation) {
+        const f0 = footprintRect(def, 0, 0, rot);
+        const gridX = Math.round(hit.wx / SNAP_STEP) * SNAP_STEP, gridZ = Math.round(hit.wz / SNAP_STEP) * SNAP_STEP;
+        const walls = cabinRects();
+        snapProps.forEach((o) => walls.push(footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation)));
+        const pull = (raw, grid, lo, hi, otherLo, otherHi, axis) => { // axis 0: x, 1: z
+          let best = grid, bd = SNAP_PULL;
+          for (const w of walls) {
+            const [wlo, whi, olo, ohi] = axis === 0 ? [w.x0, w.x1, w.z0, w.z1] : [w.z0, w.z1, w.x0, w.x1];
+            if (otherHi <= olo || otherLo >= ohi) continue; // not side by side along this axis
+            for (const cand of [whi + SNAP_GAP - lo, wlo - SNAP_GAP - hi]) {
+              const d = Math.abs(cand - raw);
+              if (d < bd) { bd = d; best = cand; }
+            }
+          }
+          return best;
+        };
+        const tries = [];
+        const px = pull(hit.wx, gridX, f0.x0, f0.x1, gridZ + f0.z0, gridZ + f0.z1, 0);
+        const pz = pull(hit.wz, gridZ, f0.z0, f0.z1, px + f0.x0, px + f0.x1, 1);
+        tries.push([px, pz], [px, gridZ], [gridX, pz], [gridX, gridZ]);
+        for (const [x, z] of tries) {
+          const rect = footprintRect(def, x, z, rot);
+          if (!snapRectBlocked(rect)) return { wx: x, wz: z, wy: getContinuousTerrainHeight(x, z), rect, valid: true };
+        }
+        const rect = footprintRect(def, gridX, gridZ, rot);
+        return { wx: gridX, wz: gridZ, wy: getContinuousTerrainHeight(gridX, gridZ), rect, valid: false };
+      }
+      function snapPropAt(wx, wz) { // the snap prop whose footprint holds this point (smallest wins)
+        let best = -1, area = 1e9;
+        snapProps.forEach((o, i) => {
+          const r = footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation), a = (r.x1 - r.x0) * (r.z1 - r.z0);
+          if (wx > r.x0 - 0.04 && wx < r.x1 + 0.04 && wz > r.z0 - 0.04 && wz < r.z1 + 0.04 && a < area) { area = a; best = i; }
+        });
+        return best;
+      }
+
       function isBlockedForPoint(wx, wz, selfRadius = 0.10, checkSmallFreeProps = true) {
         // 1. Water / Pond exclusion
         if (isPondWorld(wx, wz, 0.06 + selfRadius * 0.3)) return true;
+
+        // 1b. Snap props stand on their whole footprint
+        for (const o of snapProps) {
+          if (rectHitsCircle(footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation), wx, wz, selfRadius)) return true;
+        }
 
         // 2. Cabin interior floor & walls bounding box
         if (isInsideCabinFootprint(wx, wz, selfRadius)) return true;
@@ -5677,6 +5805,7 @@
         const def = assetsById[toolId]?.def;
         if (!def) return false;
 
+        if (def.snapPlace) return snapPlacement(def, hit).valid;
         if (def.freePlace) {
           const r = PROP_SELF_RADIUS[toolId] || 0.12;
           return !isBlockedForPoint(hit.wx, hit.wz, r, true);
@@ -5689,6 +5818,24 @@
           // Prevent placing a cabin or campfire directly over existing solid rocks
           const wx = hit.gx - HALF_GRID + 0.5;
           const wz = hit.gz - HALF_GRID + 0.5;
+          // ...or over a snap prop's footprint
+          for (const o of snapProps) {
+            const r = footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation);
+            if (def.type === '3d_cabin') {
+              const rot = currentRotation % 2 === 1, hx = rot ? 0.48 : 0.52, hz = rot ? 0.52 : 0.48;
+              if (rectsOverlap(r, { x0: wx - hx, x1: wx + hx, z0: wz - hz, z1: wz + hz })) return false;
+            } else if (def.type === 'auto_path') {
+              if (rectsOverlap(r, { x0: wx - 0.3, x1: wx + 0.3, z0: wz - 0.3, z1: wz + 0.3 })) return false;
+            } else if (def.type === 'auto_fence') {
+              if (rectHitsCircle(r, wx, wz, 0.16)) return false;
+              for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { // rails it would grow toward fence neighbours
+                if (placedItems.get(`${hit.gx + dx},${hit.gz + dz}`)?.id !== 'fence') continue;
+                const rail = dx ? { x0: Math.min(wx, wx + dx), x1: Math.max(wx, wx + dx), z0: wz - 0.05, z1: wz + 0.05 }
+                  : { x0: wx - 0.05, x1: wx + 0.05, z0: Math.min(wz, wz + dz), z1: Math.max(wz, wz + dz) };
+                if (rectsOverlap(r, rail)) return false;
+              }
+            } else if (rectHitsCircle(r, wx, wz, gridSolidR(def.id))) return false;
+          }
           const checkR = def.id === 'cabin' ? 0.46 : (def.id === 'campfire' ? 0.38 : 0.22);
           for (const fp of freeProps) {
             if (fp.id === 'rocks' && Math.hypot(wx - fp.wx, wz - fp.wz) < checkR + 0.26 * (fp.scale || 1.0)) {
@@ -5740,6 +5887,50 @@
         let crateIdx = 0;
 
         markShadowsDirty(1.0); // covers the stacked drop + cabin drop & squash
+
+        // contact shadow, campfire flames, glow sprite and light source of one placed item
+        // (ka, kb: hash keys, the tile for grid items, the quarter-tile position for snap props)
+        function addItemExtras(id, def, wx, wy, wz, rotY, ka, kb) {
+          if (def.contactRadius > 0) {
+            contactShadowBaseList.push({
+              x: wx, y: wy + 0.026, z: wz, r: def.contactRadius * 2.0,
+              tier: def.type === '3d_cabin' ? 2 : (def.explodeTier || 0)
+            });
+          }
+
+          if (id === 'campfire') campfireSpots.push({ x: wx, y: wy, z: wz, seed: hash2D(ka, kb, 9) * 10 });
+          if (def.glow) {
+            // optional horizontal offset of the light source (e.g. a lamp hanging off a post arm)
+            const gox = def.glow.offsetX || 0, goz = def.glow.offsetZ || 0;
+            const gx = wx + gox * Math.cos(rotY) + goz * Math.sin(rotY);
+            const gz = wz - gox * Math.sin(rotY) + goz * Math.cos(rotY);
+            const spMat = new THREE.SpriteMaterial({
+              map: glowTex, color: def.glow.color, transparent: true, opacity: 0,
+              blending: THREE.AdditiveBlending, depthWrite: false
+            });
+            const sprite = new THREE.Sprite(spMat);
+            sprite.position.set(gx, wy + def.glow.offsetY, gz);
+            sprite.scale.set(def.glow.scale, def.glow.scale, 1);
+            glowGroup.add(sprite);
+            activeGlowSprites.push({
+              sprite, baseY: wy + def.glow.offsetY, baseScale: def.glow.scale,
+              seed: hash2D(ka, kb, 9) * 10, flicker: !!def.glow.flicker,
+              isCabin: def.type === '3d_cabin', tier: def.explodeTier || 0
+            });
+
+            // every light source is listed; updatePointLights() lends the 8 pool lights to the nearest ones
+            lightSources.push({
+              x: gx, z: gz, baseY: wy + def.glow.offsetY + 0.15,
+              color: def.glow.color,
+              mult: def.glow.lightIntensity || 1.0,
+              flicker: !!def.glow.flicker,
+              seed: hash2D(ka, kb, 15) * 20,
+              isCabin: def.type === '3d_cabin',
+              tier: def.explodeTier || 0,
+              want: false, slot: -1, w: 0
+            });
+          }
+        }
 
         // 1. Process Grid-Snapped Items
         placedItems.forEach((entry) => {
@@ -5799,45 +5990,15 @@
             });
           }
 
-          if (def.contactRadius > 0) {
-            contactShadowBaseList.push({
-              x: wx, y: wy + 0.026, z: wz, r: def.contactRadius * 2.0,
-              tier: def.type === '3d_cabin' ? 2 : (def.explodeTier || 0)
-            });
-          }
-
-          if (entry.id === 'campfire') campfireSpots.push({ x: wx, y: wy, z: wz, seed: hash2D(entry.gx, entry.gz, 9) * 10 });
-          if (def.glow) {
-            // optional horizontal offset of the light source (e.g. a lamp hanging off a post arm)
-            const gox = def.glow.offsetX || 0, goz = def.glow.offsetZ || 0;
-            const gx = wx + gox * Math.cos(rotY) + goz * Math.sin(rotY);
-            const gz = wz - gox * Math.sin(rotY) + goz * Math.cos(rotY);
-            const spMat = new THREE.SpriteMaterial({
-              map: glowTex, color: def.glow.color, transparent: true, opacity: 0,
-              blending: THREE.AdditiveBlending, depthWrite: false
-            });
-            const sprite = new THREE.Sprite(spMat);
-            sprite.position.set(gx, wy + def.glow.offsetY, gz);
-            sprite.scale.set(def.glow.scale, def.glow.scale, 1);
-            glowGroup.add(sprite);
-            activeGlowSprites.push({
-              sprite, baseY: wy + def.glow.offsetY, baseScale: def.glow.scale,
-              seed: hash2D(entry.gx, entry.gz, 9) * 10, flicker: !!def.glow.flicker,
-              isCabin: def.type === '3d_cabin', tier: def.explodeTier || 0
-            });
-
-            // every light source is listed; updatePointLights() lends the 8 pool lights to the nearest ones
-            lightSources.push({
-              x: gx, z: gz, baseY: wy + def.glow.offsetY + 0.15,
-              color: def.glow.color,
-              mult: def.glow.lightIntensity || 1.0,
-              flicker: !!def.glow.flicker,
-              seed: hash2D(entry.gx, entry.gz, 15) * 20,
-              isCabin: def.type === '3d_cabin',
-              tier: def.explodeTier || 0,
-              want: false, slot: -1, w: 0
-            });
-          }
+          addItemExtras(entry.id, def, wx, wy, wz, rotY, entry.gx, entry.gz);
+        });
+        // 1b. Quarter-tile snap props (benches, lanterns, campfires, woodpiles, ...)
+        snapProps.forEach((o) => {
+          const def = assetsById[o.id]?.def;
+          if (!def) return;
+          const wy = getContinuousTerrainHeight(o.wx, o.wz), rotY = o.rotation * (Math.PI / 2);
+          if (isInstancedDef(def)) buckets[o.id].push({ wx: o.wx, wy, wz: o.wz, rotation: o.rotation, scale: 1.0, spawnT: o.spawnT ?? -100 });
+          addItemExtras(o.id, def, o.wx, wy, o.wz, rotY, Math.round(o.wx * 4) + 101, Math.round(o.wz * 4) + 101);
         });
         pickPointLights(true);
 
@@ -5957,6 +6118,12 @@
           }
         });
 
+        // (A2) A tuft at one outer corner of each snap prop
+        snapProps.forEach((o) => {
+          const r = footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation), k = hash2D(o.wx * 4, o.wz * 4, 7);
+          spawnGrassCluster(k < 0.5 ? r.x0 - 0.1 : r.x1 + 0.1, (k * 4) % 1 < 0.5 ? r.z0 - 0.1 : r.z1 + 0.1, clusterSeed++);
+        });
+
         // (B) Cluster right beside Rock Bases
         freeProps.forEach((fp) => {
           if (fp.id === 'rocks') {
@@ -6023,6 +6190,7 @@
       function populateStarterIsland(rebuild = true) {
         placedItems.clear();
         freeProps.length = 0;
+        snapProps.length = 0;
 
         const starterGrid = [
           // 1. Dense Forest & Rocks clustered tightly on the elevated back hills!
@@ -6061,7 +6229,9 @@
         ];
 
         starterGrid.forEach((s) => {
-          if (!isPondTile(s.gx, s.gz)) placedItems.set(`${s.gx},${s.gz}`, s);
+          if (isPondTile(s.gx, s.gz)) return;
+          if (assetsById[s.id]?.def.snapPlace) snapProps.push({ id: s.id, wx: s.gx - HALF_GRID + 0.5, wz: s.gz - HALF_GRID + 0.5, rotation: s.rotation });
+          else placedItems.set(`${s.gx},${s.gz}`, s);
         });
 
         // Free-placed overlapping clusters:
@@ -6099,7 +6269,12 @@
           return; // Blocked by collision/water; red ghost provides clear visual feedback
         }
         const def = assetsById[selectedTool].def;
-        if (def.freePlace) {
+        if (def.snapPlace) {
+          const p = snapPlacement(def, hit);
+          snapProps.push({ id: selectedTool, wx: p.wx, wz: p.wz, rotation: currentRotation, spawnT: performance.now() * 0.001 });
+          rebuildInstances();
+          triggerPlaceJuice(def, p.wx, p.wy, p.wz);
+        } else if (def.freePlace) {
           freeProps.push({
             id: selectedTool,
             wx: hit.wx,
@@ -6119,6 +6294,14 @@
       }
 
       function removeAtHit(hit) {
+        // A snap prop whose footprint is under the cursor goes first
+        const si = snapPropAt(hit.wx, hit.wz);
+        if (si !== -1) {
+          snapProps.splice(si, 1);
+          rebuildInstances();
+          audio.playRemove();
+          return;
+        }
         // Check closest free-placed prop within 0.55 radius first
         let bestIdx = -1, bestDist = 0.55;
         for (let i = 0; i < freeProps.length; i++) {
@@ -6142,6 +6325,7 @@
       function updateHoverVisuals() {
         ITEM_DEFS.forEach((d) => { ghostMeshesById[d.id].visible = false; });
         cursorTile.visible = false;
+        cursorTile.scale.set(1, 1, 1);
         freeCursorRing.visible = false;
 
         if (!hoveredHit || isPhotoMode || isExploded) return;
@@ -6158,7 +6342,20 @@
         const ghost = ghostMeshesById[selectedTool];
         const valid = canPlaceAtHit(selectedTool, hoveredHit);
 
-        if (def.freePlace) {
+        if (def.snapPlace) {
+          const p = snapPlacement(def, hoveredHit);
+          cursorTile.visible = true;
+          cursorTile.scale.set((p.rect.x1 - p.rect.x0 + 0.06) / 0.98, (p.rect.z1 - p.rect.z0 + 0.06) / 0.98, 1);
+          cursorTile.position.set((p.rect.x0 + p.rect.x1) / 2, p.wy + 0.025, (p.rect.z0 + p.rect.z1) / 2);
+          cursorMat.color.set(p.valid ? '#a8ffbe' : '#ff5252');
+          if (ghost) {
+            ghost.visible = true;
+            ghost.position.set(p.wx, p.wy + 0.02, p.wz);
+            ghost.userData.baseY = p.wy;
+            ghost.rotation.y = currentRotation * (Math.PI / 2);
+            setGhostValidityColor(ghost, p.valid);
+          }
+        } else if (def.freePlace) {
           freeCursorRing.visible = true;
           freeCursorRing.position.set(wx, wy + 0.03, wz);
           ringMat.color.set(valid ? '#ffe29c' : '#ff5252');
@@ -6499,6 +6696,7 @@
       document.getElementById('pop-clear').addEventListener('click', () => {
         placedItems.clear();
         freeProps.length = 0;
+        snapProps.length = 0;
         rebuildInstances();
         resetPopover.classList.remove('open');
         audio.playRemove();
@@ -7016,7 +7214,7 @@
           const ghost = ghostMeshesById[selectedTool];
           if (ghost && ghost.visible) {
             const def = assetsById[selectedTool].def;
-            const baseY = def.freePlace ? hoveredHit.wy : getTileElevation(hoveredHit.gx, hoveredHit.gz);
+            const baseY = def.snapPlace ? (ghost.userData.baseY ?? hoveredHit.wy) : (def.freePlace ? hoveredHit.wy : getTileElevation(hoveredHit.gx, hoveredHit.gz));
             ghost.position.y = baseY + 0.03 + Math.sin(elapsed * 5.0) * 0.025;
           }
         }
@@ -7341,6 +7539,11 @@
           fp.spawnT = spawnAt(def, fp.wx, fp.wz);
           landing(def, fp.wx, getContinuousTerrainHeight(fp.wx, fp.wz), fp.wz, fp.spawnT);
         });
+        snapProps.forEach((o) => {
+          const def = assetsById[o.id].def;
+          o.spawnT = spawnAt(def, o.wx, o.wz);
+          landing(def, o.wx, getContinuousTerrainHeight(o.wx, o.wz), o.wz, o.spawnT);
+        });
         rebuildInstances();
         markShadowsDirty(IT.end + lead + 0.4); // casters keep moving the whole time
 
@@ -7464,7 +7667,7 @@
           state: () => ({
             pan: [camPan.x, camPan.y], targetPan: [targetPan.x, targetPan.y],
             dist: camDist, targetDist: targetCamDist, elev: camElev * 180 / Math.PI, orbit: orbitAngle,
-            placed: placedItems.size, free: freeProps.length, photo: isPhotoMode, exploded: isExploded,
+            placed: placedItems.size, free: freeProps.length, snap: snapProps.length, photo: isPhotoMode, exploded: isExploded,
             intro: intro.phase
           }),
           // startup assembly hooks for tools/tests/intro.mjs
@@ -7478,7 +7681,9 @@
           },
           // hold the animation clock at `sec` seconds into the current assembly / crumble (null = run)
           introClock: (sec) => { debugClock = sec === null ? null : intro.t0 + sec; markShadowsDirty(3); },
-          items: () => ITEM_DEFS.map((d) => ({ id: d.id, name: d.name, category: d.category, type: d.type, freePlace: d.freePlace, autoConnect: d.autoConnect })),
+          items: () => ITEM_DEFS.map((d) => ({ id: d.id, name: d.name, category: d.category, type: d.type, freePlace: d.freePlace, snapPlace: d.snapPlace, autoConnect: d.autoConnect })),
+          snaps: () => snapProps.map((o) => ({ id: o.id, wx: o.wx, wz: o.wz, rotation: o.rotation, rect: footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation) })),
+          cabins: () => cabinRects(),
           lights: () => ({
             sources: lightSources.length,
             active: pointLightPool.filter((pl) => pl.userData.active).length,
