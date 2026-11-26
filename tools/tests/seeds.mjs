@@ -54,6 +54,16 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
   const tints = new Set(s.list.map((f) => f[2]));
   ok('colours are mixed', tints.size >= 3, [...tints].join());
 
+  // terrace slopes stay bare
+  const SL = [-3.0, -0.5];
+  ok('the test spot is a terrace slope', (await J(`${M}.seedSlope(${SL[0]}, ${SL[1]})`)) > 0.45, (await J(`${M}.seedSlope(${SL[0]}, ${SL[1]})`)).toFixed(2));
+  const nS = (await seeds()).list.length;
+  await click(SL);
+  const onSlope = [];
+  for (const f of (await seeds()).list.slice(nS)) if ((await J(`${M}.seedSlope(${f[0]}, ${f[1]})`)) > 0.45) onSlope.push(f);
+  ok('nothing grows on a terrace slope', onSlope.length === 0, `${(await seeds()).list.length - nS} new, ${onSlope.length} on the slope`);
+  s = await seeds();
+
   // the pond
   const before = s.list.length;
   await click([2.35, 2.35]);
@@ -64,7 +74,18 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
 
   // painted ground hides flowers, grass brings them back
   const shown0 = await J(`${M}.instanceCount('seeds')`);
-  await tool('paint_sand'); await drag([2.6, -2.5], [4.4, -2.5], 10); await drag([2.6, -2.25], [4.4, -2.25], 10); await drag([2.6, -2.75], [4.4, -2.75], 10);
+  await tool('paint_sand');
+  { // mid-stroke: the button is still down
+    const pts = []; for (let k = 0; k <= 10; k++) pts.push(await at(2.6 + 1.8 * k / 10, -2.5));
+    await mouse('mouseMoved', ...pts[0]); await wait(200);
+    await mouse('mousePressed', ...pts[0], { button: 'left', buttons: 1, clickCount: 1 });
+    for (const p of pts.slice(1)) { await mouse('mouseMoved', ...p, { button: 'left', buttons: 1 }); await wait(150); }
+    await wait(1200);
+    const mid = await seeds();
+    ok('flowers under the brush sink while still dragging (not on release)', mid.list.some((f) => f[4] === 1) && (await J(`${M}.instanceCount('seeds')`)) < shown0, `${shown0} -> ${await J(`${M}.instanceCount('seeds')`)}`);
+    await mouse('mouseReleased', ...pts[10], { button: 'left', clickCount: 1 });
+    await wait(900);
+  } await drag([2.6, -2.25], [4.4, -2.25], 10); await drag([2.6, -2.75], [4.4, -2.75], 10);
   const shown1 = await J(`${M}.instanceCount('seeds')`);
   ok('sand painted over flowers hides them (they stay sown)', shown1 < shown0 && (await count()) === s.list.length, `${shown0} -> ${shown1}`);
   await tool('paint_grass'); await drag([2.6, -2.5], [4.4, -2.5], 10); await drag([2.6, -2.25], [4.4, -2.25], 10); await drag([2.6, -2.75], [4.4, -2.75], 10);
@@ -73,7 +94,7 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
   // eraser
   const c0 = await count();
   await tool('delete');
-  const f0 = s.list[s.list.length - 1];
+  const f0 = s.list[0]; // out on the open lawn (near other props the eraser takes those first)
   await click([f0[0], f0[1]]);
   const c1 = await count();
   ok('the eraser takes a small patch', c1 < c0 && c1 > 0, `${c0} -> ${c1}`);

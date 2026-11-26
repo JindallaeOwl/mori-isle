@@ -3780,6 +3780,7 @@
 
     // seed flower colours (petals are white in the sprite and multiplied by one of these)
     const SEED_TINT_HEX = ['#f49ab8', '#f7d95e', '#f6f1e4', '#b79cf0', '#9cc6f5'];
+    const SEED_SHRINK = 0.4; // s: a covered or erased seed flower sinks into the ground
     function renderSeedIcon(def) {
       const N = 40, { size, layers } = def;
       const c = document.createElement('canvas'); c.width = N; c.height = N;
@@ -5561,11 +5562,12 @@
         if (def.seedScatter) {
           const tintAttr = new THREE.InstancedBufferAttribute(new Float32Array(maxN * 3).fill(1), 3);
           asset.geometry.setAttribute('aTint', tintAttr);
+          asset.geometry.setAttribute('aGone', new THREE.InstancedBufferAttribute(new Float32Array(maxN).fill(1e9), 1));
           const base = mat.onBeforeCompile;
           mat.onBeforeCompile = (sh, r) => {
             base(sh, r);
             sh.vertexShader = sh.vertexShader
-              .replace('#include <common>', '#include <common>\nattribute float aSpawn;\nattribute vec3 aTint;\nvarying vec3 vTint;')
+              .replace('#include <common>', '#include <common>\nattribute float aSpawn;\nattribute float aGone;\nattribute vec3 aTint;\nvarying vec3 vTint;')
               .replace('#include <begin_vertex>', `#include <begin_vertex>
               vTint = aTint;
               { // grows out of the ground: rises with a little overshoot, opening wider as it comes up
@@ -5574,6 +5576,14 @@
                   float e = 1.0 - pow(1.0 - gt, 3.0), b = sin(gt * 3.14159);
                   transformed.y *= e + b * 0.14;
                   transformed.xz *= mix(0.3, 1.0, e) + b * 0.06;
+                }
+              }
+              { // covered or erased: sinks back into the ground (aGone = when it started)
+                float st = clamp((uTime - aGone) / ${SEED_SHRINK.toFixed(2)}, 0.0, 1.0);
+                if (st > 0.0) {
+                  float k = 1.0 - smoothstep(0.0, 1.0, st);
+                  transformed.y *= k;
+                  transformed.xz *= mix(1.0, k, st);
                 }
               }`);
             sh.fragmentShader = sh.fragmentShader
@@ -5604,7 +5614,7 @@
             .replace('#include <begin_vertex>', '#include <begin_vertex>' + dropVertexGLSL(false));
         };
         instMesh.userData.spawnAttr = spawnAttr;
-        if (def.seedScatter) { instMesh.userData.tintAttr = asset.geometry.attributes.aTint; instMesh.userData.digestSkip = true; }
+        if (def.seedScatter) { instMesh.userData.tintAttr = asset.geometry.attributes.aTint; instMesh.userData.goneAttr = asset.geometry.attributes.aGone; instMesh.userData.digestSkip = true; }
         scene.add(instMesh);
         instancedById[def.id] = instMesh;
 
@@ -6917,21 +6927,41 @@
       // list under things placed later or ground painted over them, and show again when uncovered.
       const SEED_R = 0.5, SEED_GAP = 0.085, SEED_PER_SOW = 8;
       const SEED_TINTS = SEED_TINT_HEX.map((h) => new THREE.Color(h));
+      // steepness of the ground (rise per run); terrace slopes are bare earth, no flowers there
+      function seedSlope(x, z) {
+        const e = 0.07;
+        return Math.hypot(getContinuousTerrainHeight(x + e, z) - getContinuousTerrainHeight(x - e, z),
+          getContinuousTerrainHeight(x, z + e) - getContinuousTerrainHeight(x, z - e)) / (2 * e);
+      }
+      const SEED_MAX_SLOPE = 0.45;
       function seedSpotFree(x, z, r) {
         if (Math.abs(x) > HALF_GRID - 0.08 || Math.abs(z) > HALF_GRID - 0.08) return false;
         if (getPondSDF(x, z) < 0.1 || terrainPaintAt(x, z) !== MAT_GRASS) return false;
+        if (seedSlope(x, z) > SEED_MAX_SLOPE) return false;
         const tile = placedItems.get(`${Math.floor(x + HALF_GRID)},${Math.floor(z + HALF_GRID)}`);
         if (tile && tile.id === 'path') return false;
         return !isBlockedForPoint(x, z, r, false);
       }
+      // A flower that gets covered (painted ground, an object, a raised slope) or erased sinks into
+      // the ground over SEED_SHRINK (f.goneAt); uncovered again it grows back. Erased ones leave the
+      // list once they're gone. Cheap enough to run every frame of a paint stroke.
+      let seedCleanup = 0;
       function rebuildSeedFlowers() {
         const mesh = instancedById.seeds;
         if (!mesh) return;
-        const max = assetsById.seeds.def.maxInstances, tint = mesh.userData.tintAttr.array, sp = mesh.userData.spawnAttr.array;
-        let n = 0;
+        const max = assetsById.seeds.def.maxInstances, tint = mesh.userData.tintAttr.array, sp = mesh.userData.spawnAttr.array, gone = mesh.userData.goneAttr.array;
+        const now = performance.now() * 0.001;
+        let n = 0, sinking = false, drop = false;
         for (const f of seedFlowers) {
           if (n >= max) break;
-          if (!seedSpotFree(f.wx, f.wz, 0.02)) continue;
+          if (!f.erased && seedSpotFree(f.wx, f.wz, 0.02)) {
+            if (f.goneAt != null) { f.goneAt = null; f.spawnT = now + Math.random() * 0.15; } // grows back
+          } else {
+            if (f.goneAt == null) f.goneAt = now;
+            if (now - f.goneAt >= SEED_SHRINK) { if (f.erased) drop = true; continue; }
+            sinking = true;
+          }
+          gone[n] = f.goneAt == null ? 1e9 : f.goneAt;
           dummyObj.position.set(f.wx, getContinuousTerrainHeight(f.wx, f.wz) - 0.005, f.wz);
           dummyObj.rotation.set(0, f.rot, 0);
           dummyObj.scale.setScalar(f.scale);
@@ -6942,16 +6972,20 @@
           sp[n] = f.spawnT;
           n++;
         }
+        if (drop) for (let i = seedFlowers.length - 1; i >= 0; i--) if (seedFlowers[i].erased && now - seedFlowers[i].goneAt >= SEED_SHRINK) seedFlowers.splice(i, 1);
         mesh.count = n;
         mesh.visible = n > 0; // nothing sown: no draw call
         mesh.instanceMatrix.needsUpdate = true;
         mesh.userData.spawnAttr.needsUpdate = true;
         mesh.userData.tintAttr.needsUpdate = true;
+        mesh.userData.goneAttr.needsUpdate = true;
+        // once the sinking ones are gone, take them out of the buffer
+        if (sinking && !seedCleanup) seedCleanup = setTimeout(() => { seedCleanup = 0; rebuildSeedFlowers(); }, SEED_SHRINK * 1000 + 60);
       }
       function sowSeedsAt(cx, cz) { // how many flowers came up
         const max = assetsById.seeds.def.maxInstances, now = performance.now() * 0.001;
         const reach = (SEED_R + SEED_GAP) * (SEED_R + SEED_GAP);
-        const near = seedFlowers.filter((f) => dist2(f.wx, f.wz, cx, cz) < reach);
+        const near = seedFlowers.filter((f) => !f.erased && dist2(f.wx, f.wz, cx, cz) < reach);
         let made = 0;
         for (let k = 0; k < 48 && made < SEED_PER_SOW && seedFlowers.length < max; k++) {
           const a = Math.random() * TAU, r = SEED_R * Math.pow(Math.random(), 0.75);
@@ -7140,7 +7174,12 @@
         terrain.version++;
         return true;
       }
-      function flushRepaint() { if (repaintPending) { repaintPending = false; repaintTerrainSurface(); } }
+      function flushRepaint() {
+        if (!repaintPending) return;
+        repaintPending = false;
+        repaintTerrainSurface();
+        if (seedFlowers.length) rebuildSeedFlowers(); // flowers sink as the brush passes, not on release
+      }
       function queueRepaint() {
         if (repaintPending) return;
         repaintPending = true;
@@ -7248,11 +7287,11 @@
           return;
         }
         // seed flowers: a little patch at a time
-        const seedsBefore = seedFlowers.length;
-        for (let i = seedFlowers.length - 1; i >= 0; i--) {
-          if (dist2(seedFlowers[i].wx, seedFlowers[i].wz, hit.wx, hit.wz) < 0.3 * 0.3) seedFlowers.splice(i, 1);
+        let erased = 0;
+        for (const f of seedFlowers) {
+          if (!f.erased && dist2(f.wx, f.wz, hit.wx, hit.wz) < 0.3 * 0.3) { f.erased = true; erased++; }
         }
-        if (seedFlowers.length < seedsBefore) {
+        if (erased) {
           rebuildSeedFlowers();
           audio.playRemove();
           return;
@@ -8641,7 +8680,7 @@
           state: () => ({
             pan: [camPan.x, camPan.y], targetPan: [targetPan.x, targetPan.y],
             dist: camDist, targetDist: targetCamDist, elev: camElev * 180 / Math.PI, orbit: orbitAngle,
-            placed: placedItems.size, free: freeProps.length, snap: snapProps.length, seeds: seedFlowers.length, photo: isPhotoMode, exploded: isExploded,
+            placed: placedItems.size, free: freeProps.length, snap: snapProps.length, seeds: seedFlowers.filter((f) => !f.erased).length, photo: isPhotoMode, exploded: isExploded,
             intro: intro.phase
           }),
           // startup assembly hooks for tools/tests/intro.mjs
@@ -8668,7 +8707,8 @@
           paintAllowed: (qx, qz) => paintAllowed(qx, qz),
           instanceCount: (id) => instancedById[id].count,
           instanceVisible: (id) => instancedById[id].visible,
-          seedFlowers: () => ({ now: performance.now() * 0.001, list: seedFlowers.map((f) => [f.wx, f.wz, f.tint, f.spawnT]) }),
+          seedFlowers: () => ({ now: performance.now() * 0.001, list: seedFlowers.filter((f) => !f.erased).map((f) => [f.wx, f.wz, f.tint, f.spawnT, f.goneAt == null ? 0 : 1]) }),
+          seedSlope: (x, z) => seedSlope(x, z),
           islandDigest: () => { // like meshDigest, island layers only (no cursor / ghosts / particles)
             const fnv = (arr, h) => { const u8 = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength); for (let k = 0; k < u8.length; k++) { h ^= u8[k]; h = Math.imul(h, 16777619) >>> 0; } return h; };
             const out = [];
