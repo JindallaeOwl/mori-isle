@@ -8,7 +8,7 @@ export default async ({ wait, evaluate, mouse, key, log }) => {
   const J = (expr) => evaluate(`JSON.stringify(${expr})`).then(JSON.parse);
   const total = async () => { const s = await J('window.__mori.state()'); return s.placed + s.free + (s.snap || 0); };
 
-  // 1) categories
+  // 1) categories (the terrain slot holds tools, not items: see terrain-edit.mjs)
   const items = await J('window.__mori.items()');
   const cats = ['build', 'flora', 'paths', 'living', 'nature'];
   const bad = items.filter((d) => !cats.includes(d.category));
@@ -16,7 +16,7 @@ export default async ({ wait, evaluate, mouse, key, log }) => {
   ok('names carry no placement notes', !items.some((d) => /\(|자유배치|자동연결/.test(d.name)), items.map((d) => d.name).join(' / '));
   const order = items.map((d) => cats.indexOf(d.category));
   ok('palette is grouped by category', order.every((v, i) => i === 0 || v >= order[i - 1]));
-  const btnCats = await J(`[...document.querySelectorAll('#hud-dock .item[data-tool]')].filter(b => b.dataset.tool !== 'delete').map(b => b.dataset.category)`);
+  const btnCats = await J(`[...document.querySelectorAll('#hud-dock .item[data-tool]')].filter(b => b.dataset.tool !== 'delete' && b.dataset.category !== 'terrain').map(b => b.dataset.category)`);
   ok('palette buttons know their category', btnCats.length === items.length && btnCats.every((c) => cats.includes(c)));
 
   // candidate tiles on the open front lawn (away from the pond and the starter cabin)

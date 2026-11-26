@@ -328,6 +328,9 @@
 
     .cat-wrap.open .item:hover { transform: translateY(-5px) rotate(0deg) scale(1.08); box-shadow: 0 3px 0 #b48a5c, 0 9px 9px rgba(10, 6, 2, 0.3), inset 0 1px 0 #fffaf0; }
     .item:hover canvas { transform: scale(1.12); }
+    /* terrain tool cards: the glyph drawn in ink on the paper (no wooden token) */
+    .item .card-glyph { width: 44px; height: 44px; transition: transform 0.25s var(--spring); }
+    .item:hover .card-glyph { transform: scale(1.12); }
     .cat-wrap.open .item:active { transform: scale(0.94); }
 
     /* the card in hand gets a warm stitched border */
@@ -473,7 +476,7 @@
     <b>오른쪽 드래그</b><span>돌리기 · 기울이기</span>
     <b>휠 드래그</b><span>화면 이동</span>
     <b>휠</b><span>확대 · 축소</span>
-    <b>1 ~ 5</b><span>도구 (다시 누르면 다음 것)</span>
+    <b>1 ~ 6</b><span>도구 (다시 누르면 다음 것)</span>
     <b>R</b><span>방향 돌리기</span>
     <b>X</b><span>지우개</span>
     <b>E</b><span>분해 보기</span>
@@ -1188,6 +1191,32 @@
         this.out(gain);
         osc.start(now);
         osc.stop(now + 0.12);
+      }
+
+      // terrain edit: a soft earthy thump (rising when raised, sinking when lowered) + crumbling soil
+      playTerrain(dir = 1, pan = 0) {
+        if (!this.ctx || !this.enabled) return;
+        const t = this.ctx.currentTime;
+        const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+        o.type = 'sine';
+        o.frequency.setValueAtTime(dir > 0 ? 90 : 170, t);
+        o.frequency.exponentialRampToValueAtTime(dir > 0 ? 165 : 70, t + 0.16);
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.linearRampToValueAtTime(0.22, t + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.24);
+        o.connect(g); this.out(g, pan);
+        o.start(t); o.stop(t + 0.26);
+        this.noiseHit(t, { type: 'lowpass', freq: 650, q: 0.7, vol: 0.16, decay: 0.12, pan });
+        for (let i = 0; i < 4; i++) {
+          this.noiseHit(t + 0.06 + i * 0.045 + Math.random() * 0.03, { freq: 1300 + Math.random() * 1500, q: 2.5, vol: 0.035, decay: 0.025, pan: pan + (Math.random() - 0.5) * 0.2 });
+        }
+      }
+      // terrain edit refused: a dull wooden knock
+      playTerrainBlocked(pan = 0) {
+        if (!this.ctx || !this.enabled) return;
+        const t = this.ctx.currentTime;
+        this.noiseHit(t, { freq: 420, q: 4, vol: 0.12, decay: 0.05, pan });
+        this.noiseHit(t + 0.07, { freq: 360, q: 4, vol: 0.08, decay: 0.05, pan });
       }
 
       playRotate() {
@@ -1994,6 +2023,22 @@
         { el: 'circle', cx: 31.6, cy: 23.2, r: 1.7, f: '#fff3e2', ns: true },
         { el: 'circle', cx: 34.6, cy: 28.6, r: 1.4, f: '#fff3e2', ns: true },
         { el: 'path', d: 'M14.5 42.5l1.8-5M17.6 42.5l.8-6M20.4 42.5l-.4-4' }
+      ],
+      // terrain: two grassy terraces / a mound with an arrow up / a dip with an arrow down
+      terrain: [
+        { el: 'path', d: 'M12.5 34h31v8.5h-31z', f: '#a8744a' },
+        { el: 'path', d: 'M20 24.5h16V34H20z', f: '#9b6a42' },
+        { el: 'path', d: 'M11.5 31h9.5v3.4h-9.5zM35 31h9.5v3.4H35zM19 21.2h18v3.4H19z', f: '#8db35a' },
+        { el: 'path', d: 'M16 39h5M30 38.5h6', ns: false }
+      ],
+      raise: [
+        { el: 'path', d: 'M12.5 43c2.6-7.4 8-11 15.5-11s12.9 3.6 15.5 11z', f: '#8db35a' },
+        { el: 'path', d: 'M28 27.5V12.5M22.5 18L28 12.5 33.5 18' }
+      ],
+      lower: [
+        { el: 'path', d: 'M12 33h8.5l3.2 6.5h8.6l3.2-6.5H44v10H12z', f: '#a8744a' },
+        { el: 'path', d: 'M11.5 31h9.5v2.6h-9.5zM35 31h9.5v2.6H35z', f: '#8db35a' },
+        { el: 'path', d: 'M28 11.5v14.5M22.5 20.5L28 26l5.5-5.5' }
       ],
       // dock tools
       eraser: [
@@ -3492,8 +3537,17 @@
       { id: 'flora', name: '나무·식물' },
       { id: 'paths', name: '길·담' },
       { id: 'living', name: '생활 소품' },
-      { id: 'nature', name: '자연 소품' }
+      { id: 'nature', name: '자연 소품' },
+      { id: 'terrain', name: '지형' }
     ];
+    // terrain tools live in the 'terrain' slot but are not items (no model, no ghost): they
+    // raise or lower the clicked tile one step (TERRAIN EDITING in section 12)
+    const TERRAIN_TOOLS = [
+      { id: 'raise', name: '땅 올리기', category: 'terrain', glyph: 'raise', dir: 1 },
+      { id: 'lower', name: '땅 내리기', category: 'terrain', glyph: 'lower', dir: -1 }
+    ];
+    const TERRAIN_MAX = 3; // steps above the meadow (digging below it comes with water, step 4)
+    const terrainToolById = (id) => TERRAIN_TOOLS.find((t) => t.id === id);
     // Shared fields every item has, whatever it is built with:
     //   id, name, category, type ('stack' | 'soup' | '3d_cabin' | 'auto_path' | 'auto_fence'),
     //   freePlace (no grid, may overlap), autoConnect (joins neighbours), contactRadius,
@@ -4063,8 +4117,10 @@
     // and dark underneath. Per-segment shade jitter gives the chunky hand-cut look. Mori palette.
     //   hw: half width at the top, yTopFn(x, z): top edge, yBot: bottom, levels: band bottoms (descending)
     //   cols: band colors, layers: detail texture per band, taper: extra inset reached at yBot
-    function buildStrataChunk({ hw, yTopFn, yBot, levels, cols, layers, taper = 0, wob = 0.04, seed = 0, seg = 60, topCap = false, skin = null }) {
-      const S = new Soup(), NP = seg * 4, yMax = levels.length ? levels[0] + 1 : yBot + 1;
+    // jBase: band bottoms prepended above the usual ones (for raised terrain); the noise and shading
+    // seeds count from the first usual band, so walls low enough to skip them look exactly as before
+    function buildStrataChunk({ hw, yTopFn, yBot, levels, cols, layers, taper = 0, wob = 0.04, seed = 0, seg = 60, topCap = false, skin = null, jBase = 0 }) {
+      const S = new Soup(), NP = seg * 4, yMax = levels.length > jBase ? levels[jBase] + 1 : yBot + 1;
       const base = (t) => {
         const side = Math.floor(t / seg) % 4, f = (t % seg) / seg;
         if (side === 0) return [-hw + 2 * hw * f, hw];
@@ -4098,12 +4154,13 @@
           const last = j >= levels.length;
           const lvl = last ? yBot : levels[j];
           const w = last ? 0 : 0.035;
-          const loA = Math.max(yBot, Math.min(yA - 0.02, lvl + w * (vnoise(t * 0.5, j, seed + 46) - 0.5)));
-          const loB = Math.max(yBot, Math.min(yB - 0.02, lvl + w * (vnoise((t + 1) * 0.5, j, seed + 46) - 0.5)));
-          const band = Math.min(j, cols.length - 1), col = shade(cols[band], 0.9 + 0.2 * h2(t, j, seed + 3));
+          const jj = j - jBase;
+          const loA = Math.max(yBot, Math.min(yA - 0.02, lvl + w * (vnoise(t * 0.5, jj, seed + 46) - 0.5)));
+          const loB = Math.max(yBot, Math.min(yB - 0.02, lvl + w * (vnoise((t + 1) * 0.5, jj, seed + 46) - 0.5)));
+          const band = Math.min(j, cols.length - 1), col = shade(cols[band], 0.9 + 0.2 * h2(t, jj, seed + 3));
           facing(at(bA, inA, yA), at(bA, inA, loA), at(bB, inB, loB), at(bB, inB, yB), ox, oz, col, layers[band]);
           if (last) break;
-          const nA = insetAt(t, j + 1, loA), nB = insetAt(t + 1, j + 1, loB);
+          const nA = insetAt(t, jj + 1, loA), nB = insetAt(t + 1, jj + 1, loB);
           ledge(at(bA, inA, loA), at(bA, nA, loA), at(bB, nB, loB), at(bB, inB, loB), col, layers[band]);
           yA = loA; yB = loB; inA = nA; inB = nB; j++;
         }
@@ -4135,22 +4192,27 @@
       const topGeo = new THREE.PlaneGeometry(GRID_SIZE, GRID_SIZE, segs, segs);
       topGeo.rotateX(-Math.PI / 2);
       // smooth copy of the surface: only the build grid overlay rides on it
-      const tPos = topGeo.attributes.position;
-      for (let i = 0; i < tPos.count; i++) tPos.setY(i, getTurfHeight(tPos.getX(i), tPos.getZ(i)));
+      const fitGridHeights = (geo) => {
+        const tPos = geo.attributes.position;
+        for (let i = 0; i < tPos.count; i++) tPos.setY(i, getTurfHeight(tPos.getX(i), tPos.getZ(i)));
+        tPos.needsUpdate = true;
+        geo.computeBoundingSphere();
+      };
+      fitGridHeights(topGeo);
 
       // Faceted low-poly turf (Cinderwatch terrain technique, src/31-terrain.js): jittered grid,
       // one flat normal + one color per triangle, detail texture + bump. Mori palette.
       const terrainMat = makeTerrainMaterial();
       const TCELL = 0.2, TNV = Math.round(GRID_SIZE / TCELL) + 1;
       const TV = new Float32Array(TNV * TNV * 3);
-      for (let j = 0; j < TNV; j++) for (let i = 0; i < TNV; i++) {
+      const fillTurfVerts = () => { for (let j = 0; j < TNV; j++) for (let i = 0; i < TNV; i++) {
         let x = -HALF_GRID + i * TCELL, z = -HALF_GRID + j * TCELL;
         if (i > 0 && i < TNV - 1) x += (h2(i, j, 151) - 0.5) * TCELL * 0.5;
         if (j > 0 && j < TNV - 1) z += (h2(i, j, 152) - 0.5) * TCELL * 0.5;
         const o = (j * TNV + i) * 3;
         const rim = i === 0 || j === 0 || i === TNV - 1 || j === TNV - 1; // rim stays exact: the topsoil wall meets it
         TV[o] = x; TV[o + 1] = getTurfHeight(x, z) + (rim ? 0 : (h2(i, j, 153) - 0.5) * 0.026); TV[o + 2] = z;
-      }
+      } };
       const tGrassA = C('#72b84f'), tGrassB = C('#5b9f43'), tGrassL = C('#93c95c'), tHill = C('#4f9140'), tMoss = C('#5d8a3c');
       const tCliff = C('#7d5a38'), tCliffD = C('#5a3f27'), tShore = C('#bca776'), tBed = C('#4a615c');
       const turfColor = (x, z, y, ny) => {
@@ -4172,9 +4234,11 @@
         if (sdf < 0.42) c = mixC(c, tShore, (1 - smooth(0.05, 0.42, sdf)) * 0.78);
         return [mulC(c, 0.86 + 0.26 * n2), L_GRASS, 0.95];
       };
-      const turf = new Soup();
       const tv = (i, j) => { const o = (j * TNV + i) * 3; return [TV[o], TV[o + 1], TV[o + 2]]; };
       const _ta = new THREE.Vector3(), _tb = new THREE.Vector3();
+      const buildTurfGeometry = () => {
+      fillTurfVerts();
+      const turf = new Soup();
       for (let j = 0; j < TNV - 1; j++) for (let i = 0; i < TNV - 1; i++) {
         const a = tv(i, j), b = tv(i + 1, j), c = tv(i + 1, j + 1), d = tv(i, j + 1);
         const tris = ((i + j) & 1) ? [[a, d, c], [a, c, b]] : [[a, d, b], [b, d, c]];
@@ -4186,20 +4250,25 @@
           turf.tri(t[0], t[1], t[2], m[0], m[1], m[2], { uvs: 0.55 });
         }
       }
-      const topMesh = new THREE.Mesh(turf.build({ groups: 1, ao: null }), terrainMat);
+      return turf.build({ groups: 1, ao: null });
+      };
+      const topMesh = new THREE.Mesh(buildTurfGeometry(), terrainMat);
       topMesh.castShadow = true;
       topMesh.receiveShadow = true;
       chunkTopSurface.add(topMesh); // must stay children[0]: it is the pointer ray target
 
       // --- 8B. Thick Stratified Cutaway Cross-Section Chunks ---
       // Stratum 1: topsoil, its top edge meets the turf rim exactly (same 0.2 spacing, no jitter there)
+      // two extra bands on top only show on raised rim tiles (3 steps); lower walls skip them (jBase)
       const topLv = strataLevels(1.0, -0.62, 0.16, 0.3, 201);
-      const topsoilMesh = buildStrataChunk({
-        hw: HALF_GRID, yTopFn: getTurfHeight, yBot: -0.62, levels: topLv, seed: 201, seg: Math.round(GRID_SIZE / TCELL), wob: 0.03,
-        cols: topLv.map((_, k) => C(['#6b472c', '#5e3d25', '#73502f', '#634129'][k % 4])).concat([C('#5a3b23')]),
-        layers: topLv.map(() => L_DIRT).concat([L_DIRT]),
+      const topPal = ['#6b472c', '#5e3d25', '#73502f', '#634129'];
+      const buildTopsoil = () => buildStrataChunk({
+        hw: HALF_GRID, yTopFn: getTurfHeight, yBot: -0.62, levels: [1.18, 0.98].concat(topLv), jBase: 2, seed: 201, seg: Math.round(GRID_SIZE / TCELL), wob: 0.03,
+        cols: [C(topPal[1]), C(topPal[3])].concat(topLv.map((_, k) => C(topPal[k % 4]))).concat([C('#5a3b23')]),
+        layers: [L_DIRT, L_DIRT].concat(topLv.map(() => L_DIRT)).concat([L_DIRT]),
         skin: { h: 0.07, col: C('#4a3020') }
       });
+      const topsoilMesh = buildTopsoil();
       chunkTopSurface.add(topsoilMesh);
 
       // Stratum 2: warm clay and sandstone bands
@@ -4227,7 +4296,7 @@
       const rootGeo = new THREE.CylinderGeometry(0.024, 0.056, 0.62, 5);
       const rootMat = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ color: '#5c3c24', roughness: 0.90 }));
       const embedRoots = new THREE.InstancedMesh(rootGeo, rootMat, 44);
-      for (let i = 0; i < 44; i++) {
+      const placeRoots = () => { for (let i = 0; i < 44; i++) {
         const side = i % 4;
         const along = (hash2D(i, 4, 19) - 0.5) * (GRID_SIZE - 1.0);
         let rx = 0, rz = 0;
@@ -4247,6 +4316,9 @@
         embedRoots.setMatrixAt(i, dummy.matrix);
       }
       embedRoots.instanceMatrix.needsUpdate = true;
+      embedRoots.computeBoundingSphere();
+      };
+      placeRoots();
       chunkTopSurface.add(embedRoots);
 
       // Embedded Stones in Subsoil Cutaway
@@ -4466,7 +4538,19 @@
       const gridOverlay = new THREE.Mesh(gridGeo, gridMat);
       chunkTopSurface.add(gridOverlay);
 
-      return { chunkTopSurface, chunkSubsoil, chunkBedrock, pondMist, mistMat, gridMat, waterMesh, lilyParts };
+      // terrain edits: rebuild everything that follows the ground height (the meshes stay, so
+      // chunkTopSurface.children[0] is still the turf). Clay, bedrock and the pond don't depend on it.
+      function rebuildSurface() {
+        topMesh.geometry.dispose();
+        topMesh.geometry = buildTurfGeometry();
+        const soil = buildTopsoil();
+        topsoilMesh.geometry.dispose();
+        topsoilMesh.geometry = soil.geometry;
+        placeRoots();
+        fitGridHeights(gridGeo);
+      }
+
+      return { chunkTopSurface, chunkSubsoil, chunkBedrock, pondMist, mistMat, gridMat, waterMesh, lilyParts, rebuildSurface };
     }
 
     /* =========================================================================
@@ -5085,7 +5169,7 @@
       /* =======================================================================
          10. ISLAND, AUTO-TILING PATH/FENCE, SPRITE STACKS & CONTACT SHADOWS
          ======================================================================= */
-      const { chunkTopSurface, chunkSubsoil, chunkBedrock, pondMist, mistMat, gridMat, waterMesh, lilyParts } = buildMiniatureIsland(scene);
+      const { chunkTopSurface, chunkSubsoil, chunkBedrock, pondMist, mistMat, gridMat, waterMesh, lilyParts, rebuildSurface: rebuildTerrainSurface } = buildMiniatureIsland(scene);
 
       // Height-Proportional Contact Shadow InstancedMesh (shifts & fades as layers float!)
       const csCanvas = document.createElement('canvas');
@@ -6224,6 +6308,14 @@
           if (isPondTile(hit.gx, hit.gz)) return false;
           const key = `${hit.gx},${hit.gz}`;
           if (placedItems.has(key)) return false;
+          // a cabin is wider than a tile's flat middle: its four neighbours must sit at the same step
+          if (def.type === '3d_cabin') {
+            const lv = getHillLevel(hit.gx, hit.gz);
+            for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+              const nx = hit.gx + dx, nz = hit.gz + dz;
+              if (nx >= 0 && nx < GRID_SIZE && nz >= 0 && nz < GRID_SIZE && getHillLevel(nx, nz) !== lv) return false;
+            }
+          }
 
           // Prevent placing a cabin or campfire directly over existing solid rocks
           const wx = hit.gx - HALF_GRID + 0.5;
@@ -6598,6 +6690,7 @@
 
       /* ---- STORYTELLING CLUSTERED STARTER DIORAMA ---- */
       function populateStarterIsland(rebuild = true) {
+        if (!terrainIsDefault()) { resetTerrainData(); rebuildTerrainSurface(); markShadowsDirty(1.0); }
         placedItems.clear();
         freeProps.length = 0;
         snapProps.length = 0;
@@ -6670,11 +6763,78 @@
         if (rebuild) rebuildInstances();
       }
 
+      /* ---- TERRAIN EDITING (step 2: one tile up or down one step) ---- */
+      // A tile's slope reaches 0.28 into its neighbours, so an edit changes the ground within
+      // 0.78 of the tile centre. Blocked: outside 0..TERRAIN_MAX, the pond (basin and shore stay
+      // as they are until water editing), and anything that needs flat ground (cabins, paths,
+      // quarter-tile props) getting less flat than it already is. Trees, fences and other
+      // one-tile items stand on the flat tile centre and ride along; free props follow the ground.
+      const TERRAIN_REACH = 0.8;
+      function rectDeviation(r) { // how far the ground under a footprint strays from its centre
+        const h0 = getContinuousTerrainHeight((r.x0 + r.x1) / 2, (r.z0 + r.z1) / 2);
+        let d = 0;
+        for (let i = 0; i <= 4; i++) for (let j = 0; j <= 4; j++) {
+          d = Math.max(d, Math.abs(getContinuousTerrainHeight(r.x0 + (r.x1 - r.x0) * i / 4, r.z0 + (r.z1 - r.z0) * j / 4) - h0));
+        }
+        return d;
+      }
+      function flatFootprintsNear(cx, cz) {
+        const zone = { x0: cx - TERRAIN_REACH, x1: cx + TERRAIN_REACH, z0: cz - TERRAIN_REACH, z1: cz + TERRAIN_REACH };
+        const out = cabinRects().filter((r) => rectsOverlap(r, zone));
+        for (const e of placedItems.values()) {
+          if (e.id !== 'path') continue;
+          const ex = e.gx - HALF_GRID + 0.5, ez = e.gz - HALF_GRID + 0.5, r = { x0: ex - 0.5, x1: ex + 0.5, z0: ez - 0.5, z1: ez + 0.5 };
+          if (rectsOverlap(r, zone)) out.push(r);
+        }
+        for (const o of snapProps) {
+          const r = footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation);
+          if (rectsOverlap(r, zone)) out.push(r);
+        }
+        return out;
+      }
+      function terrainEditAllowed(gx, gz, dir) {
+        if (gx < 0 || gx >= GRID_SIZE || gz < 0 || gz >= GRID_SIZE) return false;
+        const k = gz * GRID_SIZE + gx, cur = terrain.level[k], next = cur + dir;
+        if (next < 0 || next > TERRAIN_MAX) return false;
+        const cx = gx - HALF_GRID + 0.5, cz = gz - HALF_GRID + 0.5;
+        for (let i = -4; i <= 4; i++) for (let j = -4; j <= 4; j++) {
+          if (getPondSDF(cx + i * TERRAIN_REACH / 4, cz + j * TERRAIN_REACH / 4) < 0.1) return false;
+        }
+        const rects = flatFootprintsNear(cx, cz);
+        if (!rects.length) return true;
+        const before = rects.map(rectDeviation);
+        terrain.level[k] = next; // try it, measure, put it back
+        const after = rects.map(rectDeviation);
+        terrain.level[k] = cur;
+        return after.every((d, i) => d <= Math.max(0.04, before[i] + 1e-6));
+      }
+      function editTerrainAt(gx, gz, dir) {
+        const cx = gx - HALF_GRID + 0.5, cz = gz - HALF_GRID + 0.5;
+        if (!terrainEditAllowed(gx, gz, dir)) { audio.playTerrainBlocked(screenPan(cx, getTileElevation(gx, gz), cz)); return false; }
+        terrain.level[gz * GRID_SIZE + gx] += dir;
+        terrain.version++;
+        rebuildTerrainSurface();
+        rebuildInstances(); // objects, path, grass and pebbles follow the new ground (+ shadow refresh)
+        const y = getTileElevation(gx, gz);
+        burstDust(cx, y, cz, 16, 0.6);
+        shakeStart = performance.now() * 0.001; shakeAmp = 0.035;
+        audio.playTerrain(dir, screenPan(cx, y, cz));
+        return true;
+      }
+      function terrainIsDefault() {
+        for (let gz = 0; gz < GRID_SIZE; gz++) for (let gx = 0; gx < GRID_SIZE; gx++) {
+          if (terrain.level[gz * GRID_SIZE + gx] !== defaultHillLevel(gx, gz)) return false;
+        }
+        return true;
+      }
+
       function placeAtHit(hit) {
         if (selectedTool === 'delete') {
           removeAtHit(hit);
           return;
         }
+        const tt = terrainToolById(selectedTool);
+        if (tt) { editTerrainAt(hit.gx, hit.gz, tt.dir); return; }
         if (!canPlaceAtHit(selectedTool, hit)) {
           return; // Blocked by collision/water; red ghost provides clear visual feedback
         }
@@ -6745,6 +6905,14 @@
           cursorTile.visible = true;
           cursorTile.position.set(gx - HALF_GRID + 0.5, getTileElevation(gx, gz) + 0.025, gz - HALF_GRID + 0.5);
           cursorMat.color.set('#ff7c7c');
+          return;
+        }
+
+        const tt = terrainToolById(selectedTool);
+        if (tt) { // terrain tool: the tile lights up (green up, gold down) or red when blocked
+          cursorTile.visible = true;
+          cursorTile.position.set(gx - HALF_GRID + 0.5, getTileElevation(gx, gz) + 0.025, gz - HALF_GRID + 0.5);
+          cursorMat.color.set(terrainEditAllowed(gx, gz, tt.dir) ? (tt.dir > 0 ? '#a8ffbe' : '#ffe29c') : '#ff5252');
           return;
         }
 
@@ -6912,7 +7080,7 @@
         selectedTool = id;
         audio.playUiBlip(id === 'delete' ? 380 : 520);
         updateSelectionUI();
-        if (announce) showItemName(id === 'delete' ? '지우개' : assetsById[id].def.name, 1100);
+        if (announce) showItemName(id === 'delete' ? '지우개' : (terrainToolById(id) || assetsById[id].def).name, 1100);
       }
 
       // tray open/close: short open delay so sweeping across the dock doesn't pop trays,
@@ -6934,7 +7102,7 @@
       }
 
       CATEGORIES.forEach((cat, ci) => {
-        const items = ITEM_DEFS.filter((d) => d.category === cat.id);
+        const items = cat.id === 'terrain' ? TERRAIN_TOOLS : ITEM_DEFS.filter((d) => d.category === cat.id);
         if (!items.length) return;
         const wrap = document.createElement('div');
         wrap.className = 'cat-wrap';
@@ -6948,7 +7116,8 @@
           b.style.setProperty('--i', i);
           b.style.setProperty('--tilt', `${((h2(i, ci, 5) - 0.5) * 7).toFixed(1)}deg`); // cards pinned a bit askew
           b.setAttribute('aria-label', def.name);
-          b.appendChild(assetsById[def.id].iconCanvas);
+          if (def.glyph) b.insertAdjacentHTML('beforeend', `<svg class="card-glyph" viewBox="0 0 56 56" aria-hidden="true"><g stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">${glyphSVG(def.glyph, 'ink')}</g></svg>`);
+          else b.appendChild(assetsById[def.id].iconCanvas);
           b.addEventListener('mouseenter', () => showItemName(def.name));
           b.addEventListener('mouseleave', () => showItemName(''));
           b.addEventListener('click', (e) => {
@@ -8095,6 +8264,21 @@
           snaps: () => snapProps.map((o) => ({ id: o.id, wx: o.wx, wz: o.wz, rotation: o.rotation, rect: footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation) })),
           cabins: () => cabinRects(),
           pond: (x, z) => getPondSDF(x, z),
+          terrainLevel: (gx, gz) => getHillLevel(gx, gz),
+          terrainVersion: () => terrain.version,
+          terrainAllowed: (gx, gz, dir) => terrainEditAllowed(gx, gz, dir),
+          islandDigest: () => { // like meshDigest, island layers only (no cursor / ghosts / particles)
+            const fnv = (arr, h) => { const u8 = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength); for (let k = 0; k < u8.length; k++) { h ^= u8[k]; h = Math.imul(h, 16777619) >>> 0; } return h; };
+            const out = [];
+            for (const root of [chunkTopSurface, chunkSubsoil, chunkBedrock]) root.traverse((o) => {
+              if (!o.isMesh) return;
+              let h = 0x811c9dc5 >>> 0;
+              for (const name of Object.keys(o.geometry.attributes).sort()) h = fnv(o.geometry.attributes[name].array, h);
+              if (o.isInstancedMesh) h = fnv(o.instanceMatrix.array.subarray(0, o.count * 16), h);
+              out.push(h.toString(16));
+            });
+            return out;
+          },
           // terrain function samples for tools/tests/terrain.mjs (hash of exact float bits + a coarse table)
           terrainDump: (step = 0.02, coarse = 0.25) => {
             let h = 0x811c9dc5 >>> 0;
@@ -8163,7 +8347,7 @@
           // world point -> CSS pixel position on screen
           project: (x, y, z) => { _pv.set(x, y, z).project(camera); return [(_pv.x + 1) / 2 * window.innerWidth, (1 - _pv.y) / 2 * window.innerHeight]; },
           // CSS pixel -> ground hit (or null)
-          hit: (cx, cy) => { const h = getHitUnderClient(cx, cy); return h ? { wx: h.wx, wz: h.wz } : null; },
+          hit: (cx, cy) => { const h = getHitUnderClient(cx, cy); return h ? { wx: h.wx, wz: h.wz, wy: h.wy } : null; },
           audio
         };
       }
