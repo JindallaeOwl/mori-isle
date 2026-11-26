@@ -3104,6 +3104,86 @@
           S.ico(.035, AX - .08, .01, AZ - .06, MCOL.moss, { sc: [1.4, .5, 1.1], d: 0, rough: 1 });
         }
       },
+      well: {
+        name: '우물',
+        category: 'build',
+        type: 'soup',
+        seed: 197,
+        snapPlace: true,
+        footprint: [-.34, .34, -.34, .34],
+        windStrength: 0.0,
+        explodeSliceFactor: 0.50,
+        explodeTier: 1,
+        glow: null,
+        contactRadius: 0.40,
+        build(S, rng) {
+          const ROOF = C('#9c4a36'), ROOF_D = C('#7a3628'), WATER = C('#1f3540'), WATER_L = C('#3d6476'), ROPE = C('#c9b48a'), STAVE = C('#9a6a3e');
+          const RR = .24; // stone ring radius
+          // three staggered courses of fieldstones, moss creeping over the lower two
+          for (let c = 0; c < 3; c++) {
+            const N = 11, y = .045 + c * .08;
+            for (let k = 0; k < N; k++) {
+              const a = (k + (c % 2) * .5) / N * TAU + rng.range(-.05, .05), st = S.verts;
+              S.rock(rng.range(.062, .075), Math.cos(a) * RR, y, Math.sin(a) * RR, mixC(MCOL.stoneD, MCOL.stoneL, rng() * .8), { sq: .62, rough: .8, uvs: 1.0 });
+              if (c < 2 && rng() < .5) S.cover(st, mixC(MOSS_D, MCOL.moss, rng() * .6), .55, L_MOSS, c * 20 + k);
+            }
+          }
+          // flat cap stones around the rim
+          for (let k = 0; k < 10; k++) {
+            const a = k / 10 * TAU + rng.range(-.04, .04);
+            S.box(.155, .035, .1, Math.cos(a) * RR, .27 + rng.range(-.006, .006), Math.sin(a) * RR, mixC(MCOL.stone, MCOL.stoneL, rng() * .7), { l: L_MASON, rough: .8, r: [rng.range(-.04, .04), -a - Math.PI / 2, rng.range(-.04, .04)] });
+          }
+          // dark shaft and a still, glossy water surface
+          S.cyl(.2, .24, 0, .12, 0, C('#2e3136'), { n: 10, l: L_ROCK, rough: .9 });
+          S.cyl(.198, .008, 0, .245, 0, WATER, { n: 12, l: L_PLAIN, rough: .12, jit: 0 });
+          // two posts (with stone shoes) carry the ridge beam
+          for (const s of [-1, 1]) {
+            S.box(.06, .98, .06, s * .3, .49, 0, MCOL.wood, { l: L_WOOD, rough: .85, r: [0, 0, s * .008] });
+            S.rock(.05, s * .3, .015, 0, MCOL.stoneD, { sq: .55, flat: .3, rough: .85 });
+            S.seg([s * .3, .78, 0], [s * .12, .97, 0], .014, .013, MCOL.woodD, { n: 5, l: L_WOOD }); // brace under the ridge
+          }
+          const R = 1.0, A = .62;
+          S.box(.84, .045, .045, 0, R - .015, 0, MCOL.woodD, { l: L_WOOD });
+          // gabled shingle roof, ridge along x
+          for (const s of [-1, 1]) {
+            S.box(.8, .022, .27, 0, R - Math.sin(A) * .135 + .012, s * Math.cos(A) * .135, ROOF, { l: L_WOOD, rough: .85, r: [s * A, 0, 0] });
+            for (let k = 0; k < 3; k++) {
+              const t = .045 + k * .075;
+              S.box(.805, .006, .006, 0, R - Math.sin(A) * t + .025, s * Math.cos(A) * t, ROOF_D, { l: L_PLAIN, jit: .04, r: [s * A, 0, 0] });
+            }
+          }
+          S.box(.82, .024, .04, 0, R + .022, 0, ROOF_D, { l: L_WOOD, rough: .9 });
+          // windlass: axle through both posts, rope wound on the drum, iron crank with a wooden grip
+          S.cyl(.026, .68, 0, .68, 0, MCOL.woodL, { n: 7, l: L_WOOD, rough: .8, r: [0, 0, Math.PI / 2] });
+          S.cyl(.046, .2, 0, .68, 0, ROPE, { n: 9, l: L_CLOTH, rough: 1, r: [0, 0, Math.PI / 2] });
+          for (const x of [-.06, 0, .06]) S.cyl(.048, .006, x, .68, 0, mulC(ROPE, .8), { n: 9, l: L_PLAIN, rough: 1, r: [0, 0, Math.PI / 2], jit: 0 });
+          S.seg([.335, .68, 0], [.335, .6, .065], .009, .009, MCOL.iron, { n: 5, l: L_METAL, rough: .45 });
+          S.seg([.335, .6, .065], [.41, .6, .065], .013, .013, C('#4a2f22'), { n: 6, l: L_WOOD, rough: .8 });
+          // rope and the bucket hanging over the water (sways a little)
+          const st = S.verts;
+          S.seg([0, .636, 0], [0, .46, 0], .006, .006, ROPE, { n: 4, l: L_CLOTH, rough: 1, jit: 0 });
+          S.torus(.054, 0, .41, 0, MCOL.iron, { n: 10, t: .08, m: 3, l: L_METAL, rough: .45 });
+          S.cyl(.058, .085, 0, .37, 0, STAVE, { n: 10, rt: 1.15, l: L_WOOD, rough: .8 });
+          for (const [y, r] of [[.345, .062], [.395, .067]]) S.cyl(r, .01, 0, y, 0, MCOL.iron, { n: 10, l: L_METAL, rough: .45, jit: 0 });
+          S.cyl(.06, .004, 0, .4135, 0, WATER_L, { n: 10, l: L_PLAIN, rough: .12, jit: 0 });
+          soupSwayBelow(S, st, .64, .3, .35);
+          // a pail of water on the ground and a tin ladle hanging off the left post
+          const PX = -.25, PZ = .25;
+          S.cyl(.048, .07, PX, .035, PZ, STAVE, { n: 9, rt: 1.12, l: L_WOOD, rough: .8 });
+          S.cyl(.051, .009, PX, .045, PZ, MCOL.iron, { n: 9, l: L_METAL, rough: .45, jit: 0 });
+          S.cyl(.05, .004, PX, .0715, PZ, WATER_L, { n: 9, l: L_PLAIN, rough: .12, jit: 0 });
+          S.torus(.045, PX, .072, PZ, MCOL.iron, { n: 9, t: .07, m: 3, l: L_METAL, rough: .45, r: [0, .7, 0] });
+          S.box(.012, .012, .03, -.3, .56, .04, MCOL.iron, { l: L_METAL, rough: .4, jit: 0 }); // hook
+          S.seg([-.3, .555, .052], [-.3, .42, .058], .006, .006, MCOL.ironL, { n: 4, l: L_METAL, rough: .35 });
+          S.sph(.026, -.3, .405, .062, MCOL.ironL, { sc: [1, .7, 1], w: 8, h: 5, l: L_METAL, rough: .3 });
+          // forget-me-nots and grass at the foot of the stones
+          for (let k = 0; k < 4; k++) {
+            const a = rng() * TAU, d = rng.range(.31, .34);
+            S.ico(.03, Math.cos(a) * d, .01, Math.sin(a) * d, mixC(MCOL.moss, MCOL.mossL, rng()), { sc: [1.4, .5, 1.1], d: 0, rough: 1 });
+            for (let j = 0; j < 3; j++) S.ico(.008, Math.cos(a) * d + rng.range(-.025, .025), .03, Math.sin(a) * d + rng.range(-.025, .025), C('#7fa8e0'), { d: 0, rough: .7, jit: .06 });
+          }
+        }
+      },
       woodshed: {
         name: '장작 창고',
         category: 'build',
