@@ -1,6 +1,7 @@
 // Waterfall test (terrain step 4-2): painting a pond on a raised 3x3 terrace out to its edge turns
 // the two edge rows into a waterfall (falls), its plunge pool appears on the lower ground by itself
-// (fallPool, not painted), the strip mesh shows (+1 draw call), the pool can't be painted dry, drying
+// (fallPool, not painted), the strip mesh and its spray show (+2 draw calls; ripple rings and the
+// babble come on), the pool can't be painted dry, drying
 // the lip removes fall and pool and leaves the island exactly as before, the edge is refused when
 // something stands where the pool would go, a second fall chains down a stair, lowering / raising
 // the tiles of a fall is refused, and "처음 섬으로" has no falls. Fails on any console error / warning.
@@ -79,10 +80,12 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
   ok('a plunge pool appears below (derived, not painted)', pool >= 2 && (await mat(X, -3.125)) === 0 && (await J(`${M}.pond(${X}, -3.2)`)) < 0, `pool ${pool}`);
   const g = await J(`${M}.ground(${X}, -3.3)`);
   ok('the pool basin dug itself into the lower ground', g < -0.15, g.toFixed(3));
+  await wait(800); // the sound level is picked every 0.25 s
   const fs = await J(`${M}.fallSheet()`);
   ok('the fall strip shows', fs.visible && fs.verts > 0, JSON.stringify(fs));
   const calls1 = await calls();
-  ok('one draw call more with a fall', calls0 !== null && calls1 === calls0 + 1, `${calls0} -> ${calls1}`);
+  ok('two draw calls more with a fall (strip + spray)', calls1 === calls0 + 2, `${calls0} -> ${calls1}`);
+  ok('spray, ripple rings and the babble are on', fs.spray > 0 && fs.feet >= 1 && fs.ripples >= 1 && fs.k === 1 && fs.sound > 0.02, JSON.stringify(fs));
   ok('the pool can not be painted dry', !(await allowed(X, -3.125, 0)) && !(await allowed(X, -3.125, 1)));
   ok('water on the pool is allowed (no change)', await allowed(X, -3.125, 4));
   ok('the fall tiles can not be raised or lowered', !(await J(`${M}.terrainAllowed(9, 3, 1)`)) && !(await J(`${M}.terrainAllowed(9, 2, 1)`)) && !(await J(`${M}.terrainAllowed(9, 3, -1)`)));
@@ -98,7 +101,9 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
   await tool('paint_grass');
   await drag([3.3, -2.625], [3.95, -2.625], 5);
   ok('grass on the lips removes the falls and the pool', (await falls()).length === 0 && (await J(`${M}.fallPool()`)) === 0 && (await mat(X, -2.875)) === 0);
-  ok('the strip is hidden again', !(await J(`${M}.fallSheet()`)).visible);
+  await wait(800);
+  const fsOff = await J(`${M}.fallSheet()`);
+  ok('strip, spray, ripples and sound gone again', !fsOff.visible && fsOff.spray === 0 && fsOff.ripples === 0 && fsOff.sound < 0.02, JSON.stringify(fsOff));
   for (const z of [-1.625, -1.875, -2.125, -2.375, -2.625, -2.875]) await drag([3.3, z], [4.6, z], 8);
   { const w = await J(`${M}.terrainWater()`), d = await J(`${M}.islandDigest()`), h = (await J(`${M}.terrainDump(0.05, 1)`)).hash;
     const left = []; for (let qz = 8; qz < 28; qz++) for (let qx = 30; qx < 48; qx++) if ((await J(`${M}.terrainMat(${qx}, ${qz})`)) !== 0) left.push(qx + ',' + qz);
