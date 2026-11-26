@@ -2841,6 +2841,87 @@
           S.seg([.06, 0, .08], [.07, .12, .1], .003, .003, IVY_L, { n: 4, jit: 0 });
           S.ico(.013, .07, .125, .1, C('#f2cf4a'), { d: 0, rough: .8, jit: .05 });
         }
+      },
+      cart: {
+        name: '손수레',
+        category: 'living',
+        freePlace: false,
+        type: 'soup',
+        seed: 149,
+        windStrength: 0.0,
+        explodeSliceFactor: 0.45,
+        explodeTier: 0,
+        glow: null,
+        contactRadius: 0.40,
+        solidRadius: 0.34,
+        build(S, rng) {
+          const wc = () => mixC(MCOL.wood, MCOL.woodL, rng() * .6);
+          const SACK = C('#b59a6a'), PUMP = C('#d9822b'), WICKER = C('#b08a52'), APPLE = C('#c23b2e'), APPLE_G = C('#9aa83a'), HAY = C('#d8bd6a'), ROPE = C('#c9b48a');
+          const FY = .25, FT = FY + .0125; // floor center / floor top
+          // floor planks with gaps, two side boards, a tall front board, a low tailboard
+          [-.115, 0, .115].forEach((z) => S.box(.5, .025, .105, .02 + rng.range(-.008, .008), FY, z, wc(), { l: L_WOOD, rough: .8, r: [0, rng.range(-.012, .012), 0] }));
+          for (const s of [-1, 1]) {
+            S.box(.5, .09, .022, .02, FT + .045, s * .17, wc(), { l: L_WOOD, rough: .8 });
+            S.box(.5, .004, .023, .02, FT + .045 + rng.range(-.01, .01), s * .17, mulC(MCOL.wood, .75), { l: L_PLAIN, jit: 0 }); // board seam
+          }
+          S.box(.022, .12, .362, .259, FT + .06, 0, wc(), { l: L_WOOD, rough: .8 });
+          S.box(.022, .06, .362, -.219, FT + .03, 0, wc(), { l: L_WOOD, rough: .8 });
+          // corner stakes and iron straps
+          for (const x of [-.22, .259]) for (const s of [-1, 1]) {
+            S.seg([x, FY - .01, s * .172], [x, FT + .125, s * .172], .014, .012, MCOL.woodD, { n: 5, l: L_WOOD });
+            S.box(.034, .016, .028, x, FT + .07, s * .172, MCOL.iron, { l: L_METAL, rough: .45 });
+          }
+          for (const s of [-1, 1]) {
+            S.box(.022, .096, .027, .02, FT + .045, s * .17, MCOL.iron, { l: L_METAL, rough: .45 });
+            for (const x of [-.12, .16]) S.ico(.006, x, FT + .07, s * .183, MCOL.ironL, { l: L_METAL, rough: .3, d: 0, jit: 0 }); // nail heads
+          }
+          // undercarriage: two beams that run back into the handles, a cross bar, two legs
+          for (const s of [-1, 1]) {
+            S.box(.62, .03, .04, -.03, FY - .0275, s * .1, MCOL.woodD, { l: L_WOOD });
+            S.seg([-.32, FY - .0275, s * .1], [-.475, FY + .01, s * .118], .02, .016, MCOL.woodD, { n: 6, l: L_WOOD });
+            S.seg([-.41, FY - .005, s * .112], [-.48, FY + .011, s * .119], .0195, .019, C('#3e2a1e'), { n: 6, l: L_CLOTH, rough: 1 }); // worn grips
+            S.seg([-.27, FY - .03, s * .1], [-.285, -.005, s * .112], .017, .014, MCOL.woodD, { n: 5, l: L_WOOD });
+            S.box(.05, .07, .04, .06, .19, s * .1, MCOL.woodD, { l: L_WOOD }); // axle block
+          }
+          S.box(.03, .025, .2, -.34, FY - .03, 0, MCOL.woodD, { l: L_WOOD });
+          S.cyl(.018, .5, .06, .16, 0, MCOL.iron, { n: 6, l: L_METAL, rough: .45, r: [Math.PI / 2, 0, 0] });
+          // spoked wheels: iron tire over a wooden felloe, eight spokes, banded hub
+          for (const s of [-1, 1]) {
+            const W = new Soup();
+            W.torus(.15, 0, 0, 0, MCOL.iron, { n: 16, t: .09, m: 4, l: L_METAL, rough: .45 });
+            W.torus(.132, 0, 0, 0, mixC(MCOL.wood, MCOL.woodD, .3), { n: 16, t: .11, m: 4, l: L_WOOD, rough: .85 });
+            for (let k = 0; k < 8; k++) {
+              const a = k / 8 * TAU;
+              W.seg([Math.cos(a) * .028, Math.sin(a) * .028, 0], [Math.cos(a) * .124, Math.sin(a) * .124, 0], .009, .008, mixC(MCOL.wood, MCOL.woodL, .3), { n: 5, l: L_WOOD });
+            }
+            W.cyl(.032, .06, 0, 0, 0, MCOL.woodD, { n: 8, l: L_WOOD, r: [Math.PI / 2, 0, 0] });
+            for (const z of [-.022, .022]) W.cyl(.035, .01, 0, 0, z, MCOL.iron, { n: 8, l: L_METAL, rough: .4, r: [Math.PI / 2, 0, 0] });
+            W.cyl(.014, .072, 0, 0, 0, MCOL.ironL, { n: 6, l: L_METAL, rough: .35, r: [Math.PI / 2, 0, 0] });
+            S.merge(W, { p: [.06, .16, s * .215], r: [0, 0, rng() * TAU] });
+          }
+          // load: a burlap sack slumped over the tailboard, a ribbed pumpkin, a basket of apples, loose hay
+          S.sph(.1, -.1, FT + .05, .04, SACK, { sc: [1.15, .62, .85], w: 10, h: 7, l: L_CLOTH, rough: 1 });
+          S.seg([-.2, FT + .05, .04], [-.255, FT + .075, .05], .03, .042, mulC(SACK, .92), { n: 7, l: L_CLOTH, rough: 1 });
+          S.torus(.03, -.205, FT + .05, .041, ROPE, { n: 8, t: .3, m: 3, l: L_CLOTH, rough: 1, r: [0, Math.PI / 2, 0] });
+          S.box(.06, .05, .004, -.08, FT + .07, .113, mulC(SACK, .8), { l: L_CLOTH, rough: 1, r: [-.5, .1, 0], jit: .03 }); // patch
+          for (let k = 0; k < 7; k++) {
+            const a = rng.range(-.8, .8);
+            S.seg([-.04 + rng.range(-.03, .03), FT + .005, -.07 + rng.range(-.03, .03)], [-.04 + Math.cos(a) * .09, FT + rng.range(.02, .05), -.07 + Math.sin(a) * .09], .004, .003, mixC(HAY, C('#b89a4a'), rng()), { n: 3, jit: .05, rough: 1 });
+          }
+          const ribs = (v) => { const k = 1 - .09 * (.5 - .5 * Math.cos(8 * Math.atan2(v.z, v.x))); v.x *= k; v.z *= k; };
+          S.sph(.075, .13, FT + .052, -.075, PUMP, { sc: [1, .72, 1], w: 16, h: 8, rough: .6, deform: ribs });
+          S.seg([.13, FT + .1, -.075], [.142, FT + .135, -.068], .01, .006, C('#5a4a2a'), { n: 5, rough: .9 });
+          S.ico(.026, .102, FT + .104, -.05, C('#4f7d34'), { sc: [1.4, .3, 1], d: 0, rough: .8, r: [.3, .5, .2] });
+          S.cyl(.055, .065, .15, FT + .0325, .085, WICKER, { n: 9, rt: 1.18, l: L_THATCH, rough: 1 });
+          S.torus(.064, .15, FT + .066, .085, mulC(WICKER, .8), { n: 9, t: .14, m: 3, l: L_THATCH, rough: 1, r: [Math.PI / 2, 0, 0] });
+          [[0, 0], [.03, .015], [-.025, .02], [.01, -.03], [-.02, -.018]].forEach(([dx, dz], i) => {
+            S.ico(.022, .15 + dx, FT + .07 + (i ? 0 : .012), .085 + dz, i === 3 ? APPLE_G : mixC(APPLE, C('#d8572e'), rng() * .5), { d: 1, rough: .45, jit: .05 });
+          });
+          S.ico(.022, .05, FT + .02, -.125, APPLE, { d: 1, rough: .45 });
+          S.seg([.05, FT + .04, -.125], [.053, FT + .052, -.123], .003, .003, C('#4a3322'), { n: 3, jit: 0 });
+          // grass growing up around a leg: it hasn't moved in a while
+          S.ico(.035, -.28, .01, .14, MCOL.moss, { sc: [1.4, .5, 1.1], d: 0, rough: 1 });
+        }
       }
     };
     if (HASH.stack !== '1') { // #stack=1 keeps the old sprite-stack versions for comparison
