@@ -194,6 +194,40 @@
 
     #reset-popover { display: flex; gap: 10px; padding: 10px; }
 
+    /* save slots: three cream paper cards, each with a little picture of the island it holds */
+    #save-panel { display: flex; gap: 12px; padding: 12px; }
+    .save-card {
+      width: 132px;
+      padding: 7px 7px 4px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      border-radius: 9px 11px 10px 8px;
+      background: linear-gradient(170deg, #fbf1dc, #ead6ae);
+      box-shadow: 0 3px 0 #b48a5c, 0 5px 6px rgba(10, 6, 2, 0.35), inset 0 1px 0 #fffaf0;
+      transform: rotate(var(--tilt, 0deg));
+    }
+    .save-thumb {
+      width: 118px;
+      height: 79px;
+      border-radius: 4px;
+      background: rgba(120, 84, 48, 0.12) center / cover no-repeat;
+      box-shadow: inset 0 0 0 1px rgba(91, 58, 31, 0.28);
+    }
+    .save-card.empty .save-thumb { background-image: none; box-shadow: inset 0 0 0 1.5px rgba(91, 58, 31, 0.22); }
+    .save-row { display: flex; gap: 2px; }
+    .save-card .pop-btn { width: 40px; height: 40px; }
+    .save-card.empty .slot-load, .save-card.empty .slot-del { display: none; }
+    .save-card .pop-btn.arm { animation: arm-wobble 0.5s ease-in-out infinite; filter: drop-shadow(0 0 5px rgba(255, 150, 110, 0.85)); }
+    @media (max-width: 560px) { /* phones: three smaller cards still fit */
+      #save-panel { gap: 7px; padding: 8px; right: 8px; }
+      .save-card { width: 96px; padding: 5px 4px 3px; }
+      .save-thumb { width: 86px; height: 57px; }
+      .save-card .pop-btn { width: 29px; height: 29px; }
+    }
+    @keyframes arm-wobble { 0%, 100% { transform: rotate(-7deg) scale(1.08); } 50% { transform: rotate(7deg) scale(1.08); } }
+
     .pop-btn {
       width: 46px;
       height: 46px;
@@ -461,6 +495,7 @@
     <button class="sys-btn" id="btn-explode" aria-label="분해 보기 (E)" data-hint="분해 보기 (E)"></button>
     <button class="sys-btn" id="btn-photo" aria-label="감상 모드" data-hint="감상 모드"></button>
     <div id="sys-sep"></div>
+    <button class="sys-btn" id="btn-save" aria-label="섬 저장" data-hint="섬 저장"></button>
     <button class="sys-btn" id="btn-reset" aria-label="섬 초기화" data-hint="섬 초기화"></button>
     <button class="sys-btn" id="btn-help" aria-label="조작법 (H)" data-hint="조작법 (H)"></button>
   </div>
@@ -468,6 +503,33 @@
   <div id="reset-popover" class="panel ui-layer">
     <button class="pop-btn" id="pop-starter" aria-label="처음 섬으로" data-hint="처음 섬으로"></button>
     <button class="pop-btn danger" id="pop-clear" aria-label="모두 비우기" data-hint="모두 비우기"></button>
+  </div>
+
+  <div id="save-panel" class="panel ui-layer">
+    <div class="save-card empty" data-slot="1" style="--tilt: -1.6deg">
+      <div class="save-thumb"></div>
+      <div class="save-row">
+        <button class="pop-btn slot-save" aria-label="저장" data-hint="저장"></button>
+        <button class="pop-btn slot-load" aria-label="불러오기" data-hint="불러오기"></button>
+        <button class="pop-btn slot-del" aria-label="지우기" data-hint="지우기"></button>
+      </div>
+    </div>
+    <div class="save-card empty" data-slot="2" style="--tilt: 1.1deg">
+      <div class="save-thumb"></div>
+      <div class="save-row">
+        <button class="pop-btn slot-save" aria-label="저장" data-hint="저장"></button>
+        <button class="pop-btn slot-load" aria-label="불러오기" data-hint="불러오기"></button>
+        <button class="pop-btn slot-del" aria-label="지우기" data-hint="지우기"></button>
+      </div>
+    </div>
+    <div class="save-card empty" data-slot="3" style="--tilt: -0.7deg">
+      <div class="save-thumb"></div>
+      <div class="save-row">
+        <button class="pop-btn slot-save" aria-label="저장" data-hint="저장"></button>
+        <button class="pop-btn slot-load" aria-label="불러오기" data-hint="불러오기"></button>
+        <button class="pop-btn slot-del" aria-label="지우기" data-hint="지우기"></button>
+      </div>
+    </div>
   </div>
 
   <div id="help-panel" class="panel ui-layer">
@@ -2439,6 +2501,22 @@
       ],
       close: [
         { el: 'path', d: 'M20 20l16 16M36 20L20 36' }
+      ],
+      // save: an open book with a ribbon marker / an arrow down into a tray / an arrow up out of it
+      book: [
+        { el: 'path', d: 'M12.5 21.5v19c5.4-1.3 10.6-.6 15.5 2.3c4.9-2.9 10.1-3.6 15.5-2.3v-19', f: '#9b6a42' },
+        { el: 'path', d: 'M15 17.5c4.6-1.1 9-.4 13 2.2v20.5c-4-2.6-8.4-3.3-13-2.2z', f: '#f6e8c8' },
+        { el: 'path', d: 'M41 17.5c-4.6-1.1-9-.4-13 2.2v20.5c4-2.6 8.4-3.3 13-2.2z', f: '#f6e8c8' },
+        { el: 'path', d: 'M18.5 24c2.4-.4 4.6 0 6.5 1M18.5 29c2.4-.4 4.6 0 6.5 1' },
+        { el: 'path', d: 'M34.5 18.6v26l2.1-2.3 2.1 2.3V18.2', f: '#c95b40' }
+      ],
+      save_in: [
+        { el: 'path', d: 'M13.5 33.5h8l2.2 3.4h8.6l2.2-3.4h8v9h-29z', f: '#c48c55' },
+        { el: 'path', d: 'M28 12.5v18M21.8 24.5l6.2 6.2 6.2-6.2' }
+      ],
+      load: [
+        { el: 'path', d: 'M13.5 33.5h8l2.2 3.4h8.6l2.2-3.4h8v9h-29z', f: '#c48c55' },
+        { el: 'path', d: 'M28 30.5v-18M21.8 18.7l6.2-6.2 6.2 6.2' }
       ]
     };
 
@@ -7579,6 +7657,7 @@
         mesh.userData.goneAttr.needsUpdate = true;
         // once the sinking ones are gone, take them out of the buffer
         if (sinking && !seedCleanup) seedCleanup = setTimeout(() => { seedCleanup = 0; rebuildSeedFlowers(); }, SEED_SHRINK * 1000 + 60);
+        queueAutosave(); // every edit ends up here (rebuildInstances finishes with this)
       }
       function sowSeedsAt(cx, cz) { // how many flowers came up
         const max = assetsById.seeds.def.maxInstances, now = performance.now() * 0.001;
@@ -7617,6 +7696,107 @@
         sowStep(wx, wz);
       }
       function endSeedStroke() { seedStroke = null; }
+
+      /* ---- SAVE (step 5): the island lives on in this browser ---- */
+      // The current island is written to a hidden auto slot one second after the last edit (a few
+      // KB, only on edits, never per frame) and comes back, assembling, on the next visit. The time
+      // of day is a separate setting. #save=0 turns reading and writing off. Coordinates are kept
+      // exactly (no rounding) so a reloaded island is the same island, mesh for mesh.
+      const SAVE_ON = HASH.save !== '0';
+      const SAVE_V = 1, SAVE_KEY_AUTO = 'mori-isle.v1.auto', SAVE_KEY_SLOT = 'mori-isle.v1.slot', SAVE_KEY_PREFS = 'mori-isle.prefs';
+      const storeGet = (k) => { if (!SAVE_ON) return null; try { return localStorage.getItem(k); } catch (e) { return null; } };
+      const storeSet = (k, v) => { if (!SAVE_ON) return false; try { localStorage.setItem(k, v); return true; } catch (e) { return false; } };
+      const bytesToB64 = (u8) => { let t = ''; for (let i = 0; i < u8.length; i++) t += String.fromCharCode(u8[i]); return btoa(t); };
+      const b64ToBytes = (b) => { try { const t = atob(b); const u8 = new Uint8Array(t.length); for (let i = 0; i < t.length; i++) u8[i] = t.charCodeAt(i); return u8; } catch (e) { return null; } };
+      function serializeIsland() {
+        return {
+          level: bytesToB64(new Uint8Array(terrain.level.buffer)),
+          mat: bytesToB64(terrain.mat),
+          placed: [...placedItems.values()].map((e) => [e.id, e.gx, e.gz, e.rotation]),
+          snap: snapProps.map((o) => [o.id, o.wx, o.wz, o.rotation]),
+          free: freeProps.map((fp) => [fp.id, fp.wx, fp.wz, fp.rotation, fp.scale]),
+          seeds: seedFlowers.filter((f) => !f.erased).map((f) => [f.wx, f.wz, f.rot, f.scale, f.tint])
+        };
+      }
+      // A broken terrain throws the whole save away (the starter island instead); objects that don't
+      // fit (unknown id, wrong placement kind, off the island, not a number) are dropped one by one.
+      function parseIsland(isl) {
+        if (!isl || typeof isl !== 'object') return null;
+        const lv = b64ToBytes(isl.level), mt = b64ToBytes(isl.mat);
+        if (!lv || lv.length !== GRID_SIZE * GRID_SIZE || !mt || mt.length !== MAT_N * MAT_N) return null;
+        const level = new Int8Array(lv.buffer);
+        for (const v of level) if (v < 0 || v > TERRAIN_MAX) return null;
+        for (const v of mt) if (v > MAT_WATER) return null;
+        const num = (v) => typeof v === 'number' && Number.isFinite(v);
+        const onIsland = (x, z) => num(x) && num(z) && Math.abs(x) < HALF_GRID && Math.abs(z) < HALF_GRID;
+        const defOf = (id) => (typeof id === 'string' && assetsById[id] ? assetsById[id].def : null);
+        const list = (a) => (Array.isArray(a) ? a.filter(Array.isArray) : []);
+        const placed = [], seen = new Set();
+        for (const [id, gx, gz, rotation] of list(isl.placed)) {
+          const def = defOf(id);
+          if (!def || def.freePlace || def.snapPlace || def.seedScatter || !Number.isInteger(gx) || !Number.isInteger(gz) || !num(rotation)) continue;
+          if (gx < 0 || gz < 0 || gx >= GRID_SIZE || gz >= GRID_SIZE || seen.has(`${gx},${gz}`)) continue;
+          seen.add(`${gx},${gz}`); placed.push({ id, gx, gz, rotation });
+        }
+        const snap = [];
+        for (const [id, wx, wz, rotation] of list(isl.snap)) {
+          const def = defOf(id);
+          if (def && def.snapPlace && onIsland(wx, wz) && num(rotation)) snap.push({ id, wx, wz, rotation });
+        }
+        const free = [];
+        for (const [id, wx, wz, rotation, scale] of list(isl.free)) {
+          const def = defOf(id);
+          if (def && def.freePlace && !def.seedScatter && onIsland(wx, wz) && num(rotation) && num(scale) && scale > 0.1 && scale < 4) free.push({ id, wx, wz, rotation, scale });
+        }
+        const seeds = [], maxSeeds = assetsById.seeds ? assetsById.seeds.def.maxInstances : 0;
+        for (const [wx, wz, rot, scale, tint] of list(isl.seeds)) {
+          if (seeds.length >= maxSeeds) break;
+          if (onIsland(wx, wz) && num(rot) && num(scale) && scale > 0.1 && scale < 4 && Number.isInteger(tint) && tint >= 0 && tint < SEED_TINTS.length) seeds.push({ wx, wz, rot, scale, tint });
+        }
+        return { level, mat: mt, placed, snap, free, seeds };
+      }
+      // same shape as populateStarterIsland: terrain first (derived counts, water field, surface), then the lists
+      function applyIsland(isl, rebuild = true) {
+        terrain.level.set(isl.level);
+        terrain.mat.set(isl.mat);
+        terrain.painted = 0; terrain.water = 0;
+        for (const v of terrain.mat) { if (v === MAT_WATER) terrain.water++; else if (v !== MAT_GRASS) terrain.painted++; }
+        rebuildWaterField();
+        terrain.version++;
+        rebuildTerrainSurface();
+        markShadowsDirty(1.0);
+        placedItems.clear(); snapProps.length = 0; freeProps.length = 0; seedFlowers.length = 0;
+        for (const e of isl.placed) placedItems.set(`${e.gx},${e.gz}`, { ...e });
+        for (const o of isl.snap) snapProps.push({ ...o });
+        for (const fp of isl.free) freeProps.push({ ...fp });
+        for (const f of isl.seeds) seedFlowers.push({ ...f, spawnT: -100 });
+        if (rebuild) rebuildInstances();
+      }
+      function readSave(key) {
+        const raw = storeGet(key);
+        if (!raw) return null;
+        let data; try { data = JSON.parse(raw); } catch (e) { return null; }
+        if (!data || data.v !== SAVE_V) return null;
+        return parseIsland(data.island);
+      }
+      let autosaveTimer = 0;
+      function writeAutosave() {
+        if (autosaveTimer) { clearTimeout(autosaveTimer); autosaveTimer = 0; }
+        if (!SAVE_ON) return false;
+        if (intro.phase !== 'done') { queueAutosave(); return false; } // the island is mid-assembly / mid-fall
+        return storeSet(SAVE_KEY_AUTO, JSON.stringify({ v: SAVE_V, savedAt: Date.now(), island: serializeIsland() }));
+      }
+      function queueAutosave() {
+        if (!SAVE_ON) return;
+        if (autosaveTimer) clearTimeout(autosaveTimer);
+        autosaveTimer = setTimeout(writeAutosave, 1000);
+      }
+      // closing the tab within a second of an edit still keeps it
+      const flushAutosave = () => { if (autosaveTimer) writeAutosave(); };
+      window.addEventListener('pagehide', flushAutosave);
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushAutosave(); });
+      function readPrefs() { try { return JSON.parse(storeGet(SAVE_KEY_PREFS) || '{}') || {}; } catch (e) { return {}; } }
+      const writePrefs = (p) => storeSet(SAVE_KEY_PREFS, JSON.stringify({ ...readPrefs(), ...p }));
 
       /* ---- STORYTELLING CLUSTERED STARTER DIORAMA ---- */
       function populateStarterIsland(rebuild = true) {
@@ -8137,6 +8317,10 @@
       setToken('#btn-explode', 'layers', { round: true });
       setToken('#btn-photo', 'camera', { round: true });
       setToken('#btn-reset', 'reset', { round: true });
+      setToken('#btn-save', 'book', { round: true });
+      document.querySelectorAll('#save-panel .slot-save').forEach((el) => { el.innerHTML = makeToken('save_in', { round: true }); });
+      document.querySelectorAll('#save-panel .slot-load').forEach((el) => { el.innerHTML = makeToken('load', { round: true }); });
+      document.querySelectorAll('#save-panel .slot-del').forEach((el) => { el.innerHTML = makeToken('trash', { round: true }); });
       setToken('#btn-help', 'help', { round: true });
       setToken('#pop-starter', 'sprout', { round: true });
       setToken('#pop-clear', 'trash', { round: true });
@@ -8323,7 +8507,7 @@
         const open = force === undefined ? !helpPanel.classList.contains('open') : force;
         helpPanel.classList.toggle('open', open);
         btnHelp.classList.toggle('on', open);
-        if (open) document.getElementById('reset-popover').classList.remove('open');
+        if (open) { document.getElementById('reset-popover').classList.remove('open'); document.getElementById('save-panel').classList.remove('open'); }
       }
       btnHelp.addEventListener('click', (e) => { e.stopPropagation(); toggleHelp(); audio.playUiBlip(660); });
 
@@ -8339,6 +8523,7 @@
 
       document.getElementById('btn-time').addEventListener('click', () => {
         setTimeOfDay(timeIndex + 1);
+        writePrefs({ time: TIME_ORDER[timeIndex] });
         audio.playUiBlip(440 + timeIndex * 90);
       });
 
@@ -8365,6 +8550,7 @@
         isPhotoMode = enabled;
         document.body.classList.toggle('photo-mode', enabled);
         resetPopover.classList.remove('open');
+        savePanel.classList.remove('open');
         updateHoverVisuals();
       }
       document.getElementById('btn-photo').addEventListener('click', () => {
@@ -8376,10 +8562,11 @@
       document.getElementById('btn-reset').addEventListener('click', (e) => {
         e.stopPropagation();
         resetPopover.classList.toggle('open');
-        if (resetPopover.classList.contains('open')) toggleHelp(false);
+        if (resetPopover.classList.contains('open')) { toggleHelp(false); savePanel.classList.remove('open'); }
       });
       document.addEventListener('click', (e) => { // click anywhere else closes the small panels
         if (!resetPopover.contains(e.target)) resetPopover.classList.remove('open');
+        if (!savePanel.contains(e.target)) closeSavePanel();
         if (!helpPanel.contains(e.target) && e.target !== btnHelp) toggleHelp(false);
       });
       document.getElementById('pop-starter').addEventListener('click', () => {
@@ -8394,6 +8581,74 @@
         rebuildInstances();
         resetPopover.classList.remove('open');
         audio.playRemove();
+      });
+
+      // save slots (step 5-2): snapshots kept beside the auto slot. Saving takes a small picture of
+      // the next frame; loading drops the island away and assembles the saved one (it becomes the
+      // current island, so the auto slot follows). Overwriting and deleting take a second press.
+      const savePanel = document.getElementById('save-panel');
+      const btnSave = document.getElementById('btn-save');
+      const slotCards = [...savePanel.querySelectorAll('.save-card')];
+      function readSlotMeta(i) {
+        const raw = storeGet(SAVE_KEY_SLOT + i);
+        if (!raw) return null;
+        try { const d = JSON.parse(raw); return d && d.v === SAVE_V && parseIsland(d.island) ? d : null; } catch (e) { return null; }
+      }
+      function disarmSlots() { savePanel.querySelectorAll('.arm').forEach((b) => { b.classList.remove('arm'); b.dataset.hint = b.dataset.hint0 || b.dataset.hint; }); }
+      function refreshSlots() {
+        slotCards.forEach((card, k) => {
+          const d = readSlotMeta(k + 1);
+          card.classList.toggle('empty', !d);
+          card.querySelector('.save-thumb').style.backgroundImage = d && typeof d.thumb === 'string' && d.thumb.startsWith('data:image/') ? `url("${d.thumb}")` : '';
+        });
+      }
+      function closeSavePanel() { savePanel.classList.remove('open'); btnSave.classList.remove('on'); disarmSlots(); }
+      btnSave.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const open = !savePanel.classList.contains('open');
+        if (!open) { closeSavePanel(); return; }
+        refreshSlots();
+        savePanel.classList.add('open'); btnSave.classList.add('on');
+        resetPopover.classList.remove('open'); toggleHelp(false);
+        audio.playUiBlip(560);
+      });
+      // a risky press asks once more: the token wobbles and its label says so
+      function armed(btn, hint) {
+        if (btn.classList.contains('arm')) { disarmSlots(); return true; }
+        disarmSlots();
+        btn.dataset.hint0 = btn.dataset.hint; btn.dataset.hint = hint; btn.classList.add('arm');
+        btn.dispatchEvent(new Event('mouseenter'));
+        audio.playUiBlip(380);
+        return false;
+      }
+      savePanel.addEventListener('mouseleave', disarmSlots);
+      slotCards.forEach((card, k) => {
+        const i = k + 1;
+        card.querySelector('.slot-save').addEventListener('click', (e) => {
+          const btn = e.currentTarget;
+          if (intro.phase !== 'done') return;
+          if (!card.classList.contains('empty') && !armed(btn, '한 번 더: 덮어쓰기')) return;
+          disarmSlots();
+          const island = serializeIsland();
+          requestThumb((thumb) => {
+            const ok = storeSet(SAVE_KEY_SLOT + i, JSON.stringify({ v: SAVE_V, savedAt: Date.now(), island, thumb }))
+              || storeSet(SAVE_KEY_SLOT + i, JSON.stringify({ v: SAVE_V, savedAt: Date.now(), island, thumb: '' })); // full storage: keep the island, drop the picture
+            refreshSlots();
+            if (ok) audio.playPlace(); else audio.playTerrainBlocked(0);
+          });
+        });
+        card.querySelector('.slot-load').addEventListener('click', () => {
+          const isl = readSave(SAVE_KEY_SLOT + i);
+          if (!isl || intro.phase !== 'done') { audio.playTerrainBlocked(0); return; }
+          closeSavePanel();
+          resetIsland((rebuild) => applyIsland(isl, rebuild));
+        });
+        card.querySelector('.slot-del').addEventListener('click', (e) => {
+          if (!armed(e.currentTarget, '한 번 더: 지우기')) return;
+          try { if (SAVE_ON) localStorage.removeItem(SAVE_KEY_SLOT + i); } catch (err) { /* private mode */ }
+          refreshSlots();
+          audio.playRemove();
+        });
       });
 
       /* =======================================================================
@@ -8583,7 +8838,8 @@
              (STAGGERED EXPLODED VIEW + EASE-OUT-BACK + SYNCED SHADOWS & SMOKE)
          ======================================================================= */
       setTimeOfDay(0);
-      populateStarterIsland();
+      const bootSave = readSave(SAVE_KEY_AUTO);
+      if (bootSave) applyIsland(bootSave); else populateStarterIsland();
       updateSelectionUI();
 
       // everything that stands on the island hangs off one root, so the reset can drop the whole
@@ -8953,6 +9209,7 @@
         upMat.uniforms.uSeed.value = (elapsed * 60 % 1000) * 7.13;
         renderer.setRenderTarget(null);
         renderer.render(upScene, postCamera);
+        if (thumbWaiting.length) captureThumb(); // same task as the draw: the canvas still holds this frame
         // behind the loader the finished island is drawn a few times first, so every shader and the
         // shadow map are compiled before the player presses start (no hitch when the assembly begins)
         if (intro.phase === 'boot' && ++bootFrames === 3) onBootReady();
@@ -9265,7 +9522,8 @@
           o.spawnT = spawnAt(def, o.wx, o.wz);
           landing(def, o.wx, snapGroundY(def, o.wx, o.wz, o.rotation), o.wz, o.spawnT);
         });
-        rebuildInstances();
+        seedFlowers.forEach((f) => { if (f.erased) return; f.spawnT = t0 + IT.small[0] + 0.25 + introDiag(f.wx, f.wz) * IT.small[1] + Math.random() * 0.15; f.goneAt = null; });
+        rebuildInstances(); // (refills the seed flowers too)
         markShadowsDirty(IT.end + lead + 0.4); // casters keep moving the whole time
 
         // island layers: dust off the edges, an impact ring, a thud and a shake
@@ -9331,9 +9589,31 @@
       }
 
       // "처음 섬으로": tremble, fall away, assemble again
-      function resetIsland() {
+      // save slot pictures: the next finished frame, centre cropped to 3:2, as a small JPEG
+      const thumbWaiting = [];
+      function requestThumb(cb) {
+        hoveredHit = null; updateHoverVisuals(); // no cursor or ghost in the picture
+        thumbWaiting.push(cb);
+      }
+      let thumbCanvas = null;
+      function captureThumb() {
+        const src = renderer.domElement, W = 240, H = 160;
+        if (!thumbCanvas) { thumbCanvas = document.createElement('canvas'); thumbCanvas.width = W; thumbCanvas.height = H; }
+        let sw = src.width, sh = src.height;
+        if (sw / sh > W / H) sw = sh * W / H; else sh = sw * H / W;
+        let url = '';
+        try {
+          const g = thumbCanvas.getContext('2d');
+          g.drawImage(src, (src.width - sw) / 2, (src.height - sh) / 2, sw, sh, 0, 0, W, H);
+          url = thumbCanvas.toDataURL('image/jpeg', 0.8);
+        } catch (e) { url = ''; }
+        thumbWaiting.splice(0).forEach((cb) => cb(url));
+      }
+
+      // apply(rebuild) puts the next island in place: the starter one, or a saved slot
+      function resetIsland(apply = populateStarterIsland) {
         if (intro.phase !== 'done') return;
-        if (!INTRO_ON) { populateStarterIsland(); audio.playPlace(); return; }
+        if (!INTRO_ON) { apply(true); audio.playPlace(); return; }
         if (isExploded) { isExploded = false; explodeToggleTime = -10; }
         hoveredHit = null; updateHoverVisuals();
         const now = performance.now() * 0.001;
@@ -9342,7 +9622,7 @@
         audio.introRumble();
         introShake(0.05);
         introFx(now + CRUMBLE_HOLD, () => dustRing(0.0, 5.95));
-        introFx(now + CRUMBLE_LEN, () => { populateStarterIsland(false); startAssembly(false); });
+        introFx(now + CRUMBLE_LEN, () => { apply(false); startAssembly(false); });
       }
 
       // the finished island has been drawn a few times behind the black (shaders and shadow map
@@ -9417,6 +9697,12 @@
           ground: (x, z) => getContinuousTerrainHeight(x, z),
           falls: () => falls.map((f) => ({ qx: f.qx, qz: f.qz, gx: f.gx, gz: f.gz, sx: f.sx, sz: f.sz, edge: f.edge, top: f.top, bot: f.bot })),
           fallPool: () => fallPool.reduce((n, v) => n + v, 0),
+          // save (step 5): the raw auto slot, write it now (true if written), a write waiting, time of day
+          saveRaw: () => storeGet(SAVE_KEY_AUTO),
+          autosaveNow: () => writeAutosave(),
+          saveSlot: (i) => storeGet(SAVE_KEY_SLOT + i),
+          autosavePending: () => !!autosaveTimer,
+          timeOfDay: () => TIME_ORDER[timeIndex],
           fallSheet: () => ({ visible: fallMesh.visible, verts: fallMesh.geometry.attributes.position.count, spray: sprayPoints.visible ? sprayPoints.geometry.attributes.position.count : 0, feet: fallFeet.length, lines: fallLines.length, ripples: waterMat.uniforms.uRipN.value, k: fallMat.uniforms.uK.value, sound: audio.fallLevel || 0 }),
           lipInfo: (qx, qz) => lipInfo(qx, qz),
           fallVerts: () => Array.from(fallMesh.geometry.attributes.position.array, (v) => Math.round(v * 1000) / 1000),
@@ -9511,9 +9797,10 @@
         };
       }
 
-      // #time=golden / #time=night starts at that time of day
-      if (HASH.time && TIME_ORDER.includes(HASH.time)) {
-        setTimeOfDay(TIME_ORDER.indexOf(HASH.time));
+      // #time=golden / #time=night starts at that time of day (else the one remembered from last time)
+      const startTime = HASH.time && TIME_ORDER.includes(HASH.time) ? HASH.time : readPrefs().time;
+      if (TIME_ORDER.includes(startTime) && startTime !== TIME_ORDER[0]) {
+        setTimeOfDay(TIME_ORDER.indexOf(startTime));
         // start already there instead of blending from day
         for (const k in curAtmo) {
           if (curAtmo[k] && curAtmo[k].isColor) curAtmo[k].copy(targetAtmo[k]);
