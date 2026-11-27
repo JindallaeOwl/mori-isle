@@ -7903,7 +7903,11 @@
             if (vari) vari[n] = variantAt(def, item.wx, item.wz);
             dummyObj.position.set(item.wx, item.wy, item.wz);
             dummyObj.rotation.set(0, item.rotation * (Math.PI / 2), 0);
-            dummyObj.scale.setScalar(item.scale);
+            if (def.tree) { // trees differ a little in size and height (±8%, ±5%), from where they stand
+              const ka = Math.round(item.wx * 4) + 307, kb = Math.round(item.wz * 4) + 311;
+              const s = item.scale * (1 + (hash2D(ka, kb, 501) - 0.5) * 0.16);
+              dummyObj.scale.set(s, s * (1 + (hash2D(ka, kb, 503) - 0.5) * 0.1), s);
+            } else dummyObj.scale.setScalar(item.scale);
             dummyObj.updateMatrix();
             mesh.setMatrixAt(n, dummyObj.matrix);
             sp[n] = item.spawnT;
