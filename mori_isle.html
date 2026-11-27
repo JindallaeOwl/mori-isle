@@ -4849,7 +4849,8 @@
           uFoam: sharedUniforms.uWaterFoam,
           uFogColor: sharedUniforms.uFogColor,
           uFogDensity: sharedUniforms.uFogDensity,
-          uRip: { value: Array.from({ length: 8 }, () => new THREE.Vector3()) }, // waterfall feet: x, z, strength
+          uRip: { value: Array.from({ length: 8 }, () => new THREE.Vector3()) }, // waterfall foot lines: centre x, z, strength
+          uRipL: { value: Array.from({ length: 8 }, () => new THREE.Vector3()) }, // ...along-the-lip axis x, z, half length
           uRipN: { value: 0 }
         },
         vertexShader: `
@@ -4871,6 +4872,7 @@
           uniform vec3 uFogColor;
           uniform float uFogDensity;
           uniform vec3 uRip[8];
+          uniform vec3 uRipL[8];
           uniform int uRipN;
           varying vec2 vUv;
 
@@ -4902,7 +4904,12 @@
             float rings = 0.0;
             for (int i = 0; i < 8; i++) {
               if (i >= uRipN) break;
-              float d = length(wp - uRip[i].xy);
+              // distance to the whole foot line, not a point: a wide fall sends out one set of straight
+              // wavefronts with round ends instead of a row of overlapping circles
+              vec2 q = wp - uRip[i].xy;
+              float ta = clamp(dot(q, uRipL[i].xy), -uRipL[i].z, uRipL[i].z);
+              float d = length(q - uRipL[i].xy * ta);
+              d += 0.022 * sin(ta * 5.3 + uTime * 0.7) * smoothstep(0.08, 0.45, d); // fronts wobble a little, not ruled lines
               float w = fract((d - 0.05) * 4.2 - uTime * 0.55);
               float ring = smoothstep(0.0, 0.1, w) * (1.0 - smoothstep(0.14, 0.3, w)) * smoothstep(0.8, 0.18, d) * smoothstep(0.03, 0.1, d);
               rings = max(rings, max(ring * 0.8, smoothstep(0.17, 0.02, d)) * uRip[i].z);
@@ -5072,15 +5079,21 @@
         return { pts, foot: [sf, yb] };
       };
       const fallFeet = []; // where the falls land, every ~0.5 along them: { x, y, z, dx, dz: the way it falls, w: width, edge }
+      const fallLines = []; // one per fall into a pool, for the ripple rings: { x, z: foot centre, ax, az: along the lip, half }
       const buildFallGeometry = () => {
         const segs = fallSegments(), pos = [], flow = [], fall = [], idx = [];
         fallFeet.length = 0;
+        fallLines.length = 0;
         for (const seg of segs) {
           const { pts: prof, foot } = fallProfile(seg), w0 = seg.a0 - 0.04, w1 = seg.a1 + 0.04, nA = Math.ceil((w1 - w0) / 0.0625);
           const nF = Math.max(1, Math.round((seg.a1 - seg.a0) / 0.5));
           for (let k = 0; k < nF; k++) {
             const a = seg.a0 + (seg.a1 - seg.a0) * (k + 0.5) / nF, s = seg.line + (seg.sx || seg.sz) * foot[0];
             fallFeet.push({ x: seg.sx ? s : a, y: foot[1], z: seg.sx ? a : s, dx: seg.sx, dz: seg.sz, w: (seg.a1 - seg.a0) / nF, edge: seg.edge });
+          }
+          if (!seg.edge) {
+            const am = (seg.a0 + seg.a1) / 2, s = seg.line + (seg.sx || seg.sz) * foot[0];
+            fallLines.push({ x: seg.sx ? s : am, z: seg.sx ? am : s, ax: seg.sx ? 0 : 1, az: seg.sx ? 1 : 0, half: Math.max(0, (seg.a1 - seg.a0) / 2 - 0.06) });
           }
           let arc = 0;
           const arcs = prof.map((p, k) => (k ? (arc += Math.hypot(p[0] - prof[k - 1][0], p[1] - prof[k - 1][1])) : 0));
@@ -5335,7 +5348,7 @@
         topMesh.geometry = buildTurfGeometry(false);
       }
 
-      return { chunkTopSurface, chunkSubsoil, chunkBedrock, pondMist, mistMat, gridMat, waterMesh, waterMat, fallMesh, fallMat, fallFeet, sprayPoints, lilyParts, rebuildSurface, repaintSurface };
+      return { chunkTopSurface, chunkSubsoil, chunkBedrock, pondMist, mistMat, gridMat, waterMesh, waterMat, fallMesh, fallMat, fallFeet, fallLines, sprayPoints, lilyParts, rebuildSurface, repaintSurface };
     }
 
     /* =========================================================================
@@ -5955,7 +5968,7 @@
       /* =======================================================================
          10. ISLAND, AUTO-TILING PATH/FENCE, SPRITE STACKS & CONTACT SHADOWS
          ======================================================================= */
-      const { chunkTopSurface, chunkSubsoil, chunkBedrock, pondMist, mistMat, gridMat, waterMesh, waterMat, fallMesh, fallMat, fallFeet, sprayPoints, lilyParts, rebuildSurface: rebuildTerrainSurface, repaintSurface: repaintTerrainSurface } = buildMiniatureIsland(scene);
+      const { chunkTopSurface, chunkSubsoil, chunkBedrock, pondMist, mistMat, gridMat, waterMesh, waterMat, fallMesh, fallMat, fallFeet, fallLines, sprayPoints, lilyParts, rebuildSurface: rebuildTerrainSurface, repaintSurface: repaintTerrainSurface } = buildMiniatureIsland(scene);
 
       // Height-Proportional Contact Shadow InstancedMesh (shifts & fades as layers float!)
       const csCanvas = document.createElement('canvas');
@@ -8818,10 +8831,13 @@
         audio.updateFalls(dt);
         if (fallFeet.length || waterMat.uniforms.uRipN.value) {
           ripSort.length = 0;
-          for (const f of fallFeet) if (!f.edge) { f.d = Math.hypot(f.x - camPan.x, f.z - camPan.y); ripSort.push(f); }
+          for (const f of fallLines) { // nearest point of each foot line to the screen centre
+            const t = THREE.MathUtils.clamp((camPan.x - f.x) * f.ax + (camPan.y - f.z) * f.az, -f.half, f.half);
+            f.d = Math.hypot(f.x + f.ax * t - camPan.x, f.z + f.az * t - camPan.y); ripSort.push(f);
+          }
           ripSort.sort((a, b) => a.d - b.d);
-          const n = Math.min(8, ripSort.length), rip = waterMat.uniforms.uRip.value;
-          for (let i = 0; i < n; i++) rip[i].set(ripSort[i].x, ripSort[i].z, fallMat.uniforms.uK.value);
+          const n = Math.min(8, ripSort.length), rip = waterMat.uniforms.uRip.value, ripL = waterMat.uniforms.uRipL.value;
+          for (let i = 0; i < n; i++) { const f = ripSort[i]; rip[i].set(f.x, f.z, fallMat.uniforms.uK.value); ripL[i].set(f.ax, f.az, f.half); }
           waterMat.uniforms.uRipN.value = n;
         }
 
@@ -9401,7 +9417,7 @@
           ground: (x, z) => getContinuousTerrainHeight(x, z),
           falls: () => falls.map((f) => ({ qx: f.qx, qz: f.qz, gx: f.gx, gz: f.gz, sx: f.sx, sz: f.sz, edge: f.edge, top: f.top, bot: f.bot })),
           fallPool: () => fallPool.reduce((n, v) => n + v, 0),
-          fallSheet: () => ({ visible: fallMesh.visible, verts: fallMesh.geometry.attributes.position.count, spray: sprayPoints.visible ? sprayPoints.geometry.attributes.position.count : 0, feet: fallFeet.length, ripples: waterMat.uniforms.uRipN.value, k: fallMat.uniforms.uK.value, sound: audio.fallLevel || 0 }),
+          fallSheet: () => ({ visible: fallMesh.visible, verts: fallMesh.geometry.attributes.position.count, spray: sprayPoints.visible ? sprayPoints.geometry.attributes.position.count : 0, feet: fallFeet.length, lines: fallLines.length, ripples: waterMat.uniforms.uRipN.value, k: fallMat.uniforms.uK.value, sound: audio.fallLevel || 0 }),
           lipInfo: (qx, qz) => lipInfo(qx, qz),
           fallVerts: () => Array.from(fallMesh.geometry.attributes.position.array, (v) => Math.round(v * 1000) / 1000),
           waterSheet: () => ({ water: waterMesh.geometry.index.count / 6, mist: pondMist.geometry.index.count / 6, lilies: lilyParts.map((lp) => lp.meshes[0].visible) }),
