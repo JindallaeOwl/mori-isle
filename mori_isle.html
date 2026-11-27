@@ -2773,6 +2773,83 @@
         ]
       }
     ];
+    // cherry bark: grey-brown with a sheen on the lit side and pale horizontal lenticel bands, so the
+    // limbs still read against the shade under the crown (ox, oy: the centre of the disc being drawn)
+    function cherryBark(layer, x, y, ox, oy) {
+      const n = hash2D(x, y + layer * 3, 93), sd = (x - ox) + (y - oy);
+      if (layer % 3 === 1 && n > 0.45) return sd < 0 ? '#a3836f' : '#6e5246';
+      if (sd < -0.4) return n > 0.5 ? '#8b6b5d' : '#7d5e51';
+      if (sd > 0.6) return n > 0.5 ? '#3f2c26' : '#4a332c';
+      return n > 0.5 ? '#614539' : '#573d33';
+    }
+    // 수양벚나무: a tall trunk, a small high cap of blossom and a curtain of hanging strands flaring
+    // out a little as they fall (vertical runs through many slices: what a sprite stack shows best)
+    const WEEP_BLOSSOM = { light: ['#fbd3df', '#f8c6d5'], mid: '#f5bfd0', shade: ['#ecaabd', '#e49eb3'], deep: ['#d9a6d4', '#cf9dcb'], hi: '#fff1f5', fallen: ['#f6c2d1', '#fff0f4'] };
+    const WEEP_STRANDS = (() => {
+      const out = [];
+      for (let k = 0; k < 150; k++) {
+        const h1 = hash2D(k, 1, 601), h2 = hash2D(k, 2, 603), h3 = hash2D(k, 3, 607), inner = k >= 115;
+        const a = k * 2.39996 + h1 * 0.5;
+        const r0 = inner ? 2.6 + h2 * 2.6 : 5.0 + h2 * 3.8;                     // under the cap (radius ~9)
+        const Ls = 38.9 - 2.5 * (r0 / 9.2) * (r0 / 9.2);                         // leaves the cap's underside
+        const Le = inner ? 26 + h3 * 6 : 7 + (1 - r0 / 10.5) * 9 + h1 * 7;      // how low it hangs
+        out.push({ a, r0, Ls, Le, flare: 0.045 + h3 * 0.04 });
+      }
+      return out;
+    })();
+    function drawWeepingCherry(ctx, layer, s) {
+      const cx = s / 2 - 0.5, cy = s / 2 - 0.5, B = WEEP_BLOSSOM;
+      if (layer === 0) for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+        const d = Math.hypot(x - cx, y - cy), n = hash2D(x, y, 97);
+        if (d > 3.0 && d < 13 && n > 0.86 - (d > 8 ? 0.04 : 0)) px(ctx, x, y, n > 0.95 ? B.fallen[1] : B.fallen[0]);
+      }
+      const bark = (x, y, ox, oy) => cherryBark(layer, x, y, ox, oy);
+      // trunk: tall, a slight S, flared foot
+      if (layer <= 33) {
+        const r = layer < 1 ? 2.8 : (layer < 3 ? 2.2 : Math.max(1.15, 1.85 - layer * 0.02));
+        const tx = cx + 0.3 + Math.sin(layer * 0.11) * 0.7, ty = cy + Math.sin(layer * 0.07 + 1) * 0.4;
+        fillDisc(ctx, tx, ty, r, (x, y) => bark(x, y, tx, ty));
+      }
+      // limbs arch out from high on the trunk into the cap
+      for (const [L0, a, len] of [[24, 0.4, 5.5], [26, 2.5, 6.0], [28, 4.3, 5.2], [30, 1.5, 4.4], [31, 3.6, 4.0]]) {
+        if (layer < L0 || layer > L0 + 9) continue;
+        const t = (layer - L0) / 9, e = 1 - (1 - t) * (1 - t);
+        const tx = cx + 0.3 + Math.sin(L0 * 0.11) * 0.7, lx = tx + Math.cos(a) * len * e, ly = cy + Math.sin(a) * len * e;
+        fillDisc(ctx, lx, ly, 1.0 - t * 0.4, (x, y) => bark(x, y, lx, ly));
+      }
+      // the cap: a low dome of blossom the strands pour out of
+      for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+        const dx = x - cx, dy = y - cy, th = Math.atan2(dy, dx);
+        const u = Math.hypot(dx, dy) / (9.2 + 0.8 * Math.sin(3 * th + 0.5) + 0.5 * Math.sin(5 * th + 2.0));
+        if (u >= 1) continue;
+        const n1 = vnoise(x * 0.35, y * 0.35, 15);
+        const top = 44.4 - 4.2 * u * u + (n1 - 0.5) * 1.6, bot = 38.5 - 2.5 * u * u;
+        if (layer < bot || layer > top) continue;
+        const n = hash2D(x, y, layer * 5 + 19);
+        if (n < 0.08 || vnoise(x * 0.5, y * 0.5 + layer * 0.2, 19) < 0.16) continue;
+        const dl = (layer - (top + bot) / 2) / Math.max(0.5, (top - bot) / 2), side = (dx + dy) / 9;
+        let col = B.mid;
+        if (dl > 0.3 || side < -0.5) col = n > 0.4 ? B.light[0] : B.light[1];
+        else if (dl < -0.4 || side > 0.6) col = n > 0.5 ? B.shade[0] : B.shade[1];
+        if (dl > 0.6 && n > 0.75) col = B.hi;
+        px(ctx, x, y, col);
+      }
+      // the curtain: each strand a beaded run of blossom, one pixel (sometimes two) per slice, flaring out
+      for (const st of WEEP_STRANDS) {
+        if (layer > st.Ls || layer < st.Le) continue;
+        const drop = st.Ls - layer, r = st.r0 + drop * st.flare;
+        const x = cx + Math.cos(st.a) * r, y = cy + Math.sin(st.a) * r;
+        const n = hash2D(Math.round(x), Math.round(y), layer * 7 + st.a * 13);
+        if (n < 0.14) continue; // beaded, not a solid rope
+        const tip = layer - st.Le < 2, side = (Math.cos(st.a) + Math.sin(st.a)) * (r / 10);
+        let col = st.r0 < 5 ? (n > 0.5 ? B.shade[0] : B.shade[1]) : B.mid; // inner strands sit in shade
+        if (side < -0.35) col = n > 0.45 ? B.light[0] : B.light[1];
+        else if (side > 0.45) col = n > 0.5 ? B.shade[0] : B.deep[0];
+        if (tip) col = n > 0.5 ? B.light[1] : B.hi;
+        px(ctx, x, y, col);
+        if (n > 0.62 && !tip) px(ctx, x + (n > 0.81 ? 1 : 0), y + (n > 0.81 ? 0 : 1), col); // a little cluster
+      }
+    }
     function drawCherry(ctx, layer, s, V) {
       const cx = s / 2 - 0.5, cy = s / 2 - 0.5, B = V.blossom;
       // fallen petals around the foot
@@ -2780,15 +2857,7 @@
         const d = Math.hypot(x - cx - V.crownOff[0] * 0.6, y - cy - V.crownOff[1] * 0.6), n = hash2D(x, y, 91);
         if (d > 3.2 && d < 13 && n > 0.87 - (d < 9 ? 0.04 : 0)) px(ctx, x, y, n > 0.95 ? B.fallen[1] : B.fallen[0]);
       }
-      // bark: grey-brown with a sheen on the lit side and pale horizontal lenticel bands, so the limbs
-      // still read against the shade under the crown
-      const bark = (x, y, ox, oy) => {
-        const n = hash2D(x, y + layer * 3, 93), sd = (x - ox) + (y - oy);
-        if (layer % 3 === 1 && n > 0.45) return sd < 0 ? '#a3836f' : '#6e5246';
-        if (sd < -0.4) return n > 0.5 ? '#8b6b5d' : '#7d5e51';
-        if (sd > 0.6) return n > 0.5 ? '#3f2c26' : '#4a332c';
-        return n > 0.5 ? '#614539' : '#573d33';
-      };
+      const bark = (x, y, ox, oy) => cherryBark(layer, x, y, ox, oy);
       // trunk: a flared foot tapering to where it forks
       const tx0 = cx + 0.3, ty0 = cy;
       if (layer <= V.trunkTop) {
@@ -3088,7 +3157,33 @@
         glow: null,
         contactRadius: 0.68,
         variants: 3, // looks A, B, C (CHERRY_V), picked per tile in one mesh
+        petals: { y: 0.92, yRand: 0.2, r: 0.15, rRand: 0.52 }, // falling petals: start height and spread
         drawSlice(ctx, emCtx, layer, total, s, v = 0) { drawCherry(ctx, layer, s, CHERRY_V[v]); }
+      },
+      {
+        // a tall trunk, a small high cap of blossom and a curtain of strands hanging nearly to the
+        // ground (drawWeepingCherry); a tree people put somewhere on purpose, so its own palette slot
+        id: 'weeping',
+        name: '수양벚나무',
+        category: 'flora',
+        type: 'stack',
+        freePlace: false,
+        tree: true,
+        size: 30,
+        layers: 46,
+        layerStep: 0.04,
+        scale: 1.69, // same texel size as the other trees
+        aoBase: 0.82,
+        roughness: 0.86,
+        metalness: 0.0,
+        windStrength: 0.06,
+        explodeSliceFactor: 0.75,
+        explodeTier: 1,
+        canopySplit: 0.5,
+        glow: null,
+        contactRadius: 0.62,
+        petals: { y: 0.55, yRand: 0.9, r: 0.3, rRand: 0.3 }, // drift off the curtain
+        drawSlice(ctx, emCtx, layer, total, s) { drawWeepingCherry(ctx, layer, s); }
       },
       {
         id: 'path',
@@ -7226,6 +7321,7 @@
       const PETAL_COUNT = 26;
       // + cherry blossom petals drifting down from under each 벚나무 (same mesh: no extra draw call)
       const CHERRY_PETALS = 40, CHERRY_TREES_MAX = 10;
+      const PETAL_TREE_DEFS = ITEM_DEFS.filter((d) => d.petals);
       const petalInst = new THREE.InstancedMesh(
         new THREE.PlaneGeometry(0.085, 0.06),
         new THREE.MeshBasicMaterial({ color: '#ffffff', side: THREE.DoubleSide, transparent: true, opacity: 0.88 }),
@@ -10178,18 +10274,21 @@
         // cherry petals: each one loosens from under a crown, flutters down and lies on the grass a
         // moment before the next one goes. Pure functions of time (no state); the first few trees only.
         let petalN = PETAL_COUNT;
-        const cherries = intro.phase === 'done' && !isExploded ? (itemBuckets.cherry || []) : [];
+        const cherries = []; // every tree with def.petals (벚나무, 수양벚나무), the first few only
+        if (intro.phase === 'done' && !isExploded) for (const d of PETAL_TREE_DEFS) {
+          for (const tr of itemBuckets[d.id] || []) { if (cherries.length < CHERRY_TREES_MAX) cherries.push([tr, d.petals]); }
+        }
         if (cherries.length) {
-          const nowS = performance.now() * 0.001, nT = Math.min(cherries.length, CHERRY_TREES_MAX);
+          const nowS = performance.now() * 0.001, nT = cherries.length;
           for (let i = 0; i < CHERRY_PETALS; i++) {
-            const tr = cherries[i % nT];
+            const [tr, pd] = cherries[i % nT];
             if (nowS - tr.spawnT < 1.4) continue; // still dropping in
             const h1 = hash2D(i, 3, 211), h2 = hash2D(i, 5, 213), h3 = hash2D(i, 7, 217);
             const period = 6.5 + h1 * 4.0, ph = ((elapsed / period + h2) % 1 + 1) % 1;
             const cyc = Math.floor(elapsed / period + h2); // a new spot each fall
-            const a0 = hash2D(i, cyc, 219) * TAU, r0 = 0.15 + hash2D(i, cyc, 223) * 0.52;
+            const a0 = hash2D(i, cyc, 219) * TAU, r0 = pd.r + hash2D(i, cyc, 223) * pd.rRand;
             const fallT = 0.82, f = Math.min(ph / fallT, 1), drop = f * f * (3 - 2 * f) * 0.35 + f * 0.65;
-            const y0 = tr.wy + 0.92 + h3 * 0.2, yG = getContinuousTerrainHeight(tr.wx + Math.cos(a0) * r0, tr.wz + Math.sin(a0) * r0) + 0.012;
+            const y0 = tr.wy + pd.y + h3 * pd.yRand, yG = getContinuousTerrainHeight(tr.wx + Math.cos(a0) * r0, tr.wz + Math.sin(a0) * r0) + 0.012;
             const drift = f * (0.18 + h1 * 0.2), sway = Math.sin(elapsed * 2.3 + i * 1.7) * 0.07 * (1 - f * 0.6) * (f < 1 ? 1 : 0);
             animDummy.position.set(
               tr.wx + Math.cos(a0) * (r0 + drift) + sway,
