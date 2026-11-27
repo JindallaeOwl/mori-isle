@@ -1535,6 +1535,18 @@
         src.start(now + 0.04); src.stop(now + 0.05 + len);
       }
 
+      // undo (dir -1) / redo (+1): a soft wooden tick and a short slide down / up
+      playUndo(dir = -1) {
+        if (!this.ctx || !this.enabled) return;
+        const now = this.ctx.currentTime, o = this.ctx.createOscillator(), g = this.ctx.createGain();
+        o.type = 'triangle';
+        o.frequency.setValueAtTime(dir < 0 ? 620 : 440, now);
+        o.frequency.exponentialRampToValueAtTime(dir < 0 ? 410 : 660, now + 0.1);
+        g.gain.setValueAtTime(0.0001, now); g.gain.linearRampToValueAtTime(0.1, now + 0.008); g.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+        o.connect(g); this.out(g);
+        o.start(now); o.stop(now + 0.17);
+      }
+
       // terrain edit: a soft earthy thump (rising when raised, sinking when lowered) + crumbling soil
       playTerrain(dir = 1, pan = 0) {
         if (!this.ctx || !this.enabled) return;
@@ -7933,6 +7945,83 @@
         for (const f of isl.seeds) seedFlowers.push({ ...f, spawnT: -100 });
         if (rebuild) rebuildInstances();
       }
+      /* ---- UNDO / REDO (eraser step 3): Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y ---- */
+      // Every edit is one step: a click, or a whole stroke (paint, sow, erase drag), "모두 비우기",
+      // "처음 섬으로" and loading a slot. A step is the serialized island from before it (same as a
+      // save, a few KB). Going back only changes what differs: objects that come back drop in again,
+      // objects that go float away, the ground is rebuilt only when it changed. The result is saved
+      // like any other edit.
+      const UNDO_MAX = 60;
+      const undoStack = [], redoStack = [];
+      let editBefore = null; // the island when the current click / stroke began
+      function beginEdit() {
+        if (editBefore) commitEdit();
+        editBefore = serializeIsland();
+      }
+      function commitEdit() {
+        if (!editBefore) return;
+        const before = editBefore;
+        editBefore = null;
+        if (JSON.stringify(before) !== JSON.stringify(serializeIsland())) pushUndo(before);
+      }
+      function pushUndo(snap) {
+        undoStack.push(snap);
+        if (undoStack.length > UNDO_MAX) undoStack.shift();
+        redoStack.length = 0;
+      }
+      function undoRedo(dir) { // -1 undo, +1 redo
+        if (intro.phase !== 'done' || isPhotoMode || paintStroke || seedStroke || eraseStroke) return false;
+        commitEdit();
+        const from = dir < 0 ? undoStack : redoStack, to = dir < 0 ? redoStack : undoStack;
+        const isl = from.length ? parseIsland(from[from.length - 1]) : null;
+        if (!isl) { if (from.length) from.pop(); audio.playTerrainBlocked(0); return false; }
+        from.pop();
+        to.push(serializeIsland());
+        restoreIsland(isl);
+        audio.playUndo(dir);
+        return true;
+      }
+      function restoreIsland(isl) {
+        const now = performance.now() * 0.001;
+        // objects first: the ones that go float away from where they stood (on the old ground)
+        const diff = (oldList, newList, key, kind) => {
+          const pool = new Map();
+          for (const o of oldList) { const k = key(o); if (!pool.has(k)) pool.set(k, []); pool.get(k).push(o); }
+          const out = newList.map((n) => { const a = pool.get(key(n)); return a && a.length ? a.shift() : { ...n, spawnT: now }; });
+          pool.forEach((a) => a.forEach((o) => vanishItem(kind, o)));
+          return out;
+        };
+        const placed = diff([...placedItems.values()], isl.placed, (e) => `${e.id}|${e.gx}|${e.gz}|${e.rotation}`, 'placed');
+        const snap = diff(snapProps, isl.snap, (o) => `${o.id}|${o.wx}|${o.wz}|${o.rotation}`, 'snap');
+        const free = diff(freeProps, isl.free, (o) => `${o.id}|${o.wx}|${o.wz}|${o.rotation}|${o.scale}`, 'free');
+        const sPool = new Map();
+        for (const f of seedFlowers) if (!f.erased) sPool.set(`${f.wx}|${f.wz}`, f);
+        const seeds = isl.seeds.map((n) => {
+          const k = `${n.wx}|${n.wz}`, o = sPool.get(k);
+          if (o) { sPool.delete(k); return o; }
+          return { ...n, spawnT: now + Math.random() * 0.15 };
+        });
+        sPool.forEach((f) => { f.erased = true; seeds.push(f); }); // these sink back into the ground
+        for (const f of seedFlowers) if (f.erased && !seeds.includes(f)) seeds.push(f);
+        // the ground, only when it differs
+        const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+        if (!same(terrain.level, isl.level) || !same(terrain.mat, isl.mat)) {
+          terrain.level.set(isl.level);
+          terrain.mat.set(isl.mat);
+          terrain.painted = 0; terrain.water = 0;
+          for (const v of terrain.mat) { if (v === MAT_WATER) terrain.water++; else if (v !== MAT_GRASS) terrain.painted++; }
+          rebuildWaterField();
+          terrain.version++;
+          rebuildTerrainSurface();
+          markShadowsDirty(1.0);
+        }
+        placedItems.clear();
+        for (const e of placed) placedItems.set(`${e.gx},${e.gz}`, e);
+        snapProps.length = 0; snapProps.push(...snap);
+        freeProps.length = 0; freeProps.push(...free);
+        seedFlowers.length = 0; seedFlowers.push(...seeds);
+        rebuildInstances();
+      }
       function readSave(key) {
         const raw = storeGet(key);
         if (!raw) return null;
@@ -8840,9 +8929,11 @@
       });
       document.getElementById('pop-starter').addEventListener('click', () => {
         resetPopover.classList.remove('open');
+        if (intro.phase === 'done') { commitEdit(); pushUndo(serializeIsland()); } // Ctrl+Z brings the old island back
         resetIsland(); // the island falls away and assembles itself again (section 17)
       });
       document.getElementById('pop-clear').addEventListener('click', () => {
+        beginEdit();
         placedItems.forEach((e) => vanishItem('placed', e)); // everything floats away
         snapProps.forEach((o) => vanishItem('snap', o));
         freeProps.forEach((fp) => vanishItem('free', fp));
@@ -8851,6 +8942,7 @@
         freeProps.length = 0;
         snapProps.length = 0;
         rebuildInstances();
+        commitEdit();
         resetPopover.classList.remove('open');
         audio.playRemove();
       });
@@ -8963,6 +9055,7 @@
           const isl = readSave(SAVE_KEY_SLOT + i);
           if (!isl || intro.phase !== 'done') { audio.playTerrainBlocked(0); return; }
           closeSavePanel();
+          commitEdit(); pushUndo(serializeIsland()); // Ctrl+Z goes back to the island before loading
           resetIsland((rebuild) => applyIsland(isl, rebuild));
         });
         card.querySelector('.slot-del').addEventListener('click', (e) => {
@@ -9020,11 +9113,13 @@
             hasMovedSignificantly = false;
             container.classList.add('dragging');
           } else if (selectedTool === 'delete') { // the eraser picks on screen (no ground hit needed)
+            beginEdit();
             erasePointer = [e.clientX, e.clientY];
             beginEraseStroke(e.clientX, e.clientY);
           } else {
             const hit = getHitUnderClient(e.clientX, e.clientY);
             if (hit) {
+              beginEdit(); // one undo step per click or stroke (committed on release)
               placeAtHit(hit);
               hoveredHit = hit;
               updateHoverVisuals();
@@ -9066,13 +9161,15 @@
         updateHoverVisuals();
       });
 
-      window.addEventListener('pointercancel', () => { endPaintStroke(); endSeedStroke(); endEraseStroke(); }); // a cancelled touch still finishes the stroke
+      window.addEventListener('pointercancel', () => { endPaintStroke(); endSeedStroke(); endEraseStroke(); commitEdit(); }); // a cancelled touch still finishes the stroke
       window.addEventListener('pointerup', (e) => {
         if (paintStroke && e.button === 0) endPaintStroke();
-        if (e.button === 0) { endSeedStroke(); endEraseStroke(); }
+        if (e.button === 0) { endSeedStroke(); endEraseStroke(); commitEdit(); }
         if (isOrbiting && e.button === orbitButton) {
           if (orbitButton === 2 && !isPanning && !hasMovedSignificantly && performance.now() - dragStartTime < 350 && !isPhotoMode && !isExploded) {
-            removeAtClient(e.clientX, e.clientY); // a short right click erases the nearest object, with any tool
+            beginEdit(); // a short right click erases the nearest object, with any tool
+            removeAtClient(e.clientX, e.clientY);
+            commitEdit();
           }
           isOrbiting = false;
           isPanning = false;
@@ -9122,6 +9219,12 @@
       renderer.domElement.addEventListener('touchend', () => { prevPinchDist = null; prevTwoFingerX = null; prevTwoFingerY = null; });
 
       window.addEventListener('keydown', (e) => {
+        // undo / redo (by key position, so a Korean keyboard layout works too)
+        if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.code === 'KeyZ' || e.code === 'KeyY')) {
+          e.preventDefault();
+          undoRedo(e.code === 'KeyY' || e.shiftKey ? 1 : -1);
+          return;
+        }
         if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
           targetOrbitAngle += (e.key === 'ArrowLeft' ? 1 : -1) * 0.12; e.preventDefault(); return;
         }
@@ -10086,7 +10189,9 @@
           eraseGhost: () => !!eraseGhost && eraseGhost.visible,
           vanishing: () => ({ list: vanishing.length, cabins: activeCabins.filter((c) => c.goneAt != null).length,
             inst: Object.keys(instancedById).reduce((n, k) => { const a = instancedById[k].geometry.attributes.aVanish; if (!a) return n; for (let i = 0; i < instancedById[k].count; i++) if (a.array[i] < 1e8) n++; return n; }, 0) }),
-          vanishHold: (on) => { vanishHold = !!on; },          islandList: () => JSON.stringify(serializeIsland()),
+          vanishHold: (on) => { vanishHold = !!on; },          undoDepth: () => [undoStack.length, redoStack.length],
+          undo: (dir = -1) => undoRedo(dir),
+          islandList: () => JSON.stringify(serializeIsland()),
           grassTufts: () => Array.from({ length: grassClutterInst.count }, (_, i) => Array.from(grassClutterInst.instanceMatrix.array.subarray(i * 16, i * 16 + 16), (v) => Math.round(v * 1e5) / 1e5)),
           seedFlowers: () => ({ now: performance.now() * 0.001, list: seedFlowers.filter((f) => !f.erased).map((f) => [f.wx, f.wz, f.tint, f.spawnT, f.goneAt == null ? 0 : 1]) }),
           seedSlope: (x, z) => seedSlope(x, z),

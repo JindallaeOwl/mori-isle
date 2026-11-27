@@ -69,6 +69,7 @@ node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/terrain-waterfall.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/seeds.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/grass.mjs
+node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/eraser.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/save.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1&intro=1" tools/tests/intro.mjs
 $env:AUTOPLAY='0'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1&intro=1" tools/tests/sound-unlock.mjs; $env:AUTOPLAY=$null
@@ -85,12 +86,12 @@ $env:SHOT='night'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#d
 
 ## 남은 일
 - **다음 작업 (2026-11-27 세션 끝에 정리):** 아래 "오브젝트 늘리기"의 남은 카테고리(나무·식물 / 길·담 / 자연 소품) 중 하나. 추천은 나무·식물(지금 나무가 소나무·참나무 둘뿐이라 분위기가 가장 크게 바뀜). 시작할 때 사용자에게 어떤 카테고리로 할지, 그 안의 물건과 생김새 방향을 먼저 묻는다. 직전에 끝난 일: 저장 창 카드 모션(검은 상자 제거, 책에서 호를 그리며 나오고 들어감, 사용자 확인 "좋네요"), 오두막 설치 끊김 수정(`96a4e9b`, 사용자 확인 "좋네요").
-- **지우개 개편 (사용자 결정 2026-11-27, 아직 시작 안 함):** 지금은 커서가 칸 하나만 빨갛게 칠하고, 클릭하면 정해진 순서(¼칸 소품 → 반경 0.55 자유 배치 → 반경 0.3 씨앗 꽃 → 칸 오브젝트, `removeAtHit`)로 하나만 지워서 무엇이 지워질지 알 수 없다. 정한 것:
-  - 대상: 종류와 상관없이 마우스에 가장 가까운 물건 하나. 칸 표시는 없애고 그 물건을 **붉게 물들이고 살짝 흔든다**(올렸을 때만 그 물건을 붉은 재질로 한 번 더 그림, draw call +1). 윤곽선은 명세서의 1픽셀 외곽선을 만들 때 다시 본다.
-  - 양: 클릭은 하나, 누른 채 끌면 지나가는 물건을 차례로 지움(칠하기와 같은 손맛).
-  - 연출: 설치 낙하 셰이더를 거꾸로 돌려 층층이 위로 흩어지며 사라짐(draw call 추가 없음, 약 0.5초 목록에 남았다가 빠짐, 그동안 그림자 갱신). 오두막은 합친 메쉬라 따로 처리해야 한다.
-  - 되돌리기: **모든 편집**(설치·지우기·땅 올리기·내리기·칠하기·물·씨앗)에 Ctrl+Z, 다시 하기 Ctrl+Shift+Z. 끌어서 한 번에 한 것은 한 묶음. 자동 저장과 맞물림.
-  - 커밋 순서 제안: ① 가장 가까운 물건 고르기 + 강조 + 끌어 지우기 → ② 흩어지는 연출 → ③ 되돌리기·다시 하기. 단계마다 사용자 확인.
+- **지우개 개편 (사용자 결정 2026-11-27, 구현 끝 2026-11-28, 사용자 확인 대기):** 예전에는 커서가 칸 하나만 칠하고 정해진 순서로 하나만 지워 무엇이 지워질지 몰랐다. 사용자 결정: 마우스에 가장 가까운 물건, 강조(윤곽선은 명세서 1픽셀 외곽선 때 다시 봄), 클릭 하나·끌면 여러 개, 위로 흩어지며 사라짐, 모든 편집 되돌리기. 세 단계를 끊지 않고 한 번에 하되 커밋은 단계마다(사용자 요청).
+  - **① 고르기·강조·끌어 지우기 (`ERASER` 블록, `removeAtHit` 대체):** `pickEraseTarget(cx, cy)`가 물건마다 화면에서 발밑→꼭대기 선분(`itemHeight`: 지오메트리 bounding box, 오두막 1.5)과 반지름(오두막 0.52, 돌길 0.42, 울타리 0.12, 나머지 `gridSolidR`·`contactRadius`·`solidRadius`)으로 거리를 재서 `ERASE_PICK_PX`(14 CSS px) 안의 가장 가까운 것을 고른다. 여럿 위에 있으면 작은 것. 땅 hit가 없어도 된다(하늘 앞 나무 꼭대기). 씨앗 꽃은 고른 꽃 둘레 `SEED_PATCH_R` 0.24의 한 무리. 강조는 아이템 메쉬의 인스턴스 속성 `aHot`(셰이더에서 붉게 + 약한 발광 맥동 + 위쪽이 살짝 떨림, draw call +0), 오두막·돌길·울타리는 그 유령 메쉬를 붉게(1.04배, 떨림, +1), 씨앗 무리는 붉은 고리. `refreshEraseTarget`는 pointermove와 매 프레임(지우개일 때만, 카메라가 움직여도 맞게). 왼쪽 누르기 = `beginEraseStroke`, 끌면 `eraseStrokeTo`(45ms마다 하나), 오른쪽 짧은 클릭은 어떤 도구에서든 `removeAtClient`. 지우개일 때 격자 표시 없음. 인스턴스 순서→물건은 `mesh.userData.refs`.
+  - **② 흩어지며 사라짐:** 지운 물건은 목록에서 바로 빠지고(규칙·풀·저장이 즉시 잊음) `vanishing`에 `VANISH_T`(0.64초) 동안 남는다(`vanishItem`, `expireVanish`, `clearVanishing`은 `startAssembly`에서). 아이템 메쉬는 `fillItemMeshes`(rebuildInstances에서 분리)가 남은 것을 같이 채우고 인스턴스 속성 `aVanish`(시작 시각, 1e9 = 안 함)를 넣는다. 셰이더(`dropVertexGLSL` 끝, 그림자 깊이 재질도 같음)는 낙하를 거꾸로: 꼭대기 층부터(`VANISH_STRIDE`, 전체 `VANISH_SPAN` 0.3초 안) 돌며 옆으로 흩어지고 줄어들며 0.75 올라간다(`VANISH_RISE` 0.26초). 오두막은 합치지 않은 프리팹을 `activeCabins`에 `goneAt`으로 넣고 animate에서 지붕부터 부품을 같은 식으로 띄운다(굴뚝 연기 끔). 돌길·울타리는 먼지만. draw call +0(오두막만 0.64초 동안 부품 수만큼). 소리 `playRemove(pan)`에 위로 날아가는 바람 소리를 더함. "모두 비우기"도 전부 흩어지며 사라짐(먼지는 처음 40개만). **아이템 지오메트리에는 `aVanish`·`aHot`이 꼭 있어야 한다**(`addEraseAttrs`; 없으면 기본값 0이라 전부 사라진 것으로 그려짐).
+  - **③ 되돌리기 (`UNDO / REDO` 블록, SAVE 블록 안):** Ctrl+Z, Ctrl+Shift+Z·Ctrl+Y(`e.code`로 봐서 한글 자판에서도 됨). 한 단계 = 클릭 하나 또는 끌기 한 번(`beginEdit`은 pointerdown, `commitEdit`은 pointerup·pointercancel, 바뀐 게 없으면 안 쌓임), "모두 비우기", "처음 섬으로", 칸 불러오기(이 둘은 누를 때 `pushUndo`). 단계는 `serializeIsland()`(저장과 같은 모양) 최대 `UNDO_MAX` 60. `restoreIsland`는 다른 것만 바꾼다: 돌아오는 물건은 다시 떨어지고, 없어지는 물건은 흩어지며, 땅은 달라졌을 때만 다시 만든다. 결과는 다른 편집처럼 자동 저장. 조립 중·감상 모드·끄는 중에는 안 됨. 터치용 버튼은 없다(필요하면 나무 토큰으로 추가).
+  - 테스트 `tools/tests/eraser.mjs`(캐노피를 가리켜 그 나무, 붉은 강조, 흩어짐 뒤 버퍼에서 빠짐, 오두막 유령·부품, 끌기 = 한 단계, Ctrl+Z/Shift+Z/Y, 다 되돌리면 섬 메쉬가 처음과 정확히 같음, 땅·칠하기 되돌리기, 새 편집이 다시 하기를 지움, 자동 저장). 훅 `erasePick`, `eraseTarget`, `hot`, `eraseGhost`, `vanishing`, `vanishHold`(헤드리스는 프레임이 몇 초라 사라짐을 멈춰 두고 봄), `undoDepth`, `undo(dir)`, `islandList`.
+  - 남은 확인 (사용자): 강조 색·떨림 정도, 흩어지는 연출 속도·높이, 오두막 부품이 흩어지는 모습, 지우기 소리, 끌어 지우기 손맛, 되돌리기 소리. 헤드리스는 생김새를 보지 않았다.
 - **지형 편집 (사용자 요청·순서 합의 2026-11-26).** 1·2단계 끝(2단계 사용자 확인 "좋네요" 2026-11-26), 3단계 끝(사용자 확인 대기), 4단계 물 칠하기 끝(④-1), 폭포 끝(④-2a·b·c + 윗부분 수정 `512ee6f` + 잔물결 선, 2026-11-27, 잔물결은 사용자 확인 "좋네요"), 5단계 저장 끝(⑤-1 자동 저장 + ⑤-2 수동 3칸, 2026-11-27, 사용자 확인 대기). 지형 편집 5단계 전부 끝.
   - **전체 순서:** ① 데이터 구조 전환(겉모습 변화 없음) → ② 높낮이(칸 단위 한 단씩 올리고 내리기, 지층 벽 자동) → ③ 재질 칠하기(잔디·모래·흙·돌·꽃밭, ¼칸 붓, Soup 텍스처 묶음에 모래 추가) → ④ 물 채우기(파낸 칸에 물, 둥글게 다듬은 연못) → ⑤ 저장(브라우저 저장소, 몇 KB). 단계마다 따로 커밋(그 단계만 되돌릴 수 있게)하고 사용자 확인받기(스크린샷 없이 사용자가 직접 확인).
   - **정한 방식 (사용자 결정 2026-11-26):** 지형 함수의 이름과 호출 방식은 유지하고 안에서 데이터를 읽는다. 데이터의 처음 값은 지금 규칙의 결과로 채운다. **연못은 4단계 전까지 기존 수식 `getPondSDF`(원 4개)를 그대로 쓴다**(12×12 칸으로는 지금의 둥근 모양을 똑같이 못 만듦). 연못을 칸 데이터로 바꾸는 것은 4단계.
