@@ -133,7 +133,7 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
   ok('painting to the rim makes an island-edge fall', fe.length === 1 && fe[0].sx === 1 && fe[0].bot === null && (await mat(5.875, Z)) === 4, JSON.stringify(fe));
   await wait(800);
   const fsE = await J(`${M}.fallSheet()`);
-  ok('edge fall: strip, mist and babble; ripple rings only for the falls into pools', fsE.visible && fsE.spray > 0 && fsE.sound > 0.02 && fsE.ripples === Math.min(8, fsE.feet - 1), JSON.stringify(fsE));
+  ok('edge fall: strip, mist and babble; ripple rings only for the falls into pools', fsE.visible && fsE.spray > 0 && fsE.sound > 0.02 && fsE.lines >= 1 && fsE.ripples === Math.min(8, fsE.lines), JSON.stringify(fsE));
   ok('the rim wall dips where it spills (island meshes changed)', !same(dE, await J(`${M}.islandDigest()`)));
   await tool('paint_grass');
   await drag([5.95, Z], [4.625, Z], 8);
