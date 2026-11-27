@@ -203,7 +203,8 @@
       background: none; box-shadow: none; backdrop-filter: none;
       opacity: 1; transform: none; transition: none;
     }
-    #save-panel:not(.open) .save-card { visibility: hidden; transition: visibility 0s 0.36s; }
+    #save-panel:not(.open):not(.closing) .save-card { visibility: hidden; }
+    #save-panel .save-card { will-change: transform; } /* same raster before/after the motion: no shimmer when it ends */
     .save-card {
       width: 132px;
       padding: 7px 7px 4px;
@@ -8642,44 +8643,48 @@
         savePanel.classList.add('open'); btnSave.classList.add('on');
         resetPopover.classList.remove('open'); toggleHelp(false);
       });
-      // Card motion. One continuous curve per property, no keyframe seams and no squashing:
-      // x and y travel on different curves (y settles first) so each card swings out on an arc from
-      // the book, while scale and tilt ride a lightly damped spring (about 3% overshoot, one settle).
-      // The three transform parts are separate animations stacked with composite 'add', in the order
-      // translateX → translateY → scale·rotate, so the scale never shrinks the travel.
-      const springEase = (() => {
-        const z = 0.74, w = 6.2 / z, wd = w * Math.sqrt(1 - z * z), pts = [];
-        for (let i = 0; i <= 40; i++) {
-          const t = i / 40, x = i === 40 ? 1 : 1 - Math.exp(-z * w * t) * (Math.cos(wd * t) + (z * w / wd) * Math.sin(wd * t));
-          pts.push(x.toFixed(4));
-        }
-        try { return CSS.supports('transition-timing-function', `linear(${pts.join(',')})`) ? `linear(${pts.join(',')})` : 'cubic-bezier(0.2, 1.1, 0.4, 1)'; } catch (e) { return 'cubic-bezier(0.2, 1.1, 0.4, 1)'; }
-      })();
+      // Card motion. One continuous curve per property, no keyframe seams, no squashing and no
+      // overshoot (a settle that wobbles reads as trembling): x and y travel on different curves so
+      // each card swings on an arc between its place and the book. The three transform parts are
+      // separate animations stacked with composite 'add', in the order translateX → translateY →
+      // scale·rotate, so the scale never shrinks the travel. Closing is the same arc played inwards
+      // (y leaves last, so the card lifts into the book); the cards stay visible until it ends.
       const reduceMotion = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
       function animateSaveCards(open) {
         const b = btnSave.getBoundingClientRect(), p = savePanel.getBoundingClientRect();
         const bx = b.left + b.width / 2, by = b.top + b.height / 2;
         const n = slotCards.length;
+        savePanel.classList.toggle('closing', !open);
+        const ends = [];
         slotCards.forEach((card, k) => {
           card.getAnimations().forEach((a) => a.cancel());
-          if (reduceMotion) { card.animate([{ opacity: open ? 0 : 1 }, { opacity: open ? 1 : 0 }], { duration: 160, fill: open ? 'backwards' : 'forwards' }); return; }
+          if (reduceMotion) { ends.push(card.animate([{ opacity: open ? 0 : 1 }, { opacity: open ? 1 : 0 }], { duration: 160, fill: open ? 'backwards' : 'forwards' })); return; }
           const tilt = parseFloat(card.style.getPropertyValue('--tilt')) || 0;
           const dx = bx - (p.left + card.offsetLeft + card.offsetWidth / 2);
           const dy = by - (p.top + card.offsetTop + card.offsetHeight * 0.35);
           const near = n - 1 - k; // the right-hand card sits under the book
+          const at = `scale(0.42) rotate(${tilt + 7}deg)`, rest = `scale(1) rotate(${tilt}deg)`;
           if (open) {
-            const delay = near * 45;
-            const o = { delay, fill: 'backwards' };
-            card.animate([{ transform: `translateX(${dx}px)` }, { transform: 'translateX(0)' }], { ...o, duration: 520, easing: 'cubic-bezier(0.32, 0.72, 0.24, 1)' });
-            card.animate([{ transform: `translateY(${dy}px)` }, { transform: 'translateY(0)' }], { ...o, duration: 420, easing: 'cubic-bezier(0.16, 0.9, 0.3, 1)', composite: 'add' });
-            card.animate([{ transform: `scale(0.42) rotate(${tilt + 7}deg)` }, { transform: `scale(1) rotate(${tilt}deg)` }], { ...o, duration: 560, easing: springEase, composite: 'add' });
+            const o = { delay: near * 45, fill: 'backwards' };
+            // all three parts share one duration and differ only in easing: if one ends earlier the
+            // stack loses (or doubles) the tilt for a few frames, which shows as a twitch
+            const d = { ...o, duration: 560 };
+            card.animate([{ transform: `translateX(${dx}px)` }, { transform: 'translateX(0)' }], { ...d, easing: 'cubic-bezier(0.32, 0.72, 0.24, 1)' });
+            card.animate([{ transform: `translateY(${dy}px)` }, { transform: 'translateY(0)' }], { ...d, easing: 'cubic-bezier(0.1, 0.9, 0.2, 1)', composite: 'add' });
+            ends.push(card.animate([{ transform: at }, { transform: rest }], { ...d, easing: 'cubic-bezier(0.22, 1, 0.36, 1)', composite: 'add' }));
             card.animate([{ opacity: 0 }, { opacity: 1 }], { ...o, duration: 140, easing: 'ease-out' });
           } else {
-            const o = { delay: k * 30, fill: 'forwards', duration: 230, easing: 'cubic-bezier(0.55, 0, 0.8, 0.35)' };
-            card.animate([{ transform: `rotate(${tilt}deg)` }, { transform: `translate(${dx}px, ${dy}px) scale(0.45) rotate(${tilt + 6}deg)` }], o);
-            card.animate([{ opacity: 1, offset: 0 }, { opacity: 1, offset: 0.45 }, { opacity: 0 }], o);
+            const o = { delay: k * 35, fill: 'forwards', duration: 260 };
+            card.animate([{ transform: 'translateX(0)' }, { transform: `translateX(${dx}px)` }], { ...o, easing: 'cubic-bezier(0.55, 0.05, 0.7, 0.75)' });
+            card.animate([{ transform: 'translateY(0)' }, { transform: `translateY(${dy}px)` }], { ...o, easing: 'cubic-bezier(0.75, 0, 0.85, 0.25)', composite: 'add' });
+            ends.push(card.animate([{ transform: rest }, { transform: at }], { ...o, easing: 'cubic-bezier(0.5, 0, 0.75, 0.2)', composite: 'add' }));
+            card.animate([{ opacity: 1, offset: 0 }, { opacity: 1, offset: 0.6 }, { opacity: 0 }], { ...o, easing: 'linear' });
+            // finished filling animations on one property get auto-removed by the browser, which
+            // would drop the stacked translate parts; keep them until the next open cancels them
+            card.getAnimations().forEach((a) => a.persist && a.persist());
           }
         });
+        if (!open) Promise.all(ends.map((a) => a.finished)).then(() => savePanel.classList.remove('closing'), () => {});
       }
       // opening and closing from anywhere (outside click, help, reset, photo mode, loading a slot)
       new MutationObserver(() => {
