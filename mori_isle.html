@@ -2898,17 +2898,19 @@
         }
       },
       {
-        // short dark trunk splitting into three limbs, a wide soft dome of blossom, petals on the grass
+        // short dark trunk splitting into three limbs, each limb carrying its own cloud of blossom
+        // (big and small, a little apart, a small one on top), branches showing in the gaps
         id: 'cherry',
         name: '벚나무',
         category: 'flora',
         type: 'stack',
         freePlace: false,
         tree: true,
-        size: 22,
+        size: 26,
         layers: 32,
         layerStep: 0.05,
-        scale: 1.24,
+        scale: 1.47, // same texel size as the oak (1.24 / 22), just more of them
+        aoBase: 0.8, // the stack's darkening toward the ground, kept light: blossom should look airy
         roughness: 0.86,
         metalness: 0.0,
         windStrength: 0.07,
@@ -2916,13 +2918,13 @@
         explodeTier: 1,
         canopySplit: 0.4,
         glow: null,
-        contactRadius: 0.52,
+        contactRadius: 0.6,
         drawSlice(ctx, emCtx, layer, total, s) {
           const cx = s / 2 - 0.5, cy = s / 2 - 0.5;
           // fallen petals around the foot
           if (layer === 0) for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
             const d = Math.hypot(x - cx, y - cy), n = hash2D(x, y, 91);
-            if (d > 3.2 && d < 9.6 && n > 0.86 - (d < 7 ? 0.04 : 0)) px(ctx, x, y, n > 0.95 ? '#fff0f4' : '#f6b9cc');
+            if (d > 3.2 && d < 11.5 && n > 0.87 - (d < 8 ? 0.04 : 0)) px(ctx, x, y, n > 0.95 ? '#fff0f4' : '#f6b9cc');
           }
           // trunk: dark cherry bark with pale horizontal lenticel bands
           const bark = (x, y, ox, oy) => {
@@ -2934,37 +2936,38 @@
             const r = layer < 2 ? 2.6 : (layer < 5 ? 1.95 : 1.6), tx = cx + layer * 0.04, ty = cy;
             fillDisc(ctx, tx, ty, r, (x, y) => bark(x, y, tx, ty));
           }
-          // three limbs spread outward from layer 9 into the crown
-          if (layer >= 9 && layer < 22) {
-            const k = layer - 9;
-            for (const [ax, ay] of [[1, -0.35], [-0.8, -0.7], [-0.2, 1]]) {
-              const lx = cx + ax * k * 0.42, ly = cy + ay * k * 0.42;
-              fillDisc(ctx, lx, ly, k < 6 ? 1.05 : 0.75, (x, y) => bark(x, y, lx, ly));
-            }
-          }
-          // crown: broad clumps, pink with pale tops, deeper rose in the shade, a few fresh leaves underneath
+          // crown: three clouds set a little apart around the trunk (one big, two middling) and a small
+          // one riding on top, so there are gaps between them where the limbs show
           const lobes = [
-            { ox: 0.0, oy: 0.0, lc: 25, hr: 6.5, R: 7.0 },
-            { ox: -4.0, oy: -1.5, lc: 21, hr: 4.8, R: 4.9 },
-            { ox: 4.1, oy: -0.6, lc: 22, hr: 4.8, R: 5.0 },
-            { ox: 0.5, oy: 4.0, lc: 22, hr: 4.6, R: 4.7 },
-            { ox: -2.6, oy: 3.0, lc: 19, hr: 3.6, R: 3.9 },
-            { ox: 2.6, oy: -3.6, lc: 20, hr: 3.8, R: 4.1 },
-            { ox: -1.0, oy: -3.8, lc: 27, hr: 3.6, R: 3.5 }
+            { ox: -5.0, oy: -1.4, lc: 22, hr: 5.6, R: 5.2 },
+            { ox: 4.6, oy: -2.6, lc: 20, hr: 4.6, R: 4.5 },
+            { ox: 0.6, oy: 5.0, lc: 23, hr: 4.8, R: 4.4 },
+            { ox: 0.2, oy: -0.4, lc: 28, hr: 3.4, R: 3.3 }
           ];
+          // limbs: from the top of the trunk (layer 9) up and out to the middle of each cloud
+          for (const l of lobes) {
+            const top = l.lc - 1;
+            if (layer < 9 || layer > top) continue;
+            const t = (layer - 9) / (top - 9), e = Math.sqrt(t); // spreads early, then climbs
+            const lx = cx + l.ox * e * 0.85, ly = cy + l.oy * e * 0.85;
+            fillDisc(ctx, lx, ly, t < 0.35 ? 1.1 : (t < 0.75 ? 0.8 : 0.6), (x, y) => bark(x, y, lx, ly));
+          }
+          // blossom: pale petals in the light, coral pink in the shade, soft lavender only on the very
+          // underside (no grey-purple darks: it should read light and airy)
           for (const l of lobes) {
             const dl = (layer - l.lc) / l.hr;
             if (Math.abs(dl) >= 1) continue;
             const r = l.R * Math.sqrt(1 - dl * dl), lx = cx + l.ox, ly = cy + l.oy;
             for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
-              const dx = x - lx, dy = y - ly;
-              if (dx * dx + dy * dy > r * r) continue;
+              const dx = x - lx, dy = y - ly, d2 = dx * dx + dy * dy;
+              if (d2 > r * r) continue;
               const n = hash2D(x, y, layer * 5 + 11);
-              let col = '#eea2bb';
-              if (dl > 0.3 || dx + dy < -2.0) col = n > 0.4 ? '#fac4d4' : '#f5b2c7';
-              else if (dl < -0.4 || dx + dy > 2.4) col = n > 0.5 ? '#cf7e9b' : '#c06f8e';
-              if (dl > 0.6 && n > 0.78) col = '#fff0f4';
-              if (dl < -0.55 && n > 0.82) col = '#7fa65a';
+              if (d2 > (r - 1.2) * (r - 1.2) && n < 0.32) continue; // ragged, frilly edge
+              let col = '#f4adc3';
+              if (dl > 0.3 || dx + dy < -2.0) col = n > 0.4 ? '#fccbd9' : '#f8bccf';
+              else if (dl < -0.35 || dx + dy > 2.4) col = n > 0.5 ? '#ef9fb0' : '#e8939f';
+              if (dl < -0.62) col = n > 0.5 ? '#d9a5d6' : '#cf9ccf';
+              if (dl > 0.6 && n > 0.76) col = '#fff2f6';
               px(ctx, x, y, col);
             }
           }
@@ -4515,7 +4518,8 @@
         const u0 = i / layers;
         const u1 = (i + 1) / layers;
         const hNorm = layers > 1 ? i / (layers - 1) : 0;
-        const ao = 0.62 + 0.42 * Math.pow(hNorm, 0.7);
+        // def.aoBase: a lighter foot for airy sprites (blossom); the default keeps the old numbers exactly
+        const ao = def.aoBase != null ? def.aoBase + (1.04 - def.aoBase) * Math.pow(hNorm, 0.7) : 0.62 + 0.42 * Math.pow(hNorm, 0.7);
 
         const vOffset = i * 4;
         positions.push(-half, y, -half, half, y, -half, half, y, half, -half, y, half);
@@ -10025,7 +10029,7 @@
             const h1 = hash2D(i, 3, 211), h2 = hash2D(i, 5, 213), h3 = hash2D(i, 7, 217);
             const period = 6.5 + h1 * 4.0, ph = ((elapsed / period + h2) % 1 + 1) % 1;
             const cyc = Math.floor(elapsed / period + h2); // a new spot each fall
-            const a0 = hash2D(i, cyc, 219) * TAU, r0 = 0.12 + hash2D(i, cyc, 223) * 0.42;
+            const a0 = hash2D(i, cyc, 219) * TAU, r0 = 0.15 + hash2D(i, cyc, 223) * 0.5;
             const fallT = 0.82, f = Math.min(ph / fallT, 1), drop = f * f * (3 - 2 * f) * 0.35 + f * 0.65;
             const y0 = tr.wy + 0.86 + h3 * 0.3, yG = getContinuousTerrainHeight(tr.wx + Math.cos(a0) * r0, tr.wz + Math.sin(a0) * r0) + 0.012;
             const drift = f * (0.18 + h1 * 0.2), sway = Math.sin(elapsed * 2.3 + i * 1.7) * 0.07 * (1 - f * 0.6) * (f < 1 ? 1 : 0);
