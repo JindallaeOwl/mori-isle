@@ -2722,7 +2722,7 @@
         blossom: CHERRY_BLOSSOM_A,
         lean: [0.04, 0], crownOff: [0, 0],
         R: 12.0, bumps: [[3, 0.9, 0.7], [5, 0.6, 2.1], [2, 0.4, 4.0]],
-        top0: 38.2, topK: 5.5, bot0: 30.5, botK: 4.2, gap: 1.0,
+        top0: 38.2, topK: 5.5, bot0: 29.5, botK: 10.0, gap: 1.0,
         trunkTop: 7,
         limbs: [
           { r0: 1.6, r1: 0.7, n: [[5, 0.4, 2.75], [9, 2.7, 2.8], [14, 4.9, 3.05], [20, 6.4, 2.7], [28, 7.4, 2.85]] },   // low, long
@@ -2734,6 +2734,42 @@
           { r0: 0.6, r1: 0.55, n: [[24, 4.6, 0.15], [30, 6.4, 0.7]] },
           { r0: 0.6, r1: 0.55, n: [[24, 2.1, 3.95], [31, 4.2, 3.4]] },
           { r0: 0.6, r1: 0.55, n: [[20, 5.6, 2.2], [26, 7.3, 2.45]] }
+        ]
+      },
+      { // B: a big Yoshino-like dome (왕벚나무): wider and higher, blossom a step paler than A (still pink after the bloom: pure white read as snow),
+        // more see-through so its three crooked main limbs read inside, the trunk leaning a little
+        blossom: { light: ['#fcdce6', '#f8cfdc'], mid: '#f3c0d0', shade: ['#eaaebf', '#e2a2b5'], deep: ['#d6aed9', '#cca4d0'], hi: '#fff1f5', fallen: ['#f6c9d6', '#fff0f4'] },
+        lean: [-0.05, 0.03], crownOff: [0, 0],
+        R: 12.8, bumps: [[4, 0.8, 1.3], [3, 0.7, 4.2], [6, 0.4, 0.4]],
+        top0: 38.8, topK: 5.0, bot0: 29.0, botK: 10.5, gap: 1.35,
+        trunkTop: 8,
+        limbs: [
+          { r0: 1.55, r1: 0.65, n: [[6, 0.4, 2.3], [10, 2.4, 2.25], [15, 4.6, 2.6], [22, 6.6, 2.35], [30, 8.0, 2.5]] },
+          { r0: 1.4, r1: 0.6, n: [[7, 0.4, 0.5], [12, 2.6, 0.45], [18, 4.6, 0.1], [25, 6.4, 0.4], [32, 7.4, 0.25]] },
+          { r0: 1.25, r1: 0.6, n: [[8, 0.3, 4.5], [13, 2.0, 4.6], [19, 3.8, 4.25], [27, 5.4, 4.6], [33, 6.0, 4.4]] },
+          { r0: 0.65, r1: 0.55, n: [[15, 4.6, 2.6], [23, 7.6, 3.2]] },
+          { r0: 0.65, r1: 0.55, n: [[18, 4.6, 0.1], [26, 7.8, -0.5]] },
+          { r0: 0.65, r1: 0.55, n: [[19, 3.8, 4.25], [27, 6.8, 3.7]] },
+          { r0: 0.65, r1: 0.55, n: [[12, 2.6, 0.45], [21, 4.8, 1.3]] },
+          { r0: 0.65, r1: 0.55, n: [[22, 6.6, 2.35], [29, 9.0, 1.9]] }
+        ]
+      },
+      { // C: a leaning tree, deeper pink: the trunk tips one way and the crown hangs out over it,
+        // one long limb reaching that way, a short one holding the back
+        blossom: { light: ['#f9b8cb', '#f5aac0'], mid: '#ef9bb4', shade: ['#e889a0', '#df7d96'], deep: ['#cf98ce', '#c58fc6'], hi: '#ffe8ef', fallen: ['#f2a3bb', '#fbd2de'] },
+        lean: [0.12, -0.03], crownOff: [1.6, -0.6],
+        R: 10.8, bumps: [[2, 0.9, 1.0], [5, 0.6, 3.0], [3, 0.5, 5.0]],
+        top0: 37.6, topK: 5.8, bot0: 29.5, botK: 9.5, gap: 1.0,
+        trunkTop: 7,
+        limbs: [
+          { r0: 1.6, r1: 0.7, n: [[5, 0.4, 0.1], [10, 2.8, -0.1], [15, 5.0, 0.2], [21, 6.8, -0.15], [28, 8.2, 0.05]] },  // long, leaning out
+          { r0: 1.3, r1: 0.6, n: [[6, 0.4, 2.6], [11, 1.8, 2.7], [18, 3.0, 2.3], [26, 3.8, 2.7], [32, 4.0, 2.5]] },     // short, back
+          { r0: 1.0, r1: 0.55, n: [[8, 0.3, 1.2], [16, 1.6, 1.4], [24, 2.6, 1.0], [31, 3.2, 1.5]] },                    // leader
+          { r0: 0.8, r1: 0.55, n: [[15, 5.0, 0.2], [21, 5.6, -1.0], [28, 6.4, -1.5]] },
+          { r0: 0.8, r1: 0.55, n: [[10, 2.8, -0.1], [17, 4.4, 1.0], [25, 5.6, 1.6]] },
+          { r0: 0.6, r1: 0.55, n: [[21, 6.8, -0.15], [27, 9.6, 0.35]] },
+          { r0: 0.6, r1: 0.55, n: [[18, 3.0, 2.3], [25, 5.0, 3.0]] },
+          { r0: 0.6, r1: 0.55, n: [[24, 2.6, 1.0], [30, 4.6, 0.4]] }
         ]
       }
     ];
@@ -2774,8 +2810,30 @@
           fillDisc(ctx, lx, ly, lb.r0 + (lb.r1 - lb.r0) * (L - La) / (Lb - La), (x, y) => bark(x, y, lx, ly));
         }
       }
-      // crown: one wide, shallow umbrella. The rim billows (low-frequency bumps around it), the top is
-      // a lumpy dome, the underside arches up toward the trunk so the fork and limbs show from the side
+      // little sprays of blossom hanging along the main limbs below the crown: the limbs read as
+      // growing into the bloom instead of holding it up (two knots on each of the first three limbs)
+      for (let li = 0; li < 3; li++) {
+        const kn = V.limbs[li].n;
+        for (let j = 1; j <= 2; j++) {
+          const [L, r, a] = kn[j], h = hash2D(li, j, 431);
+          const sx = fx + Math.cos(a) * (r + 0.8), sy = fy + Math.sin(a) * (r + 0.8), sl = L - 0.5;
+          const R = 1.8 + h * 0.7, hr = 1.7 + h * 0.5, dl = (layer - sl) / hr;
+          if (L < 9 || Math.abs(dl) >= 1) continue;
+          const rr = R * Math.sqrt(1 - dl * dl) * (dl < 0 ? 0.8 : 1); // a little narrower underneath
+          for (let y = Math.floor(sy - rr); y <= sy + rr; y++) for (let x = Math.floor(sx - rr); x <= sx + rr; x++) {
+            const ddx = x - sx, ddy = y - sy;
+            if (ddx * ddx + ddy * ddy > rr * rr) continue;
+            const n = hash2D(x, y, layer * 5 + 17);
+            if (n < 0.22) continue;
+            let col = dl > 0.3 || ddx + ddy < -0.8 ? (n > 0.5 ? B.light[0] : B.light[1]) : B.mid;
+            if (dl < -0.4 || ddx + ddy > 1.0) col = n > 0.5 ? B.shade[0] : B.shade[1];
+            if (dl < -0.7) col = B.deep[0];
+            px(ctx, x, y, col);
+          }
+        }
+      }
+      // crown: one wide umbrella. The rim billows (low-frequency bumps around it), the top is a lumpy
+      // dome, the underside arches up toward the trunk and drapes down at the rim
       const ccx = cx + V.crownOff[0], ccy = cy + V.crownOff[1];
       for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
         const dx = x - ccx, dy = y - ccy, rho = Math.hypot(dx, dy), th = Math.atan2(dy, dx);
@@ -2786,10 +2844,10 @@
         u = Math.min(u, 0.99);
         const n1 = vnoise(x * 0.32, y * 0.32, 5), n2 = vnoise(x * 0.3 + 7, y * 0.3, 6);
         let top = V.top0 - V.topK * u * u + (n1 - 0.5) * 2.2, bot = V.bot0 - V.botK * u * u + (n2 - 0.5) * 1.8;
-        const mid = (top + bot) / 2;
-        let half = (top - bot) / 2;
-        if (u > 0.85) half *= Math.max(0.3, Math.sqrt((1 - u) / 0.15)); // the rim closes up
-        top = mid + half; bot = mid - half;
+        // the rim drapes down like a skirt over the limbs (the top comes down to it; the underside stays
+        // low), so only the trunk and the start of the fork show below it: nothing props the crown up
+        if (u > 0.82) top = bot + (top - bot) * Math.max(0.3, Math.sqrt((1 - u) / 0.18));
+        const mid = (top + bot) / 2, half = (top - bot) / 2;
         if (layer < bot || layer > top) continue;
         const n = hash2D(x, y, layer * 5 + 11);
         if (n < 0.05 || (u > 0.86 && n < 0.42)) continue; // pin holes, a frilly rim
@@ -3029,7 +3087,8 @@
         canopySplit: 0.5,
         glow: null,
         contactRadius: 0.68,
-        drawSlice(ctx, emCtx, layer, total, s) { drawCherry(ctx, layer, s, CHERRY_V[0]); }
+        variants: 3, // looks A, B, C (CHERRY_V), picked per tile in one mesh
+        drawSlice(ctx, emCtx, layer, total, s, v = 0) { drawCherry(ctx, layer, s, CHERRY_V[v]); }
       },
       {
         id: 'path',
@@ -4521,7 +4580,9 @@
     function buildSpriteStackAsset(def) {
       const { size, layers, layerStep, scale } = def;
       const sheetW = size * layers;
-      const sheetH = size;
+      // def.variants: several looks stacked as rows of one sheet; each instance picks its row (aVariant)
+      const nV = def.variants || 1;
+      const sheetH = size * nV;
 
       const colorCanvas = document.createElement('canvas');
       colorCanvas.width = sheetW;
@@ -4541,7 +4602,7 @@
       tmpEm.height = size;
       const tmpEmCtx = tmpEm.getContext('2d');
 
-      for (let i = 0; i < layers; i++) {
+      for (let v = 0; v < nV; v++) for (let i = 0; i < layers; i++) {
         const sc = document.createElement('canvas');
         sc.width = size;
         sc.height = size;
@@ -4549,11 +4610,11 @@
         sctx.imageSmoothingEnabled = false;
 
         tmpEmCtx.clearRect(0, 0, size, size);
-        def.drawSlice(sctx, tmpEmCtx, i, layers, size);
+        def.drawSlice(sctx, tmpEmCtx, i, layers, size, v);
 
-        colorCtx.drawImage(sc, i * size, 0);
-        emCtx.drawImage(tmpEm, i * size, 0);
-        sliceCanvases.push(sc);
+        colorCtx.drawImage(sc, i * size, v * size);
+        emCtx.drawImage(tmpEm, i * size, v * size);
+        if (v === 0) sliceCanvases.push(sc); // the icon shows the first look
       }
 
       const colorTex = new THREE.CanvasTexture(colorCanvas);
@@ -4582,7 +4643,8 @@
         const vOffset = i * 4;
         positions.push(-half, y, -half, half, y, -half, half, y, half, -half, y, half);
         normals.push(-0.28, 0.92, -0.28, 0.28, 0.92, -0.28, 0.28, 0.92, 0.28, -0.28, 0.92, 0.28);
-        uvs.push(u0, 1, u1, 1, u1, 0, u0, 0);
+        const vb = 1 - 1 / nV; // the first row (canvas top); the shader shifts other looks down
+        uvs.push(u0, 1, u1, 1, u1, vb, u0, vb);
         colors.push(ao, ao, ao, ao, ao, ao, ao, ao, ao, ao, ao, ao);
         layerHeights.push(hNorm, hNorm, hNorm, hNorm);
         indices.push(vOffset, vOffset + 2, vOffset + 1, vOffset, vOffset + 3, vOffset + 2);
@@ -6800,6 +6862,24 @@
             .replace('#include <common>', '#include <common>\nuniform float uTime;\nattribute float aLayerH;' + DROP_DECL)
             .replace('#include <begin_vertex>', '#include <begin_vertex>' + dropVertexGLSL(false));
         };
+        // several looks in one sheet (def.variants rows): each instance shifts its texture rows down
+        // by aVariant (no extra draw call); the shadow pass reads the same row so its holes match
+        if (def.variants > 1) {
+          asset.geometry.setAttribute('aVariant', new THREE.InstancedBufferAttribute(new Float32Array(maxN), 1));
+          const rowStep = { value: 1 / def.variants };
+          const addVariant = (m) => {
+            const base = m.onBeforeCompile;
+            m.onBeforeCompile = (sh, r) => {
+              base(sh, r);
+              sh.uniforms.uVarStep = rowStep;
+              sh.vertexShader = sh.vertexShader
+                .replace('#include <common>', '#include <common>\nattribute float aVariant;\nuniform float uVarStep;')
+                .replace('#include <uv_vertex>', '#include <uv_vertex>\n#ifdef USE_MAP\nvMapUv.y -= aVariant * uVarStep;\n#endif');
+            };
+          };
+          addVariant(mat);
+          addVariant(instMesh.customDepthMaterial);
+        }
         instMesh.userData.spawnAttr = spawnAttr;
         if (def.seedScatter) { instMesh.userData.tintAttr = asset.geometry.attributes.aTint; instMesh.userData.goneAttr = asset.geometry.attributes.aGone; instMesh.userData.digestSkip = true; }
         scene.add(instMesh);
@@ -6817,6 +6897,15 @@
         const ghostMesh = new THREE.Mesh(asset.geometry, ghostMat);
         ghostMesh.visible = false;
         if (def.seedScatter) ghostMesh.userData.digestSkip = true; // seeds show a sowing circle, never this
+        if (def.variants > 1) { // the preview shows the look that will land on the hovered tile
+          const varOfs = (ghostMesh.userData.varOfs = { value: 0 });
+          ghostMat.onBeforeCompile = (sh) => {
+            sh.uniforms.uVarOfs = varOfs;
+            sh.vertexShader = sh.vertexShader
+              .replace('#include <common>', '#include <common>\nuniform float uVarOfs;')
+              .replace('#include <uv_vertex>', '#include <uv_vertex>\nvMapUv.y -= uVarOfs;');
+          };
+        }
         scene.add(ghostMesh);
         ghostMeshesById[def.id] = ghostMesh;
       });
@@ -7797,16 +7886,21 @@
       // (aVanish), cabins get an unmerged prefab whose parts float up one by one (animate, section 16),
       // paths and fences just go in a puff of dust. No extra draw calls; shadows refresh meanwhile.
       let itemBuckets = {}, vanishing = [], vanishTimer = 0;
+      // which look (def.variants) stands at this spot: from the position, never a running random, so a
+      // tree keeps its look through reloads, undo and loading a slot (nothing extra to save)
+      const variantAt = (def, wx, wz) => Math.min(def.variants - 1, Math.floor(hash2D(Math.round(wx * 4) + 211, Math.round(wz * 4) + 223, 401) * def.variants));
       function fillItemMeshes() {
         const now = performance.now() * 0.001;
         ITEM_DEFS.forEach((def) => {
           if (!isInstancedDef(def) || def.seedScatter) return;
           const mesh = instancedById[def.id], geo = mesh.geometry;
           const van = geo.attributes.aVanish.array, hot = geo.attributes.aHot.array, sp = mesh.userData.spawnAttr.array;
+          const vari = geo.attributes.aVariant ? geo.attributes.aVariant.array : null;
           const refs = (mesh.userData.refs = []);
           let n = 0;
           const put = (item) => {
             if (n >= MAX_INSTANCES) return;
+            if (vari) vari[n] = variantAt(def, item.wx, item.wz);
             dummyObj.position.set(item.wx, item.wy, item.wz);
             dummyObj.rotation.set(0, item.rotation * (Math.PI / 2), 0);
             dummyObj.scale.setScalar(item.scale);
@@ -7826,6 +7920,7 @@
           mesh.userData.spawnAttr.needsUpdate = true;
           geo.attributes.aVanish.needsUpdate = true;
           geo.attributes.aHot.needsUpdate = true;
+          if (vari) geo.attributes.aVariant.needsUpdate = true;
         });
         hotMarks.length = 0;
         applyEraseHot();
@@ -9026,6 +9121,7 @@
             ghost.visible = true;
             ghost.position.set(tileX, tileY + 0.02, tileZ);
             ghost.rotation.y = currentRotation * (Math.PI / 2);
+            if (ghost.userData.varOfs) { const d = assetsById[selectedTool].def; ghost.userData.varOfs.value = variantAt(d, tileX, tileZ) / d.variants; }
             setGhostValidityColor(ghost, valid);
           }
         }
@@ -10089,7 +10185,7 @@
             const cyc = Math.floor(elapsed / period + h2); // a new spot each fall
             const a0 = hash2D(i, cyc, 219) * TAU, r0 = 0.15 + hash2D(i, cyc, 223) * 0.52;
             const fallT = 0.82, f = Math.min(ph / fallT, 1), drop = f * f * (3 - 2 * f) * 0.35 + f * 0.65;
-            const y0 = tr.wy + 1.1 + h3 * 0.12, yG = getContinuousTerrainHeight(tr.wx + Math.cos(a0) * r0, tr.wz + Math.sin(a0) * r0) + 0.012;
+            const y0 = tr.wy + 0.92 + h3 * 0.2, yG = getContinuousTerrainHeight(tr.wx + Math.cos(a0) * r0, tr.wz + Math.sin(a0) * r0) + 0.012;
             const drift = f * (0.18 + h1 * 0.2), sway = Math.sin(elapsed * 2.3 + i * 1.7) * 0.07 * (1 - f * 0.6) * (f < 1 ? 1 : 0);
             animDummy.position.set(
               tr.wx + Math.cos(a0) * (r0 + drift) + sway,
@@ -10647,6 +10743,7 @@
           vanishHold: (on) => { vanishHold = !!on; },
           undoDepth: () => [undoStack.length, redoStack.length],
           petals: () => petalInst.count, // ambient petals + cherry petals in flight
+          variantsOf: (id) => { const m = instancedById[id], a = m && m.geometry.attributes.aVariant; return a ? Array.from(a.array.slice(0, m.count)) : null; },
           undo: (dir = -1) => undoRedo(dir),
           islandList: () => JSON.stringify(serializeIsland()),
           grassTufts: () => Array.from({ length: grassClutterInst.count }, (_, i) => Array.from(grassClutterInst.instanceMatrix.array.subarray(i * 16, i * 16 + 16), (v) => Math.round(v * 1e5) / 1e5)),

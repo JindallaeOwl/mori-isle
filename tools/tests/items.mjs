@@ -7,6 +7,8 @@ export default async ({ wait, evaluate, mouse, key, log }) => {
   const ok = (name, cond, extra = '') => log((cond ? 'PASS ' : 'FAIL ') + name + (extra ? '  ' + extra : ''));
   const J = (expr) => evaluate(`JSON.stringify(${expr})`).then(JSON.parse);
   const total = async () => { const s = await J('window.__mori.state()'); return s.placed + s.free + (s.snap || 0) + (s.seeds || 0); };
+  // shaders of items missing from the starter island only compile once placed: watch the console from here
+  await evaluate(`window.__errs = []; for (const k of ['error', 'warn']) { const o = console[k].bind(console); console[k] = (...a) => { window.__errs.push(k + ': ' + a.map(String).join(' ').slice(0, 300)); o(...a); }; } 0`);
 
   // 1) categories (the terrain slot holds tools, not items: see terrain-edit.mjs)
   const items = await J('window.__mori.items()');
@@ -69,6 +71,13 @@ export default async ({ wait, evaluate, mouse, key, log }) => {
   // a cherry tree sheds petals once it has landed (extra instances on the petal mesh, no new draw call)
   await wait(2500);
   ok('cherry petals drift down', (await J('window.__mori.petals()')) > 26, String(await J('window.__mori.petals()')));
+  // cherries come in three looks, picked per tile inside one mesh
+  for (let k = 0; k < 4; k++) await placeSomewhere('cherry');
+  const looks = await J(`window.__mori.variantsOf('cherry')`);
+  ok('cherries mix their looks (one mesh, per-tile variant)', Array.isArray(looks) && new Set(looks).size > 1 && looks.every((v) => v >= 0 && v <= 2), JSON.stringify(looks));
+  await wait(1500);
+  const errs = await J('window.__errs');
+  ok('no console errors after placing every item', errs.length === 0, errs.slice(0, 3).join(' | '));
 
   // 3) light budget
   let lights = await J('window.__mori.lights()');
