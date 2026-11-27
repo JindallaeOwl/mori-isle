@@ -126,6 +126,64 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
   ok('#save=0: nothing written', (await evaluate(`localStorage.getItem('mori-isle.v1.auto')`)) === goodRaw);
   await evaluate(`history.replaceState(null, '', location.pathname + '#debug=1')`);
 
+  // ---- manual slots (step 5-2) ----
+  await reload(); // back on the edited island (the auto slot was restored above)
+  const P = '#save-panel', card = (i) => `${P} .save-card[data-slot="${i}"]`;
+  const press = async (sel) => { await evaluate(`document.querySelector('${sel}').click()`); await wait(400); };
+  const slotRaw = (i) => J(`${M}.saveSlot(${i})`);
+  const isOpen = () => J(`document.querySelector('${P}').classList.contains('open')`);
+  const empty = (i) => J(`document.querySelector('${card(i)}').classList.contains('empty')`);
+  await press('#btn-save');
+  ok('the book opens the slot panel, all three empty', (await isOpen()) && (await empty(1)) && (await empty(2)) && (await empty(3)));
+  await press(`${card(1)} .slot-save`);
+  await wait(2500); // the picture is taken from the next drawn frame
+  const s1 = await slotRaw(1);
+  const d1 = s1 && JSON.parse(s1);
+  ok('save into slot 1: island and a small picture stored', !!d1 && d1.v === 1 && /^data:image\/jpeg/.test(d1.thumb) && !(await empty(1)), s1 ? `${s1.length} chars, picture ${d1.thumb.length}` : 'none');
+  ok('the card shows the picture', (await J(`document.querySelector('${card(1)} .save-thumb').style.backgroundImage`)).startsWith('url("data:image/jpeg'));
+
+  // change the island, then load slot 1 back
+  await evaluate(`document.getElementById('pop-clear').click()`); await wait(1500);
+  ok('island emptied', (await J(`${M}.state()`)).free === 0);
+  await press('#btn-save');
+  await press(`${card(1)} .slot-load`);
+  await wait(2500);
+  { const s = await snapshot(); ok('load slot 1: the saved island is back exactly', same(s.digest, edited.digest) && same(s.state, edited.state) && same(s.falls, edited.falls), JSON.stringify(s.state)); }
+  ok('loading closed the panel', !(await isOpen()));
+  await wait(1500);
+  ok('the loaded island became the current one (auto slot)', JSON.parse(await J(`${M}.saveRaw()`)).island.free.length === 1);
+
+  // overwrite takes two presses
+  await evaluate(`document.getElementById('pop-clear').click()`); await wait(1500);
+  await press('#btn-save');
+  const before = await slotRaw(1);
+  await press(`${card(1)} .slot-save`);
+  await wait(1500);
+  ok('first press on a full slot only asks (wobble + label)', (await slotRaw(1)) === before && (await J(`document.querySelector('${card(1)} .slot-save').classList.contains('arm')`)) && (await J(`document.querySelector('${card(1)} .slot-save').dataset.hint`)).includes('덮어쓰기'));
+  await press(`${card(1)} .slot-save`);
+  await wait(2500);
+  ok('second press overwrites', JSON.parse(await slotRaw(1)).island.free.length === 0);
+  ok('the label is back to normal', (await J(`document.querySelector('${card(1)} .slot-save').dataset.hint`)) === '저장');
+
+  // another slot, then delete with two presses
+  await press(`${card(3)} .slot-save`);
+  await wait(2500);
+  ok('slot 3 saved, slot 2 still empty', !!(await slotRaw(3)) && (await empty(2)) && !(await empty(3)));
+  await press(`${card(3)} .slot-del`);
+  ok('first delete press only asks', !!(await slotRaw(3)));
+  await press(`${card(3)} .slot-del`);
+  ok('second press deletes', !(await slotRaw(3)) && (await empty(3)) && !!(await slotRaw(1)));
+
+  // a broken slot shows as empty and can't be loaded; panel closes on an outside click; help closes it
+  await evaluate(`localStorage.setItem('mori-isle.v1.slot2', '{"v":1,"island":{"level":"x"}}')`);
+  await press('#btn-save'); await press('#btn-save'); // close and reopen: re-read
+  ok('a broken slot reads as empty', await empty(2));
+  await evaluate(`document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }))`); await wait(300);
+  ok('a click elsewhere closes the panel', !(await isOpen()));
+  await press('#btn-save'); await press('#btn-help');
+  ok('opening help closes it', !(await isOpen()));
+  await press('#btn-help');
+
   errs.push(...(await J('window.__errs || []')));
   ok('no console errors or warnings', errs.length === 0, errs.length ? errs.slice(0, 5).join(' | ') : errs.length);
 };
