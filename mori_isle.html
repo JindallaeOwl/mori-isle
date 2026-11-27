@@ -4415,7 +4415,7 @@
       meshes.forEach((o) => { oldGeos.add(o.geometry); oldMats.add(o.material); });
       while (chunk.children.length) chunk.remove(chunk.children[0]);
       oldGeos.forEach((geo) => geo.dispose());
-      oldMats.forEach((mt) => mt.dispose());
+      oldMats.forEach((mt) => { if (!mt.userData.shared) mt.dispose(); }); // cabin part materials are shared (getCabinPartMats)
       merged.forEach((m) => chunk.add(m));
     }
     function mergeCabinPrefab(root) {
@@ -4434,6 +4434,38 @@
       mats.forEach((m) => { if (!m.userData.shared) m.dispose(); });
     }
 
+    // Part materials of the (unmerged, dropping) cabin: made once and shared by every cabin, never
+    // disposed. Before, each cabin made its own and threw them away when it merged after landing;
+    // with no user left three.js also freed their shader programs, so every new cabin compiled them
+    // again on the frame its parts appeared (the chimney's vertex-colour program on the roof frame:
+    // a visible hitch as the roof came down). Shared means: never change one of these per cabin
+    // (clone it for that cabin instead), or every cabin changes with it.
+    let cabinPartMats = null;
+    function getCabinPartMats() {
+      if (cabinPartMats) return cabinPartMats;
+      const std = (o, extra) => enhanceStandardMaterial(new THREE.MeshStandardMaterial(o), extra);
+      const m = {
+        matStone: std({ color: '#838894', roughness: 0.78, metalness: 0.05 }),
+        matWood: std({ color: '#a87043', roughness: 0.80, metalness: 0.02 }),
+        matWoodFloor: std({ color: '#c48d59', roughness: 0.74, metalness: 0.02 }),
+        matWoodDark: std({ color: '#6b4226', roughness: 0.84, metalness: 0.02 }),
+        matRoof: std({ color: '#b84c3d', roughness: 0.82, metalness: 0.0 }),
+        matRoofAlt: std({ color: '#9c3e32', roughness: 0.86, metalness: 0.0 }),
+        matMetal: std({ color: '#454a54', roughness: 0.30, metalness: 0.78 }),
+        matFoliage: std({ color: '#4e9143', roughness: 0.85, metalness: 0.0 }),
+        matMailbox: std({ color: '#d45a4c', roughness: 0.42, metalness: 0.35 }),
+        matRug: std({ color: '#d66d56', roughness: 0.94 }),
+        matQuilt: std({ color: '#5c8ab8', roughness: 0.90 }),
+        matPillow: std({ color: '#f7efe1', roughness: 0.92 }),
+        matFireGlow: std({ color: '#ffcf66', emissive: new THREE.Color('#ff731c'), emissiveIntensity: 2.2, roughness: 0.35 }, { emissiveNightBoost: 3.2 }),
+        matGlowWindow: std({ color: '#ffd98a', emissive: new THREE.Color('#ff9d3b'), emissiveIntensity: 1.6, roughness: 0.22, metalness: 0.05 }, { emissiveNightBoost: 2.8 }),
+        matFlowers: ['#ff96b2', '#ffe078', '#b8d8ff'].map((c) => std({ color: c, roughness: 0.75 })),
+        matChimney: std({ vertexColors: true, roughness: 0.88, metalness: 0.02 }),
+        matSootCap: std({ color: '#2b2c33', roughness: 0.94 })
+      };
+      Object.values(m).flat().forEach((mt) => { mt.userData.shared = true; });
+      return (cabinPartMats = m);
+    }
     function buildStorybookCabinPrefab() {
       const root = new THREE.Group();
       const chunkInterior = new THREE.Group(); // Floor + Bed + Rug + Fireplace + Table
@@ -4442,37 +4474,8 @@
       root.add(chunkInterior, chunkWalls, chunkRoof);
       root.userData = { chunkInterior, chunkWalls, chunkRoof };
 
-      const matStone = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ color: '#838894', roughness: 0.78, metalness: 0.05 }));
-      const matWood = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ color: '#a87043', roughness: 0.80, metalness: 0.02 }));
-      const matWoodFloor = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ color: '#c48d59', roughness: 0.74, metalness: 0.02 }));
-      const matWoodDark = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ color: '#6b4226', roughness: 0.84, metalness: 0.02 }));
-      const matRoof = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ color: '#b84c3d', roughness: 0.82, metalness: 0.0 }));
-      const matRoofAlt = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ color: '#9c3e32', roughness: 0.86, metalness: 0.0 }));
-      const matMetal = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ color: '#454a54', roughness: 0.30, metalness: 0.78 }));
-      const matFoliage = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ color: '#4e9143', roughness: 0.85, metalness: 0.0 }));
-      const matMailbox = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ color: '#d45a4c', roughness: 0.42, metalness: 0.35 }));
-      const matRug = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ color: '#d66d56', roughness: 0.94 }));
-      const matQuilt = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ color: '#5c8ab8', roughness: 0.90 }));
-      const matPillow = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ color: '#f7efe1', roughness: 0.92 }));
-      const matFireGlow = enhanceStandardMaterial(
-        new THREE.MeshStandardMaterial({
-          color: '#ffcf66',
-          emissive: new THREE.Color('#ff731c'),
-          emissiveIntensity: 2.2,
-          roughness: 0.35
-        }),
-        { emissiveNightBoost: 3.2 }
-      );
-      const matGlowWindow = enhanceStandardMaterial(
-        new THREE.MeshStandardMaterial({
-          color: '#ffd98a',
-          emissive: new THREE.Color('#ff9d3b'),
-          emissiveIntensity: 1.6,
-          roughness: 0.22,
-          metalness: 0.05
-        }),
-        { emissiveNightBoost: 2.8 }
-      );
+      const { matStone, matWood, matWoodFloor, matWoodDark, matRoof, matRoofAlt, matMetal, matFoliage, matMailbox,
+        matRug, matQuilt, matPillow, matFireGlow, matGlowWindow, matFlowers, matChimney, matSootCap } = getCabinPartMats();
 
       const addPart = (parent, geo, mat, x, y, z, rx = 0, ry = 0, rz = 0) => {
         const m = new THREE.Mesh(geo, mat);
@@ -4558,13 +4561,11 @@
           const box = new THREE.Mesh(createBeveledBoxGeometry(0.22, 0.055, 0.075, 0.008), matWood);
           box.position.set(0, -0.14, 0.045); box.castShadow = true;
           wGroup.add(box);
-          const colors = ['#ff96b2', '#ffe078', '#b8d8ff'];
           for (let f = -1; f <= 1; f++) {
             const leaf = new THREE.Mesh(new THREE.DodecahedronGeometry(0.032, 0), matFoliage);
             leaf.position.set(f * 0.06, -0.105, 0.05);
             wGroup.add(leaf);
-            const flMat = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ color: colors[f + 1], roughness: 0.75 }));
-            const fl = new THREE.Mesh(new THREE.DodecahedronGeometry(0.022, 0), flMat);
+            const fl = new THREE.Mesh(new THREE.DodecahedronGeometry(0.022, 0), matFlowers[f + 1]);
             fl.position.set(f * 0.06, -0.085, 0.065);
             wGroup.add(fl);
           }
@@ -4627,9 +4628,7 @@
         cCols[i * 3] = 0.54 * soot; cCols[i * 3 + 1] = 0.56 * soot; cCols[i * 3 + 2] = 0.60 * soot;
       }
       chimGeo.setAttribute('color', new THREE.BufferAttribute(cCols, 3));
-      const matChimney = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.88, metalness: 0.02 }));
       addPart(chunkRoof, chimGeo, matChimney, 0.22, 1.10, -0.18, 0.06, 0.08, -0.09);
-      const matSootCap = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ color: '#2b2c33', roughness: 0.94 }));
       addPart(chunkRoof, createBeveledBoxGeometry(0.24, 0.06, 0.24, 0.015), matSootCap, 0.25, 1.44, -0.16, 0.06, 0.08, -0.09);
 
       return root;
@@ -6178,7 +6177,7 @@
           child.receiveShadow = false;
         }
       });
-      cabinPrefabMats.forEach((m) => m.dispose());
+      cabinPrefabMats.forEach((m) => { if (!m.userData.shared) m.dispose(); }); // the ghost swaps in its own material; the shared part materials stay
       cabinGhostPrefab.visible = false;
       mergeCabinPrefab(cabinGhostPrefab);
       scene.add(cabinGhostPrefab);
@@ -8930,6 +8929,27 @@
       scene.add(islandRoot);
       for (const o of [chunkTopSurface, chunkSubsoil, chunkBedrock, fenceGroup, cabinGroupContainer, glowGroup,
         smokeInst, flameInst, emberPoints, ...Object.values(instancedById)]) islandRoot.add(o);
+
+      // draw the shared cabin part materials once now, off screen (a cabin's separate parts are only
+      // drawn while it drops in, so otherwise the first placement builds their shaders mid-drop).
+      // renderer.compile alone is not enough: the driver finishes the program on its first real draw.
+      // Programs stay cached because those materials are never disposed (getCabinPartMats).
+      {
+        const warm = buildStorybookCabinPrefab();
+        islandRoot.add(warm);
+        warm.updateMatrixWorld(true);
+        // only the warm-up cabin's matrices: updating the whole scene this early would change the float
+        // rounding of the starter cabins' merge (terrain.mjs compares exact bits)
+        scene.matrixWorldAutoUpdate = false;
+        renderer.shadowMap.needsUpdate = true; // the shadow pass programs too
+        renderer.setRenderTarget(renderTarget); // linear HDR target, like the scene pass (part of the program key)
+        renderer.render(scene, camera);
+        renderer.setRenderTarget(null);
+        scene.matrixWorldAutoUpdate = true;
+        islandRoot.remove(warm);
+        disposeObjectTree(warm);
+        renderer.shadowMap.needsUpdate = true; // the next frame redraws the shadows without it
+      }
 
       // Helper: Compute staggered springy progress [0..1] (with easeOutBack overshoot!) for each chunk
       function evalLayerProgress(sinceToggle, openDelay, closeDelay) {
