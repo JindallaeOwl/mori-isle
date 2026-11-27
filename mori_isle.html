@@ -7579,6 +7579,7 @@
         mesh.userData.goneAttr.needsUpdate = true;
         // once the sinking ones are gone, take them out of the buffer
         if (sinking && !seedCleanup) seedCleanup = setTimeout(() => { seedCleanup = 0; rebuildSeedFlowers(); }, SEED_SHRINK * 1000 + 60);
+        queueAutosave(); // every edit ends up here (rebuildInstances finishes with this)
       }
       function sowSeedsAt(cx, cz) { // how many flowers came up
         const max = assetsById.seeds.def.maxInstances, now = performance.now() * 0.001;
@@ -7617,6 +7618,107 @@
         sowStep(wx, wz);
       }
       function endSeedStroke() { seedStroke = null; }
+
+      /* ---- SAVE (step 5): the island lives on in this browser ---- */
+      // The current island is written to a hidden auto slot one second after the last edit (a few
+      // KB, only on edits, never per frame) and comes back, assembling, on the next visit. The time
+      // of day is a separate setting. #save=0 turns reading and writing off. Coordinates are kept
+      // exactly (no rounding) so a reloaded island is the same island, mesh for mesh.
+      const SAVE_ON = HASH.save !== '0';
+      const SAVE_V = 1, SAVE_KEY_AUTO = 'mori-isle.v1.auto', SAVE_KEY_PREFS = 'mori-isle.prefs';
+      const storeGet = (k) => { if (!SAVE_ON) return null; try { return localStorage.getItem(k); } catch (e) { return null; } };
+      const storeSet = (k, v) => { if (!SAVE_ON) return false; try { localStorage.setItem(k, v); return true; } catch (e) { return false; } };
+      const bytesToB64 = (u8) => { let t = ''; for (let i = 0; i < u8.length; i++) t += String.fromCharCode(u8[i]); return btoa(t); };
+      const b64ToBytes = (b) => { try { const t = atob(b); const u8 = new Uint8Array(t.length); for (let i = 0; i < t.length; i++) u8[i] = t.charCodeAt(i); return u8; } catch (e) { return null; } };
+      function serializeIsland() {
+        return {
+          level: bytesToB64(new Uint8Array(terrain.level.buffer)),
+          mat: bytesToB64(terrain.mat),
+          placed: [...placedItems.values()].map((e) => [e.id, e.gx, e.gz, e.rotation]),
+          snap: snapProps.map((o) => [o.id, o.wx, o.wz, o.rotation]),
+          free: freeProps.map((fp) => [fp.id, fp.wx, fp.wz, fp.rotation, fp.scale]),
+          seeds: seedFlowers.filter((f) => !f.erased).map((f) => [f.wx, f.wz, f.rot, f.scale, f.tint])
+        };
+      }
+      // A broken terrain throws the whole save away (the starter island instead); objects that don't
+      // fit (unknown id, wrong placement kind, off the island, not a number) are dropped one by one.
+      function parseIsland(isl) {
+        if (!isl || typeof isl !== 'object') return null;
+        const lv = b64ToBytes(isl.level), mt = b64ToBytes(isl.mat);
+        if (!lv || lv.length !== GRID_SIZE * GRID_SIZE || !mt || mt.length !== MAT_N * MAT_N) return null;
+        const level = new Int8Array(lv.buffer);
+        for (const v of level) if (v < 0 || v > TERRAIN_MAX) return null;
+        for (const v of mt) if (v > MAT_WATER) return null;
+        const num = (v) => typeof v === 'number' && Number.isFinite(v);
+        const onIsland = (x, z) => num(x) && num(z) && Math.abs(x) < HALF_GRID && Math.abs(z) < HALF_GRID;
+        const defOf = (id) => (typeof id === 'string' && assetsById[id] ? assetsById[id].def : null);
+        const list = (a) => (Array.isArray(a) ? a.filter(Array.isArray) : []);
+        const placed = [], seen = new Set();
+        for (const [id, gx, gz, rotation] of list(isl.placed)) {
+          const def = defOf(id);
+          if (!def || def.freePlace || def.snapPlace || def.seedScatter || !Number.isInteger(gx) || !Number.isInteger(gz) || !num(rotation)) continue;
+          if (gx < 0 || gz < 0 || gx >= GRID_SIZE || gz >= GRID_SIZE || seen.has(`${gx},${gz}`)) continue;
+          seen.add(`${gx},${gz}`); placed.push({ id, gx, gz, rotation });
+        }
+        const snap = [];
+        for (const [id, wx, wz, rotation] of list(isl.snap)) {
+          const def = defOf(id);
+          if (def && def.snapPlace && onIsland(wx, wz) && num(rotation)) snap.push({ id, wx, wz, rotation });
+        }
+        const free = [];
+        for (const [id, wx, wz, rotation, scale] of list(isl.free)) {
+          const def = defOf(id);
+          if (def && def.freePlace && !def.seedScatter && onIsland(wx, wz) && num(rotation) && num(scale) && scale > 0.1 && scale < 4) free.push({ id, wx, wz, rotation, scale });
+        }
+        const seeds = [], maxSeeds = assetsById.seeds ? assetsById.seeds.def.maxInstances : 0;
+        for (const [wx, wz, rot, scale, tint] of list(isl.seeds)) {
+          if (seeds.length >= maxSeeds) break;
+          if (onIsland(wx, wz) && num(rot) && num(scale) && scale > 0.1 && scale < 4 && Number.isInteger(tint) && tint >= 0 && tint < SEED_TINTS.length) seeds.push({ wx, wz, rot, scale, tint });
+        }
+        return { level, mat: mt, placed, snap, free, seeds };
+      }
+      // same shape as populateStarterIsland: terrain first (derived counts, water field, surface), then the lists
+      function applyIsland(isl, rebuild = true) {
+        terrain.level.set(isl.level);
+        terrain.mat.set(isl.mat);
+        terrain.painted = 0; terrain.water = 0;
+        for (const v of terrain.mat) { if (v === MAT_WATER) terrain.water++; else if (v !== MAT_GRASS) terrain.painted++; }
+        rebuildWaterField();
+        terrain.version++;
+        rebuildTerrainSurface();
+        markShadowsDirty(1.0);
+        placedItems.clear(); snapProps.length = 0; freeProps.length = 0; seedFlowers.length = 0;
+        for (const e of isl.placed) placedItems.set(`${e.gx},${e.gz}`, { ...e });
+        for (const o of isl.snap) snapProps.push({ ...o });
+        for (const fp of isl.free) freeProps.push({ ...fp });
+        for (const f of isl.seeds) seedFlowers.push({ ...f, spawnT: -100 });
+        if (rebuild) rebuildInstances();
+      }
+      function readSave(key) {
+        const raw = storeGet(key);
+        if (!raw) return null;
+        let data; try { data = JSON.parse(raw); } catch (e) { return null; }
+        if (!data || data.v !== SAVE_V) return null;
+        return parseIsland(data.island);
+      }
+      let autosaveTimer = 0;
+      function writeAutosave() {
+        if (autosaveTimer) { clearTimeout(autosaveTimer); autosaveTimer = 0; }
+        if (!SAVE_ON) return false;
+        if (intro.phase !== 'done') { queueAutosave(); return false; } // the island is mid-assembly / mid-fall
+        return storeSet(SAVE_KEY_AUTO, JSON.stringify({ v: SAVE_V, savedAt: Date.now(), island: serializeIsland() }));
+      }
+      function queueAutosave() {
+        if (!SAVE_ON) return;
+        if (autosaveTimer) clearTimeout(autosaveTimer);
+        autosaveTimer = setTimeout(writeAutosave, 1000);
+      }
+      // closing the tab within a second of an edit still keeps it
+      const flushAutosave = () => { if (autosaveTimer) writeAutosave(); };
+      window.addEventListener('pagehide', flushAutosave);
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushAutosave(); });
+      function readPrefs() { try { return JSON.parse(storeGet(SAVE_KEY_PREFS) || '{}') || {}; } catch (e) { return {}; } }
+      const writePrefs = (p) => storeSet(SAVE_KEY_PREFS, JSON.stringify({ ...readPrefs(), ...p }));
 
       /* ---- STORYTELLING CLUSTERED STARTER DIORAMA ---- */
       function populateStarterIsland(rebuild = true) {
@@ -8339,6 +8441,7 @@
 
       document.getElementById('btn-time').addEventListener('click', () => {
         setTimeOfDay(timeIndex + 1);
+        writePrefs({ time: TIME_ORDER[timeIndex] });
         audio.playUiBlip(440 + timeIndex * 90);
       });
 
@@ -8583,7 +8686,8 @@
              (STAGGERED EXPLODED VIEW + EASE-OUT-BACK + SYNCED SHADOWS & SMOKE)
          ======================================================================= */
       setTimeOfDay(0);
-      populateStarterIsland();
+      const bootSave = readSave(SAVE_KEY_AUTO);
+      if (bootSave) applyIsland(bootSave); else populateStarterIsland();
       updateSelectionUI();
 
       // everything that stands on the island hangs off one root, so the reset can drop the whole
@@ -9265,7 +9369,8 @@
           o.spawnT = spawnAt(def, o.wx, o.wz);
           landing(def, o.wx, snapGroundY(def, o.wx, o.wz, o.rotation), o.wz, o.spawnT);
         });
-        rebuildInstances();
+        seedFlowers.forEach((f) => { if (f.erased) return; f.spawnT = t0 + IT.small[0] + 0.25 + introDiag(f.wx, f.wz) * IT.small[1] + Math.random() * 0.15; f.goneAt = null; });
+        rebuildInstances(); // (refills the seed flowers too)
         markShadowsDirty(IT.end + lead + 0.4); // casters keep moving the whole time
 
         // island layers: dust off the edges, an impact ring, a thud and a shake
@@ -9417,6 +9522,11 @@
           ground: (x, z) => getContinuousTerrainHeight(x, z),
           falls: () => falls.map((f) => ({ qx: f.qx, qz: f.qz, gx: f.gx, gz: f.gz, sx: f.sx, sz: f.sz, edge: f.edge, top: f.top, bot: f.bot })),
           fallPool: () => fallPool.reduce((n, v) => n + v, 0),
+          // save (step 5): the raw auto slot, write it now (true if written), a write waiting, time of day
+          saveRaw: () => storeGet(SAVE_KEY_AUTO),
+          autosaveNow: () => writeAutosave(),
+          autosavePending: () => !!autosaveTimer,
+          timeOfDay: () => TIME_ORDER[timeIndex],
           fallSheet: () => ({ visible: fallMesh.visible, verts: fallMesh.geometry.attributes.position.count, spray: sprayPoints.visible ? sprayPoints.geometry.attributes.position.count : 0, feet: fallFeet.length, lines: fallLines.length, ripples: waterMat.uniforms.uRipN.value, k: fallMat.uniforms.uK.value, sound: audio.fallLevel || 0 }),
           lipInfo: (qx, qz) => lipInfo(qx, qz),
           fallVerts: () => Array.from(fallMesh.geometry.attributes.position.array, (v) => Math.round(v * 1000) / 1000),
@@ -9511,9 +9621,10 @@
         };
       }
 
-      // #time=golden / #time=night starts at that time of day
-      if (HASH.time && TIME_ORDER.includes(HASH.time)) {
-        setTimeOfDay(TIME_ORDER.indexOf(HASH.time));
+      // #time=golden / #time=night starts at that time of day (else the one remembered from last time)
+      const startTime = HASH.time && TIME_ORDER.includes(HASH.time) ? HASH.time : readPrefs().time;
+      if (TIME_ORDER.includes(startTime) && startTime !== TIME_ORDER[0]) {
+        setTimeOfDay(TIME_ORDER.indexOf(startTime));
         // start already there instead of blending from day
         for (const k in curAtmo) {
           if (curAtmo[k] && curAtmo[k].isColor) curAtmo[k].copy(targetAtmo[k]);
