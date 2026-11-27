@@ -2858,40 +2858,53 @@
             if (sh > 0.6) return n > 0.5 ? '#c9c1b2' : '#bcb3a3';
             return n > 0.3 ? '#efe9dc' : '#e2dccd';
           };
-          // main stem leans a touch one way, the second one forks off at layer 5 and leans away
-          const mx = cx - layer * 0.025, my = cy + layer * 0.015;
-          if (layer < 33) fillDisc(ctx, mx, my, layer < 2 ? 1.9 : (layer < 18 ? 1.35 : 0.9), (x, y) => bark(x, y, mx, my, 1.3));
-          if (layer >= 4 && layer < 27) {
-            const k = layer - 4, sx = cx + 0.4 + k * 0.12, sy = cy - 0.3 - k * 0.055;
-            fillDisc(ctx, sx, sy, k < 12 ? 0.95 : 0.7, (x, y) => bark(x, y, sx, sy, 0.9));
+          // main stem runs almost to the tip leaning a touch one way; the second forks off at layer 4
+          const stemAt = (second, L) => second
+            ? [cx + 0.4 + (L - 4) * 0.085, cy - 0.3 - (L - 4) * 0.04]
+            : [cx - L * 0.025, cy + L * 0.015];
+          const [mx, my] = stemAt(false, layer);
+          if (layer < 37) fillDisc(ctx, mx, my, layer < 2 ? 1.9 : (layer < 16 ? 1.35 : (layer < 28 ? 1.0 : 0.7)), (x, y) => bark(x, y, mx, my, 1.3));
+          if (layer >= 4 && layer < 31) {
+            const [sx, sy] = stemAt(true, layer);
+            fillDisc(ctx, sx, sy, layer < 16 ? 0.95 : 0.7, (x, y) => bark(x, y, sx, sy, 0.9));
           }
-          // a few bare twigs reaching out under the crown
-          for (const [ly, dx, dy] of [[13, 1, -1], [16, -1, 0], [19, 0, 1], [22, 1, 1]]) {
-            if (layer === ly) for (let j = 1; j <= 3; j++) px(ctx, mx + dx * j, my + dy * j, j < 3 ? '#6a5a4c' : '#857261');
+          // crown: many small leaf clusters scattered up both stems on short twigs inside a tall, narrow
+          // envelope (widest a little below the middle), the outer ones hanging a bit lower like a
+          // birch's drooping twigs; gaps all through it where the white stems show
+          const clusters = [];
+          for (let k = 0; k < 17; k++) {
+            const h1 = hash2D(k, 1, 301), h2 = hash2D(k, 2, 303), h3 = hash2D(k, 3, 307);
+            let lc = 14 + k * 1.3 + (h1 - 0.5) * 1.6;
+            const t = clamp((lc - 12) / 26, 0, 1);
+            const env = 1.3 + 3.2 * Math.pow(Math.sin(Math.PI * (0.08 + t * 0.9)), 0.8);
+            const a = k * 2.39996 + h1 * 0.6, d = env * (0.5 + 0.5 * h2);
+            lc -= d * 0.32; // outer clusters droop
+            const second = k % 3 === 1 && lc < 29;
+            const [sx, sy] = stemAt(second, Math.round(lc));
+            let ox = sx + Math.cos(a) * d - cx, oy = sy + Math.sin(a) * d - cy;
+            const m = Math.hypot(ox, oy); if (m > 6.6) { ox *= 6.6 / m; oy *= 6.6 / m; }
+            clusters.push({ x: cx + ox, y: cy + oy, sx, sy, lc, R: (1.9 + h3 * 0.7) * (1 - 0.22 * t), hr: 2.2 + h3 * 0.6 });
           }
-          // crown: loose clumps at different heights; little holes keep it airy
-          const lobes = [
-            { ox: 0.0, oy: 0.0, lc: 31, hr: 6.5, R: 4.4 },
-            { ox: -2.6, oy: -1.2, lc: 25, hr: 5.5, R: 4.0 },
-            { ox: 2.9, oy: 0.5, lc: 23, hr: 5.0, R: 3.9 },
-            { ox: 0.6, oy: 2.8, lc: 28, hr: 5.0, R: 3.6 },
-            { ox: -1.5, oy: 2.3, lc: 19, hr: 3.8, R: 3.0 },
-            { ox: 2.0, oy: -2.6, lc: 20, hr: 4.0, R: 3.2 },
-            { ox: 0.3, oy: -0.4, lc: 35, hr: 2.6, R: 2.4 }
-          ];
-          for (const l of lobes) {
-            const dl = (layer - l.lc) / l.hr;
+          clusters.push({ x: mx, y: my, sx: mx, sy: my, lc: 36, R: 1.5, hr: 1.7 }); // a wisp at the very tip
+          // twigs: a thin line from the stem out to each cluster, just under it
+          for (const c of clusters) {
+            if (layer !== Math.round(c.lc) - 1) continue;
+            const len = Math.hypot(c.x - c.sx, c.y - c.sy);
+            for (let j = 0.8; j < len; j += 0.7) px(ctx, c.sx + (c.x - c.sx) * j / len, c.sy + (c.y - c.sy) * j / len, j < len * 0.6 ? '#6a5a4c' : '#857261');
+          }
+          for (const c of clusters) {
+            const dl = (layer - c.lc) / c.hr;
             if (Math.abs(dl) >= 1) continue;
-            const r = l.R * Math.sqrt(1 - dl * dl), lx = cx + l.ox, ly2 = cy + l.oy;
+            const r = c.R * Math.sqrt(1 - dl * dl);
             for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
-              const dx = x - lx, dy = y - ly2;
+              const dx = x - c.x, dy = y - c.y;
               if (dx * dx + dy * dy > r * r) continue;
               const n = hash2D(x, y, layer * 3 + 7);
-              if (n < 0.13) continue; // sky shows through
+              if (n < 0.18) continue; // sky shows through
               let col = '#8fb24f';
-              if (dl > 0.25 || dx + dy < -1.6) col = n > 0.45 ? '#b6d264' : '#a3c55a';
-              else if (dl < -0.45 || dx + dy > 2.0) col = n > 0.5 ? '#6c9140' : '#5d8238';
-              if (dl > 0.55 && n > 0.8) col = '#d3e785';
+              if (dl > 0.2 || dx + dy < -1.0) col = n > 0.45 ? '#b6d264' : '#a3c55a';
+              else if (dl < -0.4 || dx + dy > 1.4) col = n > 0.5 ? '#6c9140' : '#5d8238';
+              if (dl > 0.5 && n > 0.78) col = '#d3e785';
               px(ctx, x, y, col);
             }
           }
