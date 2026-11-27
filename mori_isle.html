@@ -7514,11 +7514,14 @@
           return true;
         }
 
-        function spawnGrassCluster(ax, az, seed) {
+        // The look of a clump comes from where it stands, never from a running counter: placing one
+        // object used to shift every later clump's number and reshuffle the grass across the island.
+        function spawnGrassCluster(ax, az) {
           if (grassIdx >= MAX_GRASS_TUFTS) return;
           const cx = clampToTilePadding(ax);
           const cz = clampToTilePadding(az);
           if (!isGrassSpotValid(cx, cz)) return;
+          const seed = 1 + Math.floor(hash2D(Math.round(cx * 64), Math.round(cz * 64), 97) * 9973);
 
           // 1 Large anchor tuft
           const mainSc = 1.02 + hash2D(seed, 1, 31) * 0.24;
@@ -7547,7 +7550,6 @@
           }
         }
 
-        let clusterSeed = 1;
         // (A) Cluster around Tree Roots, Cabin Outer Corners & Fences
         placedItems.forEach((entry) => {
           const wx = entry.gx - HALF_GRID + 0.5;
@@ -7555,23 +7557,23 @@
           if (entry.id === 'pine' || entry.id === 'oak') {
             for (let k = 0; k < 2; k++) {
               const a = hash2D(entry.gx, entry.gz, k * 3 + 1) * Math.PI * 2;
-              spawnGrassCluster(wx + Math.cos(a) * 0.32, wz + Math.sin(a) * 0.32, clusterSeed++);
+              spawnGrassCluster(wx + Math.cos(a) * 0.32, wz + Math.sin(a) * 0.32);
             }
           } else if (entry.id === 'cabin') {
             // Tuck fluffy grass clusters near cabin outer corners (outside footprint)
             [[-0.64, -0.58], [0.64, -0.58], [-0.66, 0.56], [0.64, 0.54]].forEach(([ox, oz]) => {
-              spawnGrassCluster(wx + ox, wz + oz, clusterSeed++);
+              spawnGrassCluster(wx + ox, wz + oz);
             });
           } else if (entry.id === 'fence' || entry.id === 'bench') {
             const a = hash2D(entry.gx, entry.gz, 7) * Math.PI * 2;
-            spawnGrassCluster(wx + Math.cos(a) * 0.28, wz + Math.sin(a) * 0.28, clusterSeed++);
+            spawnGrassCluster(wx + Math.cos(a) * 0.28, wz + Math.sin(a) * 0.28);
           }
         });
 
         // (A2) A tuft at one outer corner of each snap prop
         snapProps.forEach((o) => {
           const r = footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation), k = hash2D(o.wx * 4, o.wz * 4, 7);
-          spawnGrassCluster(k < 0.5 ? r.x0 - 0.1 : r.x1 + 0.1, (k * 4) % 1 < 0.5 ? r.z0 - 0.1 : r.z1 + 0.1, clusterSeed++);
+          spawnGrassCluster(k < 0.5 ? r.x0 - 0.1 : r.x1 + 0.1, (k * 4) % 1 < 0.5 ? r.z0 - 0.1 : r.z1 + 0.1);
         });
 
         // (B) Cluster right beside Rock Bases
@@ -7580,7 +7582,7 @@
             const r = 0.38 * (fp.scale || 1.0) + 0.08;
             for (let k = 0; k < 2; k++) {
               const a = hash2D(fp.wx * 10, fp.wz * 10, k + 5) * Math.PI * 2;
-              spawnGrassCluster(fp.wx + Math.cos(a) * r, fp.wz + Math.sin(a) * r, clusterSeed++);
+              spawnGrassCluster(fp.wx + Math.cos(a) * r, fp.wz + Math.sin(a) * r);
             }
           }
         });
@@ -7589,7 +7591,7 @@
         if (terrain.water) for (let j = 0; j < GRID_SIZE * 4; j++) for (let i = 0; i < GRID_SIZE * 4; i++) {
           const tx = (i + 0.5) / 4 - HALF_GRID + (hash2D(i, j, 61) - 0.5) * 0.12, tz = (j + 0.5) / 4 - HALF_GRID + (hash2D(i, j, 62) - 0.5) * 0.12;
           const d = getPondSDF(tx, tz);
-          if (d >= 0.22 && d < 0.38 && hash2D(i, j, 63) < 0.6) spawnGrassCluster(tx, tz, clusterSeed++);
+          if (d >= 0.22 && d < 0.38 && hash2D(i, j, 63) < 0.6) spawnGrassCluster(tx, tz);
         }
 
         // (D) Light natural accents on back-hill ledges (keeps central meadow clean & airy)
@@ -7598,7 +7600,7 @@
             if (getHillLevel(gx, gz) >= 1 && !placedItems.has(`${gx},${gz}`) && hash2D(gx, gz, 41) > 0.62) {
               const wx = gx - HALF_GRID + 0.5 + (hash2D(gx, gz, 42) - 0.5) * 0.35;
               const wz = gz - HALF_GRID + 0.5 + (hash2D(gx, gz, 43) - 0.5) * 0.35;
-              spawnGrassCluster(wx, wz, clusterSeed++);
+              spawnGrassCluster(wx, wz);
             }
           }
         }
@@ -9811,6 +9813,7 @@
           waterSheet: () => ({ water: waterMesh.geometry.index.count / 6, mist: pondMist.geometry.index.count / 6, lilies: lilyParts.map((lp) => lp.meshes[0].visible) }),
           instanceCount: (id) => instancedById[id].count,
           instanceVisible: (id) => instancedById[id].visible,
+          grassTufts: () => Array.from({ length: grassClutterInst.count }, (_, i) => Array.from(grassClutterInst.instanceMatrix.array.subarray(i * 16, i * 16 + 16), (v) => Math.round(v * 1e5) / 1e5)),
           seedFlowers: () => ({ now: performance.now() * 0.001, list: seedFlowers.filter((f) => !f.erased).map((f) => [f.wx, f.wz, f.tint, f.spawnT, f.goneAt == null ? 0 : 1]) }),
           seedSlope: (x, z) => seedSlope(x, z),
           islandDigest: () => { // like meshDigest, island layers only (no cursor / ghosts / particles)
