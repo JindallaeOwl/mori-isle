@@ -2385,7 +2385,42 @@
       def.build(S, makeRng((def.seed || 777) + 1));
       def.layers = Math.max(2, Math.min(def.dropGroups || 16, S.parts.length));
       const geometry = S.build({ groups: def.layers, ao: def.ao });
+      if (S.arms) { // joining walls: which arm each vertex belongs to (0 = the middle, always shown)
+        const A = new Float32Array(S.verts);
+        for (const [a, b, k] of S.arms) A.fill(k, a, b);
+        geometry.setAttribute('aArm', new THREE.BufferAttribute(A, 1));
+      }
       return { def, geometry };
+    }
+
+    // WALL JOINS: arm k (aArm 1..4) shows only when bit k-1 of the mask is set; a folded arm collapses
+    // to one point under the ground (no triangles left to draw). `mask` is an instance attribute
+    // (aConn) for the placed walls or a uniform (uConn) for the ghost. Runs before sway and drop.
+    function foldArms(mat, mask, key) {
+      const base = mat.onBeforeCompile, uConn = { value: 15 };
+      mat.userData.conn = uConn;
+      mat.onBeforeCompile = (sh, r) => {
+        if (base) base(sh, r);
+        if (mask === 'uConn') sh.uniforms.uConn = uConn;
+        sh.vertexShader = sh.vertexShader
+          .replace('#include <common>', `#include <common>\nattribute float aArm;\n${mask === 'uConn' ? 'uniform' : 'attribute'} float ${mask};`)
+          .replace('#include <begin_vertex>', `#include <begin_vertex>
+          if (aArm > 0.5 && mod(floor(${mask} / exp2(aArm - 1.0) + 0.01), 2.0) < 0.5) transformed = vec3(0.0, -0.4, 0.0);`);
+      };
+      mat.customProgramCacheKey = () => key;
+      return mat;
+    }
+    // a copy of a soup geometry keeping only the given arms (the palette icon: a straight run)
+    function keepArms(geo, keep) {
+      const arm = geo.attributes.aArm.array, idx = [], out = new THREE.BufferGeometry();
+      for (let v = 0; v < arm.length; v += 3) if (keep.includes(arm[v])) idx.push(v, v + 1, v + 2);
+      for (const name in geo.attributes) {
+        const a = geo.attributes[name], n = a.itemSize, dst = new Float32Array(idx.length * n);
+        idx.forEach((v, i) => { for (let k = 0; k < n; k++) dst[i * n + k] = a.array[v * n + k]; });
+        out.setAttribute(name, new THREE.BufferAttribute(dst, n));
+      }
+      out.computeBoundingSphere(); out.computeBoundingBox();
+      return out;
     }
 
     // Small iso icon rendered from the real model (HDR target -> gamma -> 40px canvas)
@@ -4635,6 +4670,97 @@
           }
           S.ico(.04, -.27, -.02, -.45, MCOL.moss, { sc: [1.4, .5, 1.1], d: 0, rough: 1 });
         }
+      },
+      // ---- paths & walls ----
+      // A knee-high dry-stone wall that joins the same wall on the neighbouring tiles (like the fence).
+      // One model holds a middle stack plus an arm toward each side (S.arms marks their vertices, aArm
+      // 1..4 = local +x, +z, -x, -z); each instance's aConn mask unfolds only the arms that meet a
+      // neighbour, the rest fold to a point in the shader (WALL JOINS). Three courses of flat-bottomed
+      // stones, staggered, smaller toward the top, moss over the top faces, grass at the foot.
+      stonewall: {
+        name: '돌담',
+        category: 'paths',
+        type: 'soup',
+        seed: 241,
+        connect: true,
+        autoConnect: true,
+        windStrength: 0.0,
+        explodeSliceFactor: 0.40,
+        explodeTier: 0,
+        glow: null,
+        contactRadius: 0.2,
+        solidRadius: 0.16,
+        build(S, rng) {
+          const COURSES = [ // centre height, stone height, wall thickness, stone length range
+            { y: .048, h: .1, w: .22, len: [.1, .15] },
+            { y: .128, h: .085, w: .19, len: [.085, .13] },
+            { y: .2, h: .07, w: .16, len: [.07, .11] }
+          ];
+          const stoneCol = () => {
+            const c = mixC(MCOL.stoneD, MCOL.stoneL, rng.range(.15, .85));
+            return rng() < .35 ? mixC(c, C('#a39a86'), .45) : c; // some warmer, sun-bleached ones
+          };
+          const mossCol = () => mixC(MOSS_D, MCOL.moss, rng() * .7);
+          // one faceted stone: an icosahedron stretched to (len, h, w), lumpy, flat underneath, turned by yaw
+          const stone = (x, y, z, len, h, w, yaw, col, flatBottom) => {
+            const sd = rng() * 100, f = 9;
+            const start = S.verts;
+            S.add(gIco(0), {
+              s: [len / 2, h / 2, w / 2], p: [x, y, z], r: [rng.range(-.06, .06), yaw, rng.range(-.06, .06)], c: col,
+              l: L_ROCK, rough: rng.range(.6, .8), uvs: 1.0,
+              deform: (v) => {
+                v.multiplyScalar(.84 + .32 * vnoise(v.x * f + sd, v.z * f + v.y * f * .7 + sd, 7));
+                if (flatBottom && v.y < -h * .32) v.y = -h * .32 - (v.y + h * .32) * .15;
+              }
+            });
+            return start;
+          };
+          // lay one course along direction (dx, dz) from s0 to s1 (s: distance from the tile centre)
+          const course = (c, ci, dx, dz, s0, s1) => {
+            const yaw = -Math.atan2(dz, dx);
+            let s = s0;
+            while (s < s1 - .035) {
+              let L = rng.range(c.len[0], c.len[1]);
+              if (s + L > s1) L = s1 - s;
+              const mid = s + L / 2, side = rng.range(-.012, .012), h = c.h * rng.range(.85, 1.1);
+              const x = dx * mid - dz * side, z = dz * mid + dx * side;
+              const st = stone(x, c.y + rng.range(-.006, .006), z, L * 1.08, h, c.w * rng.range(.9, 1.05), yaw + rng.range(-.08, .08), stoneCol(), ci === 0);
+              if (ci === 2 && rng() < .6) S.cover(st, mossCol(), .62, L_MOSS, Math.floor(rng() * 999));
+              s += L;
+            }
+          };
+          // a tuft of blades at the foot of the wall, swaying more toward the tips
+          const tuft = (x, z) => {
+            const st = S.verts;
+            for (let k = 0; k < 3; k++) {
+              const a = rng() * TAU, hgt = rng.range(.05, .09);
+              S.seg([x, -.005, z], [x + Math.cos(a) * .025, hgt, z + Math.sin(a) * .025], .007, .002,
+                mixC(C('#5f8a36'), C('#8fb653'), rng()), { n: 3, rough: .9, l: L_PLAIN });
+            }
+            for (let v = st; v < S.verts; v++) S.S[v * 4 + 2] = .45 * clamp(S.P[v * 3 + 1] / .09, 0, 1);
+          };
+          // the middle stack (always there; alone it reads as a little cairn of stones)
+          const CORE = .12;
+          COURSES.forEach((c, ci) => {
+            const yaw = rng() * TAU, st = stone(rng.range(-.01, .01), c.y, rng.range(-.01, .01), CORE * 2.1, c.h, c.w * 1.12, yaw, stoneCol(), ci === 0);
+            if (ci === 2) S.cover(st, mossCol(), .58, L_MOSS, 41);
+          });
+          S.ico(.035, .02, .245, -.03, mossCol(), { sc: [1.5, .45, 1.2], d: 0, rough: 1, l: L_MOSS });
+          // the four arms, each reaching a little past the tile edge so neighbours' stones overlap
+          S.arms = [];
+          [[1, 0], [0, 1], [-1, 0], [0, -1]].forEach(([dx, dz], i) => {
+            const a0 = S.verts;
+            COURSES.forEach((c, ci) => course(c, ci, dx, dz, CORE * (ci === 1 ? .55 : .85), .515));
+            // moss pads on top and in the joints, grass at the foot on either side
+            for (let k = 0; k < 2; k++) {
+              const s = rng.range(.2, .45), side = rng.range(-.04, .04);
+              S.ico(rng.range(.025, .04), dx * s - dz * side, .238, dz * s + dx * side, mossCol(), { sc: [1.5, .4, 1.1], d: 0, rough: 1, l: L_MOSS });
+            }
+            if (rng() < .7) { const s = rng.range(.18, .4), sd = rng() < .5 ? -1 : 1; S.ico(.022, dx * s - dz * sd * .1, .1, dz * s + dx * sd * .1, mossCol(), { sc: [1, .7, .6], d: 0, rough: 1, l: L_MOSS }); }
+            for (const sd of [-1, 1]) if (rng() < .75) { const s = rng.range(.16, .44); tuft(dx * s - dz * sd * .13, dz * s + dx * sd * .13); }
+            S.arms.push([a0, S.verts, i + 1]);
+          });
+        }
       }
     };
     if (HASH.stack !== '1') { // #stack=1 keeps the old sprite-stack versions for comparison
@@ -6860,12 +6986,19 @@
 
         if (def.type === 'soup') {
           const asset = buildSoupAsset(def);
-          asset.iconCanvas = renderSoupIcon(renderer, asset.geometry);
+          if (def.connect) { // icon: a straight run of wall (the middle plus the two x arms)
+            const g = keepArms(asset.geometry, [0, 1, 3]);
+            asset.iconCanvas = renderSoupIcon(renderer, g);
+            g.dispose();
+          } else asset.iconCanvas = renderSoupIcon(renderer, asset.geometry);
           assetsById[def.id] = asset;
           const spawnAttr = new THREE.InstancedBufferAttribute(new Float32Array(MAX_INSTANCES).fill(-100), 1);
           asset.geometry.setAttribute('aSpawn', spawnAttr);
           addEraseAttrs(asset.geometry, MAX_INSTANCES);
-          const instMesh = new THREE.InstancedMesh(asset.geometry, makeSoupMaterial(def), MAX_INSTANCES);
+          if (def.connect) asset.geometry.setAttribute('aConn', new THREE.InstancedBufferAttribute(new Float32Array(MAX_INSTANCES).fill(15), 1));
+          const soupMat = makeSoupMaterial(def);
+          if (def.connect) foldArms(soupMat, 'aConn', 'mori-soup-arms');
+          const instMesh = new THREE.InstancedMesh(asset.geometry, soupMat, MAX_INSTANCES);
           instMesh.count = 0;
           instMesh.castShadow = true;
           instMesh.receiveShadow = true;
@@ -6879,12 +7012,14 @@
               .replace('#include <common>', '#include <common>\nuniform float uTime;\nattribute float aLayerH;' + DROP_DECL)
               .replace('#include <begin_vertex>', '#include <begin_vertex>' + dropVertexGLSL(false));
           };
+          if (def.connect) foldArms(instMesh.customDepthMaterial, 'aConn', 'mori-soup-arms-depth'); // shadows lose the folded arms too
           instMesh.userData.spawnAttr = spawnAttr;
           scene.add(instMesh);
           instancedById[def.id] = instMesh;
-          const ghostMesh = new THREE.Mesh(asset.geometry, new THREE.MeshBasicMaterial({
-            color: '#a8ffbe', transparent: true, opacity: 0.55, depthWrite: false
-          }));
+          const ghostMat = new THREE.MeshBasicMaterial({ color: '#a8ffbe', transparent: true, opacity: 0.55, depthWrite: false });
+          if (def.connect) foldArms(ghostMat, 'uConn', 'mori-soup-arms-ghost'); // the ghost shows the joins it would make
+          const ghostMesh = new THREE.Mesh(asset.geometry, ghostMat);
+          if (def.connect) ghostMesh.userData.conn = ghostMat.userData.conn;
           ghostMesh.visible = false;
           scene.add(ghostMesh);
           ghostMeshesById[def.id] = ghostMesh;
@@ -7813,6 +7948,35 @@
         }
         return out;
       }
+      // ---- joining walls (def.connect: the stone wall) ----
+      // a wall joins the same wall on a side neighbour standing at the same height
+      const WALL_DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]]; // arm order of the model: +x, +z, -x, -z
+      const WALL_HW = 0.12; // half thickness of a wall run, for the placing rules
+      function wallJoins(id, gx, gz, dx, dz) {
+        const nb = placedItems.get(`${gx + dx},${gz + dz}`);
+        return !!nb && nb.id === id && Math.abs(getTileElevation(gx + dx, gz + dz) - getTileElevation(gx, gz)) < 0.05;
+      }
+      // how a wall tile is drawn: a quarter turn picked from the tile (so a run doesn't repeat the same
+      // stones) and the mask of arms to unfold, in the model's own axes (same turn as the instance matrix)
+      function wallLook(id, gx, gz) {
+        const rot = Math.floor(hash2D(gx + 401, gz + 409, 77) * 4) % 4;
+        const c = Math.round(Math.cos(rot * Math.PI / 2)), s = Math.round(Math.sin(rot * Math.PI / 2));
+        let conn = 0;
+        WALL_DIRS.forEach(([lx, lz], i) => { if (wallJoins(id, gx, gz, lx * c + lz * s, -lx * s + lz * c)) conn |= 1 << i; });
+        return { rot, conn };
+      }
+      // wall runs between joined neighbours as rectangles (each pair once)
+      function wallRunRects() {
+        const out = [];
+        for (const e of placedItems.values()) {
+          if (!assetsById[e.id]?.def.connect) continue;
+          const cx = e.gx - HALF_GRID + 0.5, cz = e.gz - HALF_GRID + 0.5;
+          if (wallJoins(e.id, e.gx, e.gz, 1, 0)) out.push({ x0: cx, x1: cx + 1, z0: cz - WALL_HW, z1: cz + WALL_HW });
+          if (wallJoins(e.id, e.gx, e.gz, 0, 1)) out.push({ x0: cx - WALL_HW, x1: cx + WALL_HW, z0: cz, z1: cz + 1 });
+        }
+        return out;
+      }
+      const railRects = () => fenceRailRects().concat(wallRunRects());
       // can a snap prop with world footprint `r` stand here? (skipIdx: a snapProps entry to ignore)
       const rectSamples = (r) => { const out = []; for (const fx of [0, 0.5, 1]) for (const fz of [0, 0.5, 1]) out.push([r.x0 + (r.x1 - r.x0) * fx, r.z0 + (r.z1 - r.z0) * fz]); return out; };
       // shore props (def.shore = { land, water } local rects): the land end on flat dry ground, the water end over the pond
@@ -7842,7 +8006,7 @@
             if (rectsOverlap(r, { x0: ex - 0.3, x1: ex + 0.3, z0: ez - 0.3, z1: ez + 0.3 })) return true;
           } else if (rectHitsCircle(r, ex, ez, gridSolidR(e.id))) return true;
         }
-        for (const rail of fenceRailRects()) if (rectsOverlap(r, rail)) return true;
+        for (const rail of railRects()) if (rectsOverlap(r, rail)) return true;
         for (const fp of freeProps) {
           const solid = fp.id === 'rocks' ? 0.3 : assetsById[fp.id]?.def.solidRadius;
           if (rectHitsCircle(r, fp.wx, fp.wz, solid ? solid * (fp.scale || 1) : 0.05)) return true;
@@ -7946,6 +8110,8 @@
           else if (assetsById[entry.id]?.def.solidRadius) solidR = assetsById[entry.id].def.solidRadius;
           if (Math.hypot(wx - ex, wz - ez) < solidR + selfRadius) return true;
         }
+        // 3b. Stone wall runs between joined tiles (fence rails stay open: flowers grow under them)
+        for (const run of wallRunRects()) if (rectHitsCircle(run, wx, wz, selfRadius)) return true;
 
         // 4. Solid free-placed rocks & closely overlapping small props
         for (const fp of freeProps) {
@@ -8004,6 +8170,22 @@
               }
             } else if (rectHitsCircle(r, wx, wz, gridSolidR(def.id))) return false;
           }
+          if (def.connect) { // the runs it would grow toward joining neighbours: kept clear of props
+            const runs = [];
+            for (const [dx, dz] of WALL_DIRS) {
+              const nb = placedItems.get(`${hit.gx + dx},${hit.gz + dz}`);
+              if (!nb || nb.id !== def.id || Math.abs(getTileElevation(hit.gx + dx, hit.gz + dz) - getTileElevation(hit.gx, hit.gz)) >= 0.05) continue;
+              runs.push(dx ? { x0: Math.min(wx, wx + dx), x1: Math.max(wx, wx + dx), z0: wz - WALL_HW, z1: wz + WALL_HW }
+                : { x0: wx - WALL_HW, x1: wx + WALL_HW, z0: Math.min(wz, wz + dz), z1: Math.max(wz, wz + dz) });
+            }
+            for (const run of runs) {
+              for (const o of snapProps) if (rectsOverlap(run, footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation))) return false;
+              for (const fp of freeProps) {
+                const solid = fp.id === 'rocks' ? 0.3 : assetsById[fp.id]?.def.solidRadius;
+                if (solid && rectHitsCircle(run, fp.wx, fp.wz, solid * (fp.scale || 1))) return false;
+              }
+            }
+          }
           const checkR = def.id === 'cabin' ? 0.46 : (def.id === 'campfire' ? 0.38 : 0.22);
           for (const fp of freeProps) {
             if (fp.id === 'rocks' && Math.hypot(wx - fp.wx, wz - fp.wz) < checkR + 0.26 * (fp.scale || 1.0)) {
@@ -8046,11 +8228,13 @@
           const mesh = instancedById[def.id], geo = mesh.geometry;
           const van = geo.attributes.aVanish.array, hot = geo.attributes.aHot.array, sp = mesh.userData.spawnAttr.array;
           const vari = geo.attributes.aVariant ? geo.attributes.aVariant.array : null;
+          const conn = geo.attributes.aConn ? geo.attributes.aConn.array : null;
           const refs = (mesh.userData.refs = []);
           let n = 0;
           const put = (item) => {
             if (n >= MAX_INSTANCES) return;
             if (vari) vari[n] = variantAt(def, item.wx, item.wz);
+            if (conn) conn[n] = item.conn ?? 0;
             dummyObj.position.set(item.wx, item.wy, item.wz);
             dummyObj.rotation.set(0, item.rotation * (Math.PI / 2), 0);
             if (def.tree) { // trees differ a little in size and height (±8%, ±5%), from where they stand
@@ -8075,6 +8259,7 @@
           geo.attributes.aVanish.needsUpdate = true;
           geo.attributes.aHot.needsUpdate = true;
           if (vari) geo.attributes.aVariant.needsUpdate = true;
+          if (conn) geo.attributes.aConn.needsUpdate = true;
         });
         hotMarks.length = 0;
         applyEraseHot();
@@ -8089,7 +8274,10 @@
         else if (kind === 'snap') wy = snapGroundY(def, o.wx, o.wz, o.rotation);
         else { wy = getContinuousTerrainHeight(o.wx, o.wz); scale = o.scale || 1; }
         const cabin = def.type === '3d_cabin';
-        if (isInstancedDef(def)) vanishing.push({ kind: 'inst', id: o.id, wx, wy, wz, rotation: o.rotation, scale, spawnT: -100, goneAt: now });
+        if (def.connect && kind === 'placed') { // as it was drawn: joined to the neighbours still standing
+          const L = wallLook(o.id, o.gx, o.gz);
+          vanishing.push({ kind: 'inst', id: o.id, wx, wy, wz, rotation: L.rot, conn: L.conn, scale, spawnT: -100, goneAt: now });
+        } else if (isInstancedDef(def)) vanishing.push({ kind: 'inst', id: o.id, wx, wy, wz, rotation: o.rotation, scale, spawnT: -100, goneAt: now });
         else if (cabin) vanishing.push({ kind: 'cabin', wx, wy, wz, rotY: o.rotation * (Math.PI / 2), goneAt: now });
         const big = cabin || def.category === 'flora' || def.category === 'build';
         if (vanishing.length < 40) burstDust(wx, wy, wz, cabin ? 14 : (big ? 7 : (isInstancedDef(def) ? 3 : 6)), cabin ? 0.6 : (big ? 0.32 : 0.2)); // a whole island going: dust for the first few
@@ -8196,7 +8384,10 @@
           const wy = getTileElevation(entry.gx, entry.gz);
           const rotY = entry.rotation * (Math.PI / 2);
 
-          if (isInstancedDef(def)) {
+          if (def.connect) {
+            const L = wallLook(entry.id, entry.gx, entry.gz);
+            buckets[entry.id].push({ wx, wy, wz, rotation: L.rot, conn: L.conn, scale: 1.0, spawnT: entry.spawnT ?? -100, ref: entry });
+          } else if (isInstancedDef(def)) {
             buckets[entry.id].push({ wx, wy, wz, rotation: entry.rotation, scale: 1.0, spawnT: entry.spawnT ?? -100, ref: entry });
           } else if (def.type === '3d_cabin') {
             const cabin = buildStorybookCabinPrefab();
@@ -8369,6 +8560,11 @@
           } else if (entry.id === 'fence' || entry.id === 'bench') {
             const a = hash2D(entry.gx, entry.gz, 7) * Math.PI * 2;
             spawnGrassCluster(wx + Math.cos(a) * 0.28, wz + Math.sin(a) * 0.28);
+          } else if (assetsById[entry.id]?.def.connect) { // stone wall: a clump against each face (runs block the rest)
+            for (let k = 0; k < 2; k++) {
+              const a = (hash2D(entry.gx, entry.gz, k + 11) + k * 0.5) * Math.PI * 2;
+              spawnGrassCluster(wx + Math.cos(a) * 0.27, wz + Math.sin(a) * 0.27);
+            }
           }
         });
 
@@ -8895,7 +9091,7 @@
           if (e.id === 'path') { if (rectHitsCircle({ x0: ex - 0.46, x1: ex + 0.46, z0: ez - 0.46, z1: ez + 0.46 }, cx, cz, CELL_R + 0.04)) return true; }
           else if (Math.hypot(cx - ex, cz - ez) < Math.max(0.18, gridSolidR(e.id)) + R) return true; // stays off isPondTile
         }
-        for (const rail of fenceRailRects()) if (rectHitsCircle(rail, cx, cz, R)) return true;
+        for (const rail of railRects()) if (rectHitsCircle(rail, cx, cz, R)) return true;
         for (const o of snapProps) {
           const def = assetsById[o.id].def;
           if (def.shore) { if (rectHitsCircle(localRect(def.shore.land, o.wx, o.wz, o.rotation), cx, cz, CELL_R + 0.32)) return true; }
@@ -9276,6 +9472,11 @@
             ghost.position.set(tileX, tileY + 0.02, tileZ);
             ghost.rotation.y = currentRotation * (Math.PI / 2);
             if (ghost.userData.varOfs) { const d = assetsById[selectedTool].def; ghost.userData.varOfs.value = variantAt(d, tileX, tileZ) / d.variants; }
+            if (ghost.userData.conn) { // a wall ghost shows the joins it would make, turned like the real one
+              const L = wallLook(selectedTool, gx, gz);
+              ghost.rotation.y = L.rot * (Math.PI / 2);
+              ghost.userData.conn.value = L.conn;
+            }
             setGhostValidityColor(ghost, valid);
           }
         }
@@ -10907,6 +11108,21 @@
             return { sway, solid };
           },
           variantsOf: (id) => { const m = instancedById[id], a = m && m.geometry.attributes.aVariant; return a ? Array.from(a.array.slice(0, m.count)) : null; },
+          // joining walls as drawn: tile, quarter turn, and the unfolded arms turned back to world sides
+          // ('+x', '+z', '-x', '-z'), read from the instance buffers the shader uses (aConn + matrix)
+          walls: (id = 'stonewall') => {
+            const m = instancedById[id], a = m.geometry.attributes.aConn.array, out = [], mat = new THREE.Matrix4();
+            for (let i = 0; i < m.count; i++) {
+              m.getMatrixAt(i, mat); const e = mat.elements;
+              const rot = ((Math.round(Math.atan2(e[8], e[0]) / (Math.PI / 2)) % 4) + 4) % 4; // e[8] = sin, e[0] = cos of the y turn
+              const c = Math.round(Math.cos(rot * Math.PI / 2)), s = Math.round(Math.sin(rot * Math.PI / 2)), sides = [];
+              WALL_DIRS.forEach(([lx, lz], k) => { if ((a[i] >> k) & 1) { const wx = lx * c + lz * s, wz = -lx * s + lz * c; sides.push((wx ? (wx > 0 ? '+x' : '-x') : (wz > 0 ? '+z' : '-z'))); } });
+              out.push({ gx: Math.round(e[12] + HALF_GRID - 0.5), gz: Math.round(e[14] + HALF_GRID - 0.5), rot, conn: a[i], sides: sides.sort(), gone: m.geometry.attributes.aVanish.array[i] < 1e8 });
+            }
+            return out;
+          },
+          wallTris: (id = 'stonewall') => { const a = instancedById[id].geometry.attributes.aArm.array, n = [0, 0, 0, 0, 0]; for (let v = 0; v < a.length; v += 3) n[a[v]]++; return n; }, // [middle, arm 1..4]
+          wallGhostConn: () => { const g = ghostMeshesById.stonewall; return g.visible ? g.userData.conn.value : null; },
           undo: (dir = -1) => undoRedo(dir),
           islandList: () => JSON.stringify(serializeIsland()),
           grassTufts: () => Array.from({ length: grassClutterInst.count }, (_, i) => Array.from(grassClutterInst.instanceMatrix.array.subarray(i * 16, i * 16 + 16), (v) => Math.round(v * 1e5) / 1e5)),
