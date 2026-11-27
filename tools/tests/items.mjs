@@ -75,6 +75,9 @@ export default async ({ wait, evaluate, mouse, key, log }) => {
   for (let k = 0; k < 4; k++) await placeSomewhere('cherry');
   const looks = await J(`window.__mori.variantsOf('cherry')`);
   ok('cherries mix their looks (one mesh, per-tile variant)', Array.isArray(looks) && new Set(looks).size > 1 && looks.every((v) => v >= 0 && v <= 2), JSON.stringify(looks));
+  // the weeping cherry's hanging strands are marked to sway on their own; the other trees have none
+  const ws = await J(`window.__mori.swayPixels('weeping')`), cs = await J(`window.__mori.swayPixels('cherry')`);
+  ok('weeping strands marked to sway, trunk and cap solid', ws && ws.sway > 500 && ws.solid > 500 && cs && cs.sway === 0, JSON.stringify({ ws, cs }));
   await wait(1500);
   const errs = await J('window.__errs');
   ok('no console errors after placing every item', errs.length === 0, errs.slice(0, 3).join(' | '));
