@@ -1509,7 +1509,8 @@
         osc.stop(now + 0.13);
       }
 
-      playRemove() {
+      // erase: a soft "pop", then an airy lift as the pieces float away
+      playRemove(pan = 0) {
         if (!this.ctx || !this.enabled) return;
         const now = this.ctx.currentTime;
         const osc = this.ctx.createOscillator();
@@ -1521,9 +1522,17 @@
         gain.gain.linearRampToValueAtTime(0.13, now + 0.01);
         gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.11);
         osc.connect(gain);
-        this.out(gain);
+        this.out(gain, pan);
         osc.start(now);
         osc.stop(now + 0.12);
+        const len = 0.32, buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * len), this.ctx.sampleRate), d = buf.getChannelData(0);
+        for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+        const src = this.ctx.createBufferSource(), bp = this.ctx.createBiquadFilter(), g2 = this.ctx.createGain();
+        src.buffer = buf; bp.type = 'bandpass'; bp.Q.value = 2.2;
+        bp.frequency.setValueAtTime(900, now + 0.04); bp.frequency.exponentialRampToValueAtTime(3600, now + 0.04 + len);
+        g2.gain.setValueAtTime(0.0001, now + 0.04); g2.gain.linearRampToValueAtTime(0.045, now + 0.12); g2.gain.exponentialRampToValueAtTime(0.0001, now + 0.04 + len);
+        src.connect(bp); bp.connect(g2); this.out(g2, pan);
+        src.start(now + 0.04); src.stop(now + 0.05 + len);
       }
 
       // terrain edit: a soft earthy thump (rising when raised, sinking when lowered) + crumbling soil
@@ -1659,10 +1668,15 @@
     function dropTotalTime(layers) {
       return Math.floor((layers - 1) / dropGroupFor(layers)) * DROP_STRIDE + DROP_FALL;
     }
+    // Erased objects run the drop backwards: slices (or soup part groups) leave from the top down,
+    // spinning, drifting apart and shrinking as they float up (aVanish = when it started, 1e9 = never)
+    const VANISH_STRIDE = 0.014, VANISH_RISE = 0.26, VANISH_SPAN = 0.3; // s (whole stack leaves within SPAN + RISE)
+    const VANISH_T = VANISH_SPAN + VANISH_RISE + 0.08; // s an erased object stays in its instance buffer
     const DROP_DECL = `
       uniform float uDropLayers;
       uniform float uDropGroup;
-      attribute float aSpawn;`;
+      attribute float aSpawn;
+      attribute float aVanish;`;
     function dropVertexGLSL(withFlash) {
       return `
       {
@@ -1700,6 +1714,31 @@
           else if (tl < FALL + 0.035) {
             vDropFlash = 1.0 - (tl - FALL) / 0.035;
           }` : ''}
+        }
+      }
+      {
+        float vSince = uTime - aVanish;
+        if (vSince > 0.0) {
+          float li = floor(aLayerH * (uDropLayers - 1.0) + 0.5);
+          float g = floor(li / uDropGroup);
+          float G = floor((uDropLayers - 1.0) / uDropGroup);
+          float stride = min(${VANISH_STRIDE.toFixed(4)}, ${VANISH_SPAN.toFixed(3)} / max(G, 1.0));
+          float tl = vSince - (G - g) * stride; // the top leaves first
+          if (tl > 0.0) {
+            float p = clamp(tl / ${VANISH_RISE.toFixed(3)}, 0.0, 1.0);
+            float e = p * p;
+            float seed = 0.0;
+            #ifdef USE_INSTANCING
+              seed = instanceMatrix[3][0] * 3.17 + instanceMatrix[3][2] * 1.93;
+            #endif
+            float r = fract(sin(li * 12.9898 + seed) * 43758.5453);
+            float ang = (r < 0.5 ? -1.0 : 1.0) * mix(0.25, 0.6, fract(r * 7.0)) * e;
+            float cs = cos(ang), sn = sin(ang);
+            transformed.xz = mat2(cs, -sn, sn, cs) * transformed.xz * (1.0 - smoothstep(0.45, 1.0, p));
+            transformed.xz += (vec2(fract(r * 13.0), fract(r * 29.0)) - 0.5) * e * 0.45;
+            transformed.y += e * 0.75;
+            if (p >= 1.0) transformed *= 0.0;
+          }
         }
       }`;
     }
@@ -1755,14 +1794,18 @@
             uniform float uCanopySplit;
             ${useLayerHeight ? 'attribute float aLayerH;' : ''}
             ${useGrassTip ? 'attribute float aTipWeight;' : ''}
-            ${useDrop ? DROP_DECL + '\n            varying float vDropFlash;' : ''}
+            ${useDrop ? DROP_DECL + '\n            attribute float aHot;\n            varying float vDropFlash;\n            varying float vHot;' : ''}
             varying float vWorldY;
             varying vec2 vWorldXZ;`
           )
           .replace(
             '#include <begin_vertex>',
             `#include <begin_vertex>
-            ${useDrop ? 'vDropFlash = 0.0;' + dropVertexGLSL(true) : ''}
+            ${useDrop ? `vDropFlash = 0.0;
+            vHot = aHot;
+            if (aHot > 0.5) { // the eraser's target trembles a little (more toward the top)
+              transformed.xz += vec2(sin(uTime * 17.0), cos(uTime * 13.0)) * 0.016 * aLayerH;
+            }` + dropVertexGLSL(true) : ''}
             if (uWindStrength > 0.0001) {
               float hFactor = ${useGrassTip ? 'aTipWeight' : (useLayerHeight ? 'aLayerH * aLayerH' : 'clamp(position.y, 0.0, 2.0)')};
               float phase = 0.0;
@@ -1812,7 +1855,7 @@
             uniform float uFogBottom;
             uniform float uFogTop;
             uniform float uEmissiveNightBoost;
-            ${useDrop ? 'varying float vDropFlash;' : ''}
+            ${useDrop ? 'varying float vDropFlash;\n            varying float vHot;' : ''}
             varying float vWorldY;
             varying vec2 vWorldXZ;`
           )
@@ -1822,7 +1865,11 @@
             if (uEmissiveNightBoost > 0.01) {
               totalEmissiveRadiance *= mix(0.25, uEmissiveNightBoost, smoothstep(0.1, 0.85, uNightFactor));
             }
-            ${useDrop ? 'totalEmissiveRadiance += vec3(1.0, 0.93, 0.78) * vDropFlash * 0.55;' : ''}`
+            ${useDrop ? `totalEmissiveRadiance += vec3(1.0, 0.93, 0.78) * vDropFlash * 0.55;
+            if (vHot > 0.5) { // the eraser's target: flushed red, gently pulsing
+              diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0, 0.32, 0.26) * max(0.45, dot(diffuseColor.rgb, vec3(0.5))), 0.55);
+              totalEmissiveRadiance += vec3(0.85, 0.16, 0.10) * (0.22 + 0.1 * sin(uTime * 7.0));
+            }` : ''}`
           )
           .replace(
             '#include <fog_fragment>',
@@ -6196,6 +6243,12 @@
       fenceGhost.visible = false;
       scene.add(fenceGhost);
 
+      // per-instance eraser attributes of the dropping item meshes: aVanish (when it started floating
+      // away, 1e9 = never) and aHot (1 = the eraser's target, flushed red)
+      function addEraseAttrs(geo, n) {
+        geo.setAttribute('aVanish', new THREE.InstancedBufferAttribute(new Float32Array(n).fill(1e9), 1));
+        geo.setAttribute('aHot', new THREE.InstancedBufferAttribute(new Float32Array(n), 1));
+      }
       ITEM_DEFS.forEach((def) => {
         if (def.type === '3d_cabin') {
           assetsById[def.id] = { def, iconCanvas: buildCustomIcon('cabin') };
@@ -6219,6 +6272,7 @@
           assetsById[def.id] = asset;
           const spawnAttr = new THREE.InstancedBufferAttribute(new Float32Array(MAX_INSTANCES).fill(-100), 1);
           asset.geometry.setAttribute('aSpawn', spawnAttr);
+          addEraseAttrs(asset.geometry, MAX_INSTANCES);
           const instMesh = new THREE.InstancedMesh(asset.geometry, makeSoupMaterial(def), MAX_INSTANCES);
           instMesh.count = 0;
           instMesh.castShadow = true;
@@ -6275,6 +6329,7 @@
 
         const spawnAttr = new THREE.InstancedBufferAttribute(new Float32Array(maxN).fill(-100), 1);
         asset.geometry.setAttribute('aSpawn', spawnAttr);
+        if (!def.seedScatter) addEraseAttrs(asset.geometry, maxN);
         if (def.seedScatter) {
           const tintAttr = new THREE.InstancedBufferAttribute(new Float32Array(maxN * 3).fill(1), 3);
           asset.geometry.setAttribute('aTint', tintAttr);
@@ -7311,6 +7366,84 @@
         }
       }
 
+      /* ---- ERASED OBJECTS FLOAT AWAY (eraser step 2) ---- */
+      // An erased object leaves its list at once (so every rule, the grass and the save forget it),
+      // but stays drawn for VANISH_T as a "vanishing" entry: item meshes run the drop shader backwards
+      // (aVanish), cabins get an unmerged prefab whose parts float up one by one (animate, section 16),
+      // paths and fences just go in a puff of dust. No extra draw calls; shadows refresh meanwhile.
+      let itemBuckets = {}, vanishing = [], vanishTimer = 0;
+      function fillItemMeshes() {
+        const now = performance.now() * 0.001;
+        ITEM_DEFS.forEach((def) => {
+          if (!isInstancedDef(def) || def.seedScatter) return;
+          const mesh = instancedById[def.id], geo = mesh.geometry;
+          const van = geo.attributes.aVanish.array, hot = geo.attributes.aHot.array, sp = mesh.userData.spawnAttr.array;
+          const refs = (mesh.userData.refs = []);
+          let n = 0;
+          const put = (item) => {
+            if (n >= MAX_INSTANCES) return;
+            dummyObj.position.set(item.wx, item.wy, item.wz);
+            dummyObj.rotation.set(0, item.rotation * (Math.PI / 2), 0);
+            dummyObj.scale.setScalar(item.scale);
+            dummyObj.updateMatrix();
+            mesh.setMatrixAt(n, dummyObj.matrix);
+            sp[n] = item.spawnT;
+            van[n] = item.goneAt ?? 1e9;
+            hot[n] = 0;
+            refs.push(item.ref || null);
+            n++;
+          };
+          (itemBuckets[def.id] || []).forEach(put);
+          for (const v of vanishing) if (v.kind === 'inst' && v.id === def.id && now - v.goneAt <= VANISH_T) put(v);
+          mesh.count = n;
+          mesh.visible = n > 0; // an empty InstancedMesh still costs a draw call (x2 with shadows)
+          mesh.instanceMatrix.needsUpdate = true;
+          mesh.userData.spawnAttr.needsUpdate = true;
+          geo.attributes.aVanish.needsUpdate = true;
+          geo.attributes.aHot.needsUpdate = true;
+        });
+        hotMarks.length = 0;
+        applyEraseHot();
+      }
+      // kind: 'placed' (1-tile grid), 'snap' (quarter-tile), 'free'; o: the entry just taken out of its list
+      function vanishItem(kind, o) {
+        const def = assetsById[o.id]?.def;
+        if (!def) return;
+        const now = performance.now() * 0.001;
+        let wx = o.wx, wz = o.wz, wy, scale = 1;
+        if (kind === 'placed') { wx = o.gx - HALF_GRID + 0.5; wz = o.gz - HALF_GRID + 0.5; wy = getTileElevation(o.gx, o.gz); }
+        else if (kind === 'snap') wy = snapGroundY(def, o.wx, o.wz, o.rotation);
+        else { wy = getContinuousTerrainHeight(o.wx, o.wz); scale = o.scale || 1; }
+        const cabin = def.type === '3d_cabin';
+        if (isInstancedDef(def)) vanishing.push({ kind: 'inst', id: o.id, wx, wy, wz, rotation: o.rotation, scale, spawnT: -100, goneAt: now });
+        else if (cabin) vanishing.push({ kind: 'cabin', wx, wy, wz, rotY: o.rotation * (Math.PI / 2), goneAt: now });
+        const big = cabin || def.category === 'flora' || def.category === 'build';
+        if (vanishing.length < 40) burstDust(wx, wy, wz, cabin ? 14 : (big ? 7 : (isInstancedDef(def) ? 3 : 6)), cabin ? 0.6 : (big ? 0.32 : 0.2)); // a whole island going: dust for the first few
+        markShadowsDirty(VANISH_T + 0.1);
+        if (vanishTimer) clearTimeout(vanishTimer);
+        vanishTimer = setTimeout(expireVanish, VANISH_T * 1000 + 40);
+      }
+      let vanishHold = false; // debug: keep erased objects in the buffers (headless frames take seconds)
+      function expireVanish() {
+        vanishTimer = 0;
+        if (vanishHold) { vanishTimer = setTimeout(expireVanish, 200); return; }
+        const now = performance.now() * 0.001;
+        vanishing = vanishing.filter((v) => now - v.goneAt <= VANISH_T);
+        for (let i = activeCabins.length - 1; i >= 0; i--) {
+          const cb = activeCabins[i];
+          if (cb.goneAt == null || now - cb.goneAt <= VANISH_T) continue;
+          cabinGroupContainer.remove(cb.mesh);
+          disposeObjectTree(cb.mesh);
+          activeCabins.splice(i, 1);
+        }
+        fillItemMeshes();
+        if (vanishing.length) vanishTimer = setTimeout(expireVanish, VANISH_T * 1000 + 40);
+      }
+      function clearVanishing() { // the island is replaced as a whole (reset, load): nothing floats over it
+        vanishing = [];
+        if (vanishTimer) { clearTimeout(vanishTimer); vanishTimer = 0; }
+      }
+
       function rebuildInstances() {
         const buckets = {};
         ITEM_DEFS.forEach((d) => { if (isInstancedDef(d)) buckets[d.id] = []; });
@@ -7390,7 +7523,7 @@
           const rotY = entry.rotation * (Math.PI / 2);
 
           if (isInstancedDef(def)) {
-            buckets[entry.id].push({ wx, wy, wz, rotation: entry.rotation, scale: 1.0, spawnT: entry.spawnT ?? -100 });
+            buckets[entry.id].push({ wx, wy, wz, rotation: entry.rotation, scale: 1.0, spawnT: entry.spawnT ?? -100, ref: entry });
           } else if (def.type === '3d_cabin') {
             const cabin = buildStorybookCabinPrefab();
             cabin.position.set(wx, wy, wz);
@@ -7446,7 +7579,7 @@
           const def = assetsById[o.id]?.def;
           if (!def) return;
           const wy = snapGroundY(def, o.wx, o.wz, o.rotation), rotY = o.rotation * (Math.PI / 2);
-          if (isInstancedDef(def)) buckets[o.id].push({ wx: o.wx, wy, wz: o.wz, rotation: o.rotation, scale: 1.0, spawnT: o.spawnT ?? -100 });
+          if (isInstancedDef(def)) buckets[o.id].push({ wx: o.wx, wy, wz: o.wz, rotation: o.rotation, scale: 1.0, spawnT: o.spawnT ?? -100, ref: o });
           addItemExtras(o.id, def, o.wx, wy, o.wz, rotY, Math.round(o.wx * 4) + 101, Math.round(o.wz * 4) + 101);
         });
         pickPointLights(true);
@@ -7456,7 +7589,7 @@
           const def = assetsById[fp.id]?.def;
           if (!def || !isInstancedDef(def)) return;
           const wy = getContinuousTerrainHeight(fp.wx, fp.wz);
-          buckets[fp.id].push({ wx: fp.wx, wy, wz: fp.wz, rotation: fp.rotation, scale: fp.scale || 1.0, spawnT: fp.spawnT ?? -100 });
+          buckets[fp.id].push({ wx: fp.wx, wy, wz: fp.wz, rotation: fp.rotation, scale: fp.scale || 1.0, spawnT: fp.spawnT ?? -100, ref: fp });
           if (def.contactRadius > 0) {
             contactShadowBaseList.push({
               x: fp.wx, y: wy + 0.026, z: fp.wz, r: def.contactRadius * 1.75 * (fp.scale || 1.0),
@@ -7465,25 +7598,20 @@
           }
         });
 
-        // Apply InstancedMeshes
-        ITEM_DEFS.forEach((def) => {
-          if (!isInstancedDef(def) || def.seedScatter) return;
-          const list = buckets[def.id];
-          const mesh = instancedById[def.id];
-          for (let i = 0; i < list.length && i < MAX_INSTANCES; i++) {
-            const item = list[i];
-            dummyObj.position.set(item.wx, item.wy, item.wz);
-            dummyObj.rotation.set(0, item.rotation * (Math.PI / 2), 0);
-            dummyObj.scale.setScalar(item.scale);
-            dummyObj.updateMatrix();
-            mesh.setMatrixAt(i, dummyObj.matrix);
-            mesh.userData.spawnAttr.array[i] = item.spawnT;
-          }
-          mesh.count = Math.min(list.length, MAX_INSTANCES);
-          mesh.visible = mesh.count > 0; // an empty InstancedMesh still costs a draw call (x2 with shadows)
-          mesh.instanceMatrix.needsUpdate = true;
-          mesh.userData.spawnAttr.needsUpdate = true;
-        });
+        // Apply InstancedMeshes (+ the erased ones still floating away)
+        itemBuckets = buckets;
+        fillItemMeshes();
+        // erased cabins come apart part by part (unmerged prefab, animated in animate)
+        for (const v of vanishing) {
+          if (v.kind !== 'cabin' || performance.now() * 0.001 - v.goneAt > VANISH_T) continue;
+          const cabin = buildStorybookCabinPrefab();
+          cabin.position.set(v.wx, v.wy, v.wz);
+          cabin.rotation.y = v.rotY;
+          cabinGroupContainer.add(cabin);
+          prepareCabinDrop(cabin);
+          cabin.userData.dropDone = true; // stays unmerged: its parts float away one by one
+          activeCabins.push({ mesh: cabin, baseX: v.wx, baseY: v.wy, baseZ: v.wz, rotY: v.rotY, spawnT: -100, goneAt: v.goneAt });
+        }
 
         pathMesh.geometry.dispose(); pathMesh.geometry = buildPathGeometry(pathTiles); pathMesh.count = pathTiles.length;
         fencePostInst.count = fencePostIdx; fencePostInst.instanceMatrix.needsUpdate = true;
@@ -8129,10 +8257,7 @@
       }
 
       function placeAtHit(hit) {
-        if (selectedTool === 'delete') {
-          removeAtHit(hit);
-          return;
-        }
+        if (selectedTool === 'delete') return; // the eraser works on screen (beginEraseStroke)
         if (assetsById[selectedTool]?.def.seedScatter) { beginSeedStroke(hit); return; }
         const tt = terrainToolById(selectedTool);
         if (tt) { if (tt.paint !== undefined) beginPaintStroke(hit, tt.paint); else editTerrainAt(hit.gx, hit.gz, tt.dir); return; }
@@ -8164,44 +8289,140 @@
         }
       }
 
-      function removeAtHit(hit) {
-        // A snap prop whose footprint is under the cursor goes first
-        const si = snapPropAt(hit.wx, hit.wz);
-        if (si !== -1) {
-          snapProps.splice(si, 1);
-          rebuildInstances();
-          audio.playRemove();
-          return;
-        }
-        // Check closest free-placed prop within 0.55 radius first
-        let bestIdx = -1, bestDist = 0.55;
-        for (let i = 0; i < freeProps.length; i++) {
-          const d = Math.hypot(freeProps[i].wx - hit.wx, freeProps[i].wz - hit.wz);
-          if (d < bestDist) { bestDist = d; bestIdx = i; }
-        }
-        if (bestIdx !== -1) {
-          freeProps.splice(bestIdx, 1);
-          rebuildInstances();
-          audio.playRemove();
-          return;
-        }
-        // seed flowers: a little patch at a time
-        let erased = 0;
-        for (const f of seedFlowers) {
-          if (!f.erased && dist2(f.wx, f.wz, hit.wx, hit.wz) < 0.3 * 0.3) { f.erased = true; erased++; }
-        }
-        if (erased) {
-          rebuildSeedFlowers();
-          audio.playRemove();
-          return;
-        }
-        const key = `${hit.gx},${hit.gz}`;
-        if (placedItems.has(key)) {
-          placedItems.delete(key);
-          rebuildInstances();
-          audio.playRemove();
-        }
+      /* ---- ERASER (step 1): the object nearest the pointer on screen ---- */
+      // Every object is a short upright segment on screen (its foot to its top) with a radius; the
+      // pointer picks the one it is closest to, of any kind. When the pointer is on several at once,
+      // the smallest wins (a flower in front of a cabin, a mushroom at a tree's foot). Seed flowers go
+      // a small patch at a time. The target flushes red and trembles (aHot on the item meshes, a red
+      // ghost for cabins, paths and fences, a red ring for a seed patch). Drag to erase one after another.
+      const ERASE_PICK_PX = 14;  // how far off an object the pointer may be (CSS px)
+      const SEED_PATCH_R = 0.24; // world units around the picked seed flower
+      const _ep = new THREE.Vector3(), _hCache = {};
+      let eraseTarget = null, erasePointer = null, eraseStroke = null, eraseGhost = null;
+      const hotMarks = []; // [mesh, instance] currently flushed red
+      function itemHeight(id) {
+        if (_hCache[id] != null) return _hCache[id];
+        const a = assetsById[id], def = a.def;
+        let h = 0.3;
+        if (def.type === '3d_cabin') h = 1.5;
+        else if (def.type === 'auto_path') h = 0.04;
+        else if (def.type === 'auto_fence') h = 0.36;
+        else if (a.geometry) { if (!a.geometry.boundingBox) a.geometry.computeBoundingBox(); h = Math.max(0.05, a.geometry.boundingBox.max.y); }
+        return (_hCache[id] = h);
       }
+      function toClient(x, y, z) {
+        _ep.set(x, y, z).project(camera);
+        return [(_ep.x + 1) * 0.5 * window.innerWidth, (1 - _ep.y) * 0.5 * window.innerHeight];
+      }
+      function segDist(px, py, a, b) {
+        const dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy;
+        const t = L > 1e-6 ? THREE.MathUtils.clamp(((px - a[0]) * dx + (py - a[1]) * dy) / L, 0, 1) : 0;
+        return Math.hypot(px - a[0] - dx * t, py - a[1] - dy * t);
+      }
+      function pickEraseTarget(cx, cy) {
+        if (!cx && !cy) return null;
+        const ppu = window.innerHeight * camera.zoom / (camera.top - camera.bottom); // CSS px per world unit
+        let best = null, bestScore = ERASE_PICK_PX, bestR = 1e9;
+        const consider = (t, x, y, z, h, r) => {
+          const score = segDist(cx, cy, toClient(x, y, z), toClient(x, y + h, z)) - r * ppu;
+          // inside several: the smallest; otherwise the closest
+          if (score <= 0 ? (bestScore > 0 || r < bestR) : score < bestScore) {
+            best = t; bestScore = Math.max(score, 0); bestR = r;
+            t.x = x; t.y = y; t.z = z;
+          }
+        };
+        placedItems.forEach((e) => {
+          const def = assetsById[e.id].def, x = e.gx - HALF_GRID + 0.5, z = e.gz - HALF_GRID + 0.5;
+          const r = def.type === '3d_cabin' ? 0.52 : (def.type === 'auto_path' ? 0.42 : (def.type === 'auto_fence' ? 0.12 : Math.max(gridSolidR(e.id), def.contactRadius || 0, 0.12)));
+          consider({ kind: 'placed', ref: e, id: e.id }, x, getTileElevation(e.gx, e.gz), z, itemHeight(e.id), r);
+        });
+        snapProps.forEach((o) => {
+          const def = assetsById[o.id].def, rc = footprintRect(def, o.wx, o.wz, o.rotation);
+          consider({ kind: 'snap', ref: o, id: o.id }, (rc.x0 + rc.x1) / 2, snapGroundY(def, o.wx, o.wz, o.rotation), (rc.z0 + rc.z1) / 2,
+            itemHeight(o.id), Math.max(0.1, (rc.x1 - rc.x0 + rc.z1 - rc.z0) / 4));
+        });
+        freeProps.forEach((fp) => {
+          const def = assetsById[fp.id].def, sc = fp.scale || 1;
+          consider({ kind: 'free', ref: fp, id: fp.id }, fp.wx, getContinuousTerrainHeight(fp.wx, fp.wz), fp.wz,
+            itemHeight(fp.id) * sc, (fp.id === 'rocks' ? 0.34 : (def.solidRadius || 0.1)) * sc);
+        });
+        const now = performance.now() * 0.001;
+        for (const f of seedFlowers) {
+          if (f.erased || f.goneAt != null || now < f.spawnT) continue;
+          consider({ kind: 'seeds', ref: f, id: 'seeds' }, f.wx, getContinuousTerrainHeight(f.wx, f.wz), f.wz, 0.1 * f.scale, 0.05);
+        }
+        if (best && best.kind === 'seeds') { // the patch around it
+          const c = best.ref;
+          best.seeds = seedFlowers.filter((f) => !f.erased && f.goneAt == null && dist2(f.wx, f.wz, c.wx, c.wz) < SEED_PATCH_R * SEED_PATCH_R);
+        }
+        return best;
+      }
+      function applyEraseHot() {
+        for (const [mesh, i] of hotMarks) { mesh.geometry.attributes.aHot.array[i] = 0; mesh.geometry.attributes.aHot.needsUpdate = true; }
+        hotMarks.length = 0;
+        const t = eraseTarget, mesh = t && instancedById[t.id];
+        if (!mesh || !mesh.userData.refs || !mesh.geometry.attributes.aHot) return;
+        const i = mesh.userData.refs.indexOf(t.ref);
+        if (i < 0) return;
+        mesh.geometry.attributes.aHot.array[i] = 1;
+        mesh.geometry.attributes.aHot.needsUpdate = true;
+        hotMarks.push([mesh, i]);
+      }
+      const sameTarget = (a, b) => (a === b) || (!!a && !!b && a.ref === b.ref && (a.seeds?.length || 0) === (b.seeds?.length || 0));
+      function setEraseTarget(t) {
+        if (sameTarget(t, eraseTarget)) { if (t) eraseTarget = t; return; }
+        eraseTarget = t;
+        applyEraseHot();
+        updateHoverVisuals();
+      }
+      // pointer over the canvas with the eraser (or none): re-pick (also every frame, the camera moves)
+      function refreshEraseTarget() {
+        const on = selectedTool === 'delete' && erasePointer && !isPhotoMode && !isExploded && intro.phase === 'done';
+        setEraseTarget(on ? pickEraseTarget(erasePointer[0], erasePointer[1]) : null);
+      }
+      // take one target out of its list; it floats away (vanishItem) and the island rebuilds once
+      function eraseTargetNow(t) {
+        if (!t) return false;
+        if (t.kind === 'seeds') {
+          let n = 0;
+          for (const f of t.seeds) if (!f.erased) { f.erased = true; n++; }
+          if (!n) return false;
+          rebuildSeedFlowers();
+        } else if (t.kind === 'placed') {
+          const key = `${t.ref.gx},${t.ref.gz}`;
+          if (placedItems.get(key) !== t.ref) return false;
+          placedItems.delete(key);
+          vanishItem('placed', t.ref);
+          rebuildInstances();
+        } else {
+          const list = t.kind === 'snap' ? snapProps : freeProps, i = list.indexOf(t.ref);
+          if (i < 0) return false;
+          list.splice(i, 1);
+          vanishItem(t.kind, t.ref);
+          rebuildInstances();
+        }
+        audio.playRemove(screenPan(t.x, t.y, t.z));
+        if (eraseTarget === t) eraseTarget = null;
+        return true;
+      }
+      // a short right click anywhere (any tool) or a left click with the eraser
+      function removeAtClient(cx, cy) {
+        const t = pickEraseTarget(cx, cy);
+        const ok = eraseTargetNow(t);
+        refreshEraseTarget();
+        return ok;
+      }
+      function beginEraseStroke(cx, cy) {
+        eraseStroke = { last: 0 };
+        removeAtClient(cx, cy);
+        eraseStroke.last = performance.now();
+      }
+      function eraseStrokeTo(cx, cy) { // one at a time, at most every 45 ms, so a drag reads as a sweep
+        const now = performance.now();
+        if (now - eraseStroke.last < 45) return;
+        if (removeAtClient(cx, cy)) eraseStroke.last = now;
+      }
+      function endEraseStroke() { eraseStroke = null; }
 
       function updateHoverVisuals() {
         ITEM_DEFS.forEach((d) => { ghostMeshesById[d.id].visible = false; });
@@ -8209,16 +8430,31 @@
         cursorTile.scale.set(1, 1, 1);
         freeCursorRing.visible = false;
         freeCursorRing.scale.set(1, 1, 1);
+        if (eraseGhost) { eraseGhost.scale.set(1, 1, 1); eraseGhost.rotation.z = 0; eraseGhost = null; }
 
-        if (!hoveredHit || isPhotoMode || isExploded) return;
-
-        const { gx, gz, wx, wz, wy } = hoveredHit;
-        if (selectedTool === 'delete') {
-          cursorTile.visible = true;
-          cursorTile.position.set(gx - HALF_GRID + 0.5, getTileElevation(gx, gz) + 0.025, gz - HALF_GRID + 0.5);
-          cursorMat.color.set('#ff7c7c');
+        if (isPhotoMode || isExploded) return;
+        if (selectedTool === 'delete') { // the target itself shows it (red flush); cabins, paths, fences: a red ghost over them
+          const t = eraseTarget;
+          if (!t) return;
+          if (t.kind === 'seeds') {
+            freeCursorRing.visible = true;
+            freeCursorRing.scale.set(SEED_PATCH_R / 0.27, 1, SEED_PATCH_R / 0.27);
+            freeCursorRing.position.set(t.x, t.y + 0.03, t.z);
+            ringMat.color.set('#ff6b5c');
+          } else if (t.kind === 'placed' && !isInstancedDef(assetsById[t.id].def)) {
+            const ghost = ghostMeshesById[t.id];
+            ghost.visible = true;
+            ghost.position.set(t.x, t.y + 0.01, t.z);
+            ghost.rotation.y = t.ref.rotation * (Math.PI / 2);
+            ghost.scale.setScalar(1.04);
+            ghost.traverse((c) => { if (c.isMesh && c.material) { c.material.color.set('#ff6b5c'); c.material.opacity = 0.4; } });
+            eraseGhost = ghost;
+          }
           return;
         }
+        if (!hoveredHit) return;
+
+        const { gx, gz, wx, wz, wy } = hoveredHit;
 
         const tt = terrainToolById(selectedTool);
         if (tt && tt.paint !== undefined) { // ground paint: the quarter tile under the brush
@@ -8607,10 +8843,13 @@
         resetIsland(); // the island falls away and assembles itself again (section 17)
       });
       document.getElementById('pop-clear').addEventListener('click', () => {
+        placedItems.forEach((e) => vanishItem('placed', e)); // everything floats away
+        snapProps.forEach((o) => vanishItem('snap', o));
+        freeProps.forEach((fp) => vanishItem('free', fp));
+        seedFlowers.forEach((f) => { f.erased = true; });
         placedItems.clear();
         freeProps.length = 0;
         snapProps.length = 0;
-        seedFlowers.length = 0;
         rebuildInstances();
         resetPopover.classList.remove('open');
         audio.playRemove();
@@ -8780,6 +9019,9 @@
             dragStartY = lastDragY = e.clientY;
             hasMovedSignificantly = false;
             container.classList.add('dragging');
+          } else if (selectedTool === 'delete') { // the eraser picks on screen (no ground hit needed)
+            erasePointer = [e.clientX, e.clientY];
+            beginEraseStroke(e.clientX, e.clientY);
           } else {
             const hit = getHitUnderClient(e.clientX, e.clientY);
             if (hit) {
@@ -8806,6 +9048,9 @@
             targetOrbitAngle -= dx * 0.0085;
           }
         } else if (!isPhotoMode && !isExploded) {
+          erasePointer = e.target === renderer.domElement ? [e.clientX, e.clientY] : null; // not over the HUD
+          if (eraseStroke && erasePointer && (e.buttons & 1)) eraseStrokeTo(e.clientX, e.clientY);
+          if (selectedTool === 'delete') refreshEraseTarget();
           const hit = getHitUnderClient(e.clientX, e.clientY);
           if (paintStroke && hit && (e.buttons & 1)) paintStrokeTo(hit.wx, hit.wz);
           if (seedStroke && hit && (e.buttons & 1)) seedStrokeTo(hit.wx, hit.wz);
@@ -8816,17 +9061,18 @@
 
       renderer.domElement.addEventListener('pointerleave', () => {
         hoveredHit = null;
+        erasePointer = null;
+        refreshEraseTarget();
         updateHoverVisuals();
       });
 
-      window.addEventListener('pointercancel', () => { endPaintStroke(); endSeedStroke(); }); // a cancelled touch still finishes the stroke
+      window.addEventListener('pointercancel', () => { endPaintStroke(); endSeedStroke(); endEraseStroke(); }); // a cancelled touch still finishes the stroke
       window.addEventListener('pointerup', (e) => {
         if (paintStroke && e.button === 0) endPaintStroke();
-        if (e.button === 0) endSeedStroke();
+        if (e.button === 0) { endSeedStroke(); endEraseStroke(); }
         if (isOrbiting && e.button === orbitButton) {
           if (orbitButton === 2 && !isPanning && !hasMovedSignificantly && performance.now() - dragStartTime < 350 && !isPhotoMode && !isExploded) {
-            const hit = getHitUnderClient(e.clientX, e.clientY);
-            if (hit) removeAtHit(hit);
+            removeAtClient(e.clientX, e.clientY); // a short right click erases the nearest object, with any tool
           }
           isOrbiting = false;
           isPanning = false;
@@ -9007,7 +9253,7 @@
 
         // Context-Sensitive Grid Auto-Hide (only appears gently when hovering in grid-placement mode)
         const showGrid = !isPhotoMode && !isExploded && hoveredHit !== null &&
-          (selectedTool === 'delete' || !assetsById[selectedTool]?.def.freePlace);
+          selectedTool !== 'delete' && !assetsById[selectedTool]?.def.freePlace;
         const targetGridAlpha = showGrid ? 1.0 : 0.0;
         gridMat.uniforms.uGridAlpha.value += (targetGridAlpha - gridMat.uniforms.uGridAlpha.value) * Math.min(1, dt * 10);
         if (hoveredHit) {
@@ -9057,6 +9303,20 @@
 
           // LEGO-style part-by-part drop for newly placed cabins
           const ud = cb.mesh.userData;
+          if (cb.goneAt != null) { // erased: the drop backwards, roof first, parts drifting apart as they float up
+            const since = elapsed - cb.goneAt, stride = VANISH_SPAN / Math.max(1, ud.dropGroups - 1);
+            ud.dropParts.forEach((pt, i) => {
+              if (!pt.v0) pt.v0 = { x: pt.obj.position.x, z: pt.obj.position.z, s: pt.obj.scale.clone(), dx: hash2D(i, 5, 17) - 0.5, dz: hash2D(i, 6, 17) - 0.5 };
+              const tl = since - (ud.dropGroups - 1 - pt.g) * stride;
+              if (tl <= 0) return;
+              const p = Math.min(1, tl / VANISH_RISE), e = p * p, k = 1 - THREE.MathUtils.smoothstep(p, 0.45, 1);
+              pt.obj.visible = pt.visible && p < 1;
+              pt.obj.position.set(pt.v0.x + pt.v0.dx * e * 0.7, pt.baseY + e * 1.0, pt.v0.z + pt.v0.dz * e * 0.7);
+              pt.obj.rotation.z = pt.baseRZ + pt.ang * 3.5 * e;
+              pt.obj.scale.copy(pt.v0.s).multiplyScalar(Math.max(0.001, k));
+            });
+            continue;
+          }
           if (!ud.dropDone && ud.dropParts) {
             const since = elapsed - cb.spawnT;
             const done = since > cabinDropTotal() + 0.2;
@@ -9209,6 +9469,7 @@
         camera.getWorldDirection(smokeViewDir);
         for (let c = 0; c < activeCabins.length; c++) {
           const cb = activeCabins[c];
+          if (cb.goneAt != null) continue; // an erased cabin floating away: its chimney is out
           const { chunkRoof } = cb.mesh.userData;
           const key = `${cb.baseX.toFixed(2)},${cb.baseZ.toFixed(2)}`;
           liveSmoke.add(key);
@@ -9297,6 +9558,10 @@
             ghost.position.y = baseY + 0.03 + Math.sin(elapsed * 5.0) * 0.025;
           }
         }
+
+        // eraser: keep the target under the pointer (the camera may move), its red ghost trembles
+        if (selectedTool === 'delete' && intro.phase === 'done') refreshEraseTarget();
+        if (eraseGhost) eraseGhost.rotation.z = Math.sin(elapsed * 17.0) * 0.012;
 
         renderer.info.reset();
         if (performance.now() * 0.001 <= shadowHoldUntil || HASH.noopt === '1') renderer.shadowMap.needsUpdate = true;
@@ -9592,8 +9857,9 @@
         const t0 = performance.now() * 0.001 + lead;
         intro.phase = 'assemble'; intro.t0 = t0; intro.withUI = withUI;
         smokeStates.clear(); // drop smoke left from the hidden warm-up frames / the island that just fell
+        clearVanishing(); // nothing erased keeps floating over the new island
         isExploded = false; explodeToggleTime = -10;
-        hoveredHit = null; updateHoverVisuals();
+        eraseTarget = null; hoveredHit = null; updateHoverVisuals();
         islandRoot.position.set(0, 0, 0); islandRoot.rotation.set(0, 0, 0);
 
         const events = [];
@@ -9813,6 +10079,14 @@
           waterSheet: () => ({ water: waterMesh.geometry.index.count / 6, mist: pondMist.geometry.index.count / 6, lilies: lilyParts.map((lp) => lp.meshes[0].visible) }),
           instanceCount: (id) => instancedById[id].count,
           instanceVisible: (id) => instancedById[id].visible,
+          // eraser + undo (tools/tests/eraser.mjs)
+          erasePick: (cx, cy) => { const t = pickEraseTarget(cx, cy); return t && { kind: t.kind, id: t.id, x: t.x, z: t.z, seeds: t.seeds ? t.seeds.length : 0 }; },
+          eraseTarget: () => eraseTarget && { kind: eraseTarget.kind, id: eraseTarget.id, x: eraseTarget.x, z: eraseTarget.z },
+          hot: () => hotMarks.map(([m, i]) => [Object.keys(instancedById).find((k) => instancedById[k] === m), i]),
+          eraseGhost: () => !!eraseGhost && eraseGhost.visible,
+          vanishing: () => ({ list: vanishing.length, cabins: activeCabins.filter((c) => c.goneAt != null).length,
+            inst: Object.keys(instancedById).reduce((n, k) => { const a = instancedById[k].geometry.attributes.aVanish; if (!a) return n; for (let i = 0; i < instancedById[k].count; i++) if (a.array[i] < 1e8) n++; return n; }, 0) }),
+          vanishHold: (on) => { vanishHold = !!on; },          islandList: () => JSON.stringify(serializeIsland()),
           grassTufts: () => Array.from({ length: grassClutterInst.count }, (_, i) => Array.from(grassClutterInst.instanceMatrix.array.subarray(i * 16, i * 16 + 16), (v) => Math.round(v * 1e5) / 1e5)),
           seedFlowers: () => ({ now: performance.now() * 0.001, list: seedFlowers.filter((f) => !f.erased).map((f) => [f.wx, f.wz, f.tint, f.spawnT, f.goneAt == null ? 0 : 1]) }),
           seedSlope: (x, z) => seedSlope(x, z),
