@@ -2730,6 +2730,7 @@
         category: 'flora',
         type: 'stack',
         freePlace: false,
+        tree: true,
         size: 20,
         layers: 34,
         layerStep: 0.048,
@@ -2777,6 +2778,7 @@
         category: 'flora',
         type: 'stack',
         freePlace: false,
+        tree: true,
         size: 22,
         layers: 34,
         layerStep: 0.050,
@@ -2821,6 +2823,149 @@
                   px(ctx, x, y, col);
                 }
               }
+            }
+          }
+        }
+      },
+      {
+        // slender white stems (a main one and a thinner one leaning off it) with dark bark marks,
+        // a tall loose crown of small yellow-green clumps you can see the sky through
+        id: 'birch',
+        name: '자작나무',
+        category: 'flora',
+        type: 'stack',
+        freePlace: false,
+        tree: true,
+        size: 20,
+        layers: 38,
+        layerStep: 0.047,
+        scale: 1.08,
+        roughness: 0.84,
+        metalness: 0.0,
+        windStrength: 0.105,
+        explodeSliceFactor: 0.75,
+        explodeTier: 1,
+        canopySplit: 0.36,
+        glow: null,
+        contactRadius: 0.38,
+        drawSlice(ctx, emCtx, layer, total, s) {
+          const cx = s / 2 - 0.5, cy = s / 2 - 0.5;
+          // bark: chalky white, the shaded side a little grey, dark lenticel dashes and knots
+          const bark = (x, y, ox, oy, r) => {
+            const sh = (x - ox) + (y - oy), n = hash2D(x, y + layer * 5, 71), band = hash2D(Math.round(x), layer, 73);
+            if (band > 0.8 && n > 0.25) return n > 0.7 ? '#3a3330' : '#55504a';
+            if (layer < 3 && n > 0.45) return '#6d6356'; // darker, rougher foot
+            if (sh > 0.6) return n > 0.5 ? '#c9c1b2' : '#bcb3a3';
+            return n > 0.3 ? '#efe9dc' : '#e2dccd';
+          };
+          // main stem leans a touch one way, the second one forks off at layer 5 and leans away
+          const mx = cx - layer * 0.025, my = cy + layer * 0.015;
+          if (layer < 33) fillDisc(ctx, mx, my, layer < 2 ? 1.9 : (layer < 18 ? 1.35 : 0.9), (x, y) => bark(x, y, mx, my, 1.3));
+          if (layer >= 4 && layer < 27) {
+            const k = layer - 4, sx = cx + 0.4 + k * 0.12, sy = cy - 0.3 - k * 0.055;
+            fillDisc(ctx, sx, sy, k < 12 ? 0.95 : 0.7, (x, y) => bark(x, y, sx, sy, 0.9));
+          }
+          // a few bare twigs reaching out under the crown
+          for (const [ly, dx, dy] of [[13, 1, -1], [16, -1, 0], [19, 0, 1], [22, 1, 1]]) {
+            if (layer === ly) for (let j = 1; j <= 3; j++) px(ctx, mx + dx * j, my + dy * j, j < 3 ? '#6a5a4c' : '#857261');
+          }
+          // crown: loose clumps at different heights; little holes keep it airy
+          const lobes = [
+            { ox: 0.0, oy: 0.0, lc: 31, hr: 6.5, R: 4.4 },
+            { ox: -2.6, oy: -1.2, lc: 25, hr: 5.5, R: 4.0 },
+            { ox: 2.9, oy: 0.5, lc: 23, hr: 5.0, R: 3.9 },
+            { ox: 0.6, oy: 2.8, lc: 28, hr: 5.0, R: 3.6 },
+            { ox: -1.5, oy: 2.3, lc: 19, hr: 3.8, R: 3.0 },
+            { ox: 2.0, oy: -2.6, lc: 20, hr: 4.0, R: 3.2 },
+            { ox: 0.3, oy: -0.4, lc: 35, hr: 2.6, R: 2.4 }
+          ];
+          for (const l of lobes) {
+            const dl = (layer - l.lc) / l.hr;
+            if (Math.abs(dl) >= 1) continue;
+            const r = l.R * Math.sqrt(1 - dl * dl), lx = cx + l.ox, ly2 = cy + l.oy;
+            for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+              const dx = x - lx, dy = y - ly2;
+              if (dx * dx + dy * dy > r * r) continue;
+              const n = hash2D(x, y, layer * 3 + 7);
+              if (n < 0.13) continue; // sky shows through
+              let col = '#8fb24f';
+              if (dl > 0.25 || dx + dy < -1.6) col = n > 0.45 ? '#b6d264' : '#a3c55a';
+              else if (dl < -0.45 || dx + dy > 2.0) col = n > 0.5 ? '#6c9140' : '#5d8238';
+              if (dl > 0.55 && n > 0.8) col = '#d3e785';
+              px(ctx, x, y, col);
+            }
+          }
+        }
+      },
+      {
+        // short dark trunk splitting into three limbs, a wide soft dome of blossom, petals on the grass
+        id: 'cherry',
+        name: '벚나무',
+        category: 'flora',
+        type: 'stack',
+        freePlace: false,
+        tree: true,
+        size: 22,
+        layers: 32,
+        layerStep: 0.05,
+        scale: 1.24,
+        roughness: 0.86,
+        metalness: 0.0,
+        windStrength: 0.07,
+        explodeSliceFactor: 0.75,
+        explodeTier: 1,
+        canopySplit: 0.4,
+        glow: null,
+        contactRadius: 0.52,
+        drawSlice(ctx, emCtx, layer, total, s) {
+          const cx = s / 2 - 0.5, cy = s / 2 - 0.5;
+          // fallen petals around the foot
+          if (layer === 0) for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+            const d = Math.hypot(x - cx, y - cy), n = hash2D(x, y, 91);
+            if (d > 3.2 && d < 9.6 && n > 0.86 - (d < 7 ? 0.04 : 0)) px(ctx, x, y, n > 0.95 ? '#fff0f4' : '#f6b9cc');
+          }
+          // trunk: dark cherry bark with pale horizontal lenticel bands
+          const bark = (x, y, ox, oy) => {
+            const n = hash2D(x, y + layer * 3, 93);
+            if (layer % 3 === 1 && n > 0.4) return '#7c5a4c';
+            return (x - ox) + (y - oy) > 0.5 ? (n > 0.5 ? '#3d2924' : '#46302a') : (n > 0.5 ? '#5e4036' : '#53382f');
+          };
+          if (layer < 12) {
+            const r = layer < 2 ? 2.6 : (layer < 5 ? 1.95 : 1.6), tx = cx + layer * 0.04, ty = cy;
+            fillDisc(ctx, tx, ty, r, (x, y) => bark(x, y, tx, ty));
+          }
+          // three limbs spread outward from layer 9 into the crown
+          if (layer >= 9 && layer < 22) {
+            const k = layer - 9;
+            for (const [ax, ay] of [[1, -0.35], [-0.8, -0.7], [-0.2, 1]]) {
+              const lx = cx + ax * k * 0.42, ly = cy + ay * k * 0.42;
+              fillDisc(ctx, lx, ly, k < 6 ? 1.05 : 0.75, (x, y) => bark(x, y, lx, ly));
+            }
+          }
+          // crown: broad clumps, pink with pale tops, deeper rose in the shade, a few fresh leaves underneath
+          const lobes = [
+            { ox: 0.0, oy: 0.0, lc: 25, hr: 6.5, R: 7.0 },
+            { ox: -4.0, oy: -1.5, lc: 21, hr: 4.8, R: 4.9 },
+            { ox: 4.1, oy: -0.6, lc: 22, hr: 4.8, R: 5.0 },
+            { ox: 0.5, oy: 4.0, lc: 22, hr: 4.6, R: 4.7 },
+            { ox: -2.6, oy: 3.0, lc: 19, hr: 3.6, R: 3.9 },
+            { ox: 2.6, oy: -3.6, lc: 20, hr: 3.8, R: 4.1 },
+            { ox: -1.0, oy: -3.8, lc: 27, hr: 3.6, R: 3.5 }
+          ];
+          for (const l of lobes) {
+            const dl = (layer - l.lc) / l.hr;
+            if (Math.abs(dl) >= 1) continue;
+            const r = l.R * Math.sqrt(1 - dl * dl), lx = cx + l.ox, ly = cy + l.oy;
+            for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+              const dx = x - lx, dy = y - ly;
+              if (dx * dx + dy * dy > r * r) continue;
+              const n = hash2D(x, y, layer * 5 + 11);
+              let col = '#eea2bb';
+              if (dl > 0.3 || dx + dy < -2.0) col = n > 0.4 ? '#fac4d4' : '#f5b2c7';
+              else if (dl < -0.4 || dx + dy > 2.4) col = n > 0.5 ? '#cf7e9b' : '#c06f8e';
+              if (dl > 0.6 && n > 0.78) col = '#fff0f4';
+              if (dl < -0.55 && n > 0.82) col = '#7fa65a';
+              px(ctx, x, y, col);
             }
           }
         }
@@ -3148,6 +3293,56 @@
                 const spot = hash2D(x, y, layer * 7) > 0.80 && layer >= sh.stemH + 1;
                 return spot ? '#fff7e6' : '#d9483b';
               });
+            }
+          }
+        }
+      },
+      {
+        // a low round shrub of a few leafy mounds, red berries peeking out of the sunny side
+        id: 'bush',
+        name: '덤불',
+        category: 'flora',
+        type: 'stack',
+        freePlace: true,
+        size: 18,
+        layers: 13,
+        layerStep: 0.034,
+        scale: 0.8,
+        roughness: 0.86,
+        metalness: 0.0,
+        windStrength: 0.035,
+        explodeSliceFactor: 0.34,
+        explodeTier: 0,
+        canopySplit: 0.0,
+        glow: null,
+        contactRadius: 0.34,
+        solidRadius: 0.24,
+        drawSlice(ctx, emCtx, layer, total, s) {
+          const cx = s / 2 - 0.5, cy = s / 2 - 0.5;
+          if (layer < 2) fillDisc(ctx, cx, cy, 1.2, '#4a3324'); // a stub of woody stems at the foot
+          const mounds = [
+            { ox: 0.0, oy: 0.0, lc: 6.5, hr: 6.4, R: 5.4 },
+            { ox: -3.2, oy: 1.6, lc: 4.2, hr: 4.4, R: 3.8 },
+            { ox: 3.0, oy: 2.0, lc: 3.8, hr: 4.0, R: 3.5 },
+            { ox: 1.4, oy: -3.0, lc: 4.6, hr: 4.6, R: 3.9 },
+            { ox: -1.8, oy: -2.4, lc: 3.4, hr: 3.6, R: 3.1 }
+          ];
+          for (const m of mounds) {
+            const dl = (layer - m.lc) / m.hr;
+            if (Math.abs(dl) >= 1 || layer < 1) continue;
+            const r = m.R * Math.sqrt(1 - dl * dl), mx = cx + m.ox, my = cy + m.oy;
+            for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+              const dx = x - mx, dy = y - my, d2 = dx * dx + dy * dy;
+              if (d2 > r * r) continue;
+              const n = hash2D(x, y, layer * 7 + 3), rim = d2 > (r - 1.1) * (r - 1.1);
+              if (rim && n < 0.3) continue; // ragged leafy edge
+              let col = '#477f39';
+              if (dl > 0.3 || dx + dy < -1.5) col = n > 0.45 ? '#79b453' : '#68a34a';
+              else if (dl < -0.3 || dx + dy > 1.8) col = n > 0.5 ? '#346530' : '#2c5829';
+              if (dl > 0.6 && n > 0.8) col = '#9ccd68';
+              // berries: on the outer skin of the upper half, mostly toward the light
+              if (rim && dl > -0.2 && dx + dy < 1.0 && hash2D(x, y, layer * 7 + 9) > 0.86) col = n > 0.5 ? '#d8433b' : '#b8302c';
+              px(ctx, x, y, col);
             }
           }
         }
@@ -3745,6 +3940,137 @@
             S.box(.014, .003, .01, AX + Math.cos(a) * d, .003, AZ + Math.sin(a) * d, k % 3 ? GER : GER_P, { l: L_PLAIN, rough: .8, r: [0, rng() * TAU, 0], jit: .05 });
           }
           S.ico(.035, AX - .08, .01, AZ - .06, MCOL.moss, { sc: [1.4, .5, 1.1], d: 0, rough: 1 });
+        }
+      },
+      stump: {
+        name: '그루터기',
+        category: 'flora',
+        type: 'soup',
+        seed: 211,
+        snapPlace: true,
+        footprint: [-.24, .24, -.24, .24],
+        windStrength: 0.0,
+        explodeSliceFactor: 0.40,
+        explodeTier: 0,
+        glow: null,
+        contactRadius: 0.32,
+        solidRadius: 0.2,
+        build(S, rng) {
+          // an old felled trunk: bark sides, a sawn top with rings and a drying crack, a splintered lip
+          // where it broke before the saw got through, roots flaring into the turf
+          const R = .13, H = .17;
+          S.cyl(R, H, 0, H / 2, 0, mixC(BARK, BARK_L, .35), { n: 10, l: L_WOOD, rough: .95, rt: .9 });
+          S.cyl(R * 1.06, .035, 0, .0175, 0, mulC(BARK, .9), { n: 10, l: L_WOOD, rough: 1, rt: .9 }); // flared foot
+          const T = H + .001, rings = [[.88, mixC(SAP, C('#b89060'), .5)], [.7, mulC(RING, 1.04)], [.52, mixC(SAP, RING, .4)], [.34, mixC(SAP, RING, .7)], [.16, mulC(RING, .92)], [.06, PITH]];
+          rings.forEach(([k, col], i) => S.cyl(R * .9 * k, .004, .004 * (i % 2), T + i * .0015, -.003 * (i % 3), col, { n: 10, l: L_PLAIN, rough: .9, jit: .03 }));
+          S.box(.004, .003, .1, .02, T + .01, -.01, mulC(PITH, .8), { l: L_PLAIN, r: [0, .4, 0], jit: 0 }); // crack
+          S.box(.003, .003, .05, -.05, T + .01, .03, mulC(PITH, .85), { l: L_PLAIN, r: [0, -.9, 0], jit: 0 });
+          for (let k = 0; k < 5; k++) { // splinters standing up on the back rim
+            const a = -2.4 + k * .3 + rng.range(-.08, .08), h = rng.range(.02, .055);
+            S.box(.022, h, .016, Math.cos(a) * R * .86, T + h / 2 - .004, Math.sin(a) * R * .86, mixC(SAP, BARK_L, rng() * .5), { l: L_WOOD, rough: .95, r: [rng.range(-.2, .2), -a, rng.range(-.25, .25)] });
+          }
+          // roots
+          const rootStart = S.verts;
+          for (let k = 0; k < 5; k++) {
+            const a = k / 5 * TAU + rng.range(-.25, .25) + .3, len = rng.range(.2, .26);
+            S.seg([Math.cos(a) * R * .7, .07, Math.sin(a) * R * .7], [Math.cos(a) * len, -.006, Math.sin(a) * len], .045, .014, mixC(BARK, BARK_L, rng() * .4), { n: 6, l: L_WOOD, rough: 1 });
+          }
+          S.cover(rootStart, mixC(MOSS_D, MCOL.moss, .5), .55, L_MOSS, 17);
+          // moss creeping up the shady side
+          S.ico(.05, -.1, .03, .08, MCOL.moss, { sc: [1.3, .7, 1.1], d: 1, rough: 1, l: L_MOSS });
+          S.ico(.035, -.125, .085, .03, mixC(MOSS_D, MCOL.moss, .4), { sc: [.7, 1.3, 1], d: 0, rough: 1, l: L_MOSS });
+          // shelf fungus stepping up the sunny side (pale ochre top, cream underside)
+          const SHELF = C('#d2ad6e'), SHELF_U = C('#efe2c2');
+          [[.55, .055, .05], [.95, .09, .042], [.25, .11, .034]].forEach(([a, y, r]) => {
+            const x = Math.cos(a) * R * .98, z = Math.sin(a) * R * .98;
+            S.cyl(r, .011, x, y - .006, z, SHELF_U, { n: 9, l: L_PLAIN, rough: .8, jit: .04 });
+            S.cyl(r * .96, .012, x + Math.cos(a) * .003, y + .005, z + Math.sin(a) * .003, mixC(SHELF, C('#b88a4e'), rng() * .5), { n: 9, rt: .7, l: L_PLAIN, rough: .75 });
+          });
+          // a little family of brown toadstools by a root
+          [[-.17, -.09, .045, .024], [-.2, -.04, .03, .017], [-.14, -.15, .022, .013]].forEach(([x, z, h, r]) => {
+            S.cyl(r * .32, h, x, h / 2, z, C('#efe4cc'), { n: 6, l: L_PLAIN, rough: .8 });
+            S.ico(r, x, h, z, mixC(C('#9a5a34'), C('#b8763f'), rng()), { sc: [1, .55, 1], d: 1, rough: .55 });
+          });
+          // a fresh shoot growing out of the sawn edge
+          const sp = S.verts;
+          S.seg([.07, T, .05], [.085, T + .08, .06], .005, .004, C('#6f9c45'), { n: 4, jit: 0 });
+          S.ico(.022, .065, T + .075, .07, C('#86b553'), { sc: [1.5, .3, .8], d: 1, rough: .7, r: [0, .6, .5] });
+          S.ico(.018, .105, T + .088, .05, C('#9cc862'), { sc: [1.5, .3, .8], d: 1, rough: .7, r: [0, -2.4, .5] });
+          for (let v = sp; v < S.verts; v++) S.S[v * 4 + 2] = .5 * clamp((S.P[v * 3 + 1] - T) / .09, 0, 1);
+          // sawdust and bark flakes in the grass
+          for (let k = 0; k < 8; k++) {
+            const a = rng() * TAU, d = rng.range(.17, .24);
+            S.box(rng.range(.015, .03), .005, rng.range(.01, .018), Math.cos(a) * d, .005, Math.sin(a) * d, rng() < .4 ? BARK : mixC(SAP, C('#e8cc9a'), rng()), { l: L_PLAIN, rough: .9, r: [rng.range(-.2, .2), rng() * TAU, 0], jit: .05 });
+          }
+        }
+      },
+      garden: {
+        name: '텃밭',
+        category: 'flora',
+        type: 'soup',
+        seed: 223,
+        snapPlace: true,
+        footprint: [-.41, .41, -.28, .28],
+        windStrength: 0.0,
+        explodeSliceFactor: 0.40,
+        explodeTier: 0,
+        glow: null,
+        contactRadius: 0.44,
+        solidRadius: 0.3,
+        build(S, rng) {
+          const SOIL = C('#3e2b1f'), SOIL_L = C('#5a3f2a'), LEAF = C('#5f8f3f'), LEAF_L = C('#7fae55'), CAB = C('#b7d290');
+          const plank = () => mixC(MCOL.wood, MCOL.woodG, rng() * .6);
+          // a plank frame, a little out of true, corner stakes standing proud
+          const W = .78, D = .5, PH = .085;
+          for (const s of [-1, 1]) {
+            S.box(W, PH, .03, rng.range(-.004, .004), PH / 2, s * (D / 2 - .015), plank(), { l: L_WOOD, rough: .9, r: [0, rng.range(-.012, .012), rng.range(-.01, .01)] });
+            S.box(.03, PH, D - .06, s * (W / 2 - .015), PH / 2 - .004, rng.range(-.004, .004), plank(), { l: L_WOOD, rough: .9, r: [rng.range(-.01, .01), rng.range(-.015, .015), 0] });
+          }
+          for (const sx of [-1, 1]) for (const sz of [-1, 1]) S.box(.042, .12, .042, sx * (W / 2 - .01), .06, sz * (D / 2 - .01), mulC(plank(), .9), { l: L_WOOD, rough: .95, r: [0, rng.range(-.2, .2), 0] });
+          // dark soil, three raised rows
+          S.box(W - .05, .05, D - .05, 0, .045, 0, SOIL, { l: L_DIRT, rough: 1 });
+          const ROWS = [-.135, 0, .135];
+          for (const z of ROWS) S.ico(.05, 0, .07, z, mixC(SOIL, SOIL_L, rng() * .6), { sc: [6.6, .55, 1], d: 2, l: L_DIRT, rough: 1, jit: .04 });
+          const swayFrom = (start, y0, amp) => { for (let v = start; v < S.verts; v++) S.S[v * 4 + 2] = amp * clamp((S.P[v * 3 + 1] - y0) / .1, 0, 1); };
+          // back row: cabbages, a pale heart cupped in a few big leaves
+          [-.26, -.09, .09, .26].forEach((x) => {
+            const z = ROWS[0] + rng.range(-.01, .01), y = .095, st = S.verts;
+            S.ico(.034, x, y + .012, z, mixC(CAB, C('#d4e6aa'), rng() * .5), { d: 1, rough: .6 });
+            for (let k = 0; k < 6; k++) {
+              const a = k / 6 * TAU + rng.range(-.25, .25), d = .032;
+              S.ico(.04, x + Math.cos(a) * d, y + rng.range(-.004, .008), z - Math.sin(a) * d, mixC(LEAF, LEAF_L, rng()), { sc: [1.25, .3, .95], d: 1, rough: .65, r: [0, a, rng.range(.45, .7)] });
+            }
+            swayFrom(st, y, .12);
+          });
+          // middle row: carrots, orange shoulders in the soil, feathery tops
+          for (let i = 0; i < 6; i++) {
+            const x = -.3 + i * .12 + rng.range(-.012, .012), z = ROWS[1] + rng.range(-.012, .012), y = .088;
+            S.cyl(.014, .022, x, y, z, mixC(C('#e07a2e'), C('#f0954a'), rng()), { n: 7, rt: .75, l: L_PLAIN, rough: .7 });
+            const st = S.verts;
+            for (let k = 0; k < 3; k++) {
+              const a = k / 3 * TAU + rng() * 1.2, lean = rng.range(.025, .04), h = rng.range(.08, .11);
+              const tip = [x + Math.cos(a) * lean, y + h, z + Math.sin(a) * lean];
+              S.seg([x, y + .01, z], tip, .004, .0025, LEAF, { n: 4, jit: 0 });
+              S.ico(.016, (x + tip[0] * 2) / 3, y + h * .72, (z + tip[2] * 2) / 3, mixC(LEAF, LEAF_L, .4 + rng() * .6), { sc: [.7, 1.7, .4], d: 0, rough: .7, r: [0, a, 0] });
+            }
+            swayFrom(st, y, .55);
+          }
+          // front row: seedlings just come up, two leaves each
+          for (let i = 0; i < 6; i++) {
+            const x = -.29 + i * .115 + rng.range(-.01, .01), z = ROWS[2] + rng.range(-.01, .01), y = .088, h = rng.range(.03, .045), st = S.verts;
+            S.seg([x, y, z], [x, y + h, z], .003, .0025, LEAF_L, { n: 4, jit: 0 });
+            const a = rng() * TAU;
+            for (const s of [0, Math.PI]) S.ico(.013, x + Math.cos(a + s) * .012, y + h, z - Math.sin(a + s) * .012, C('#9ccd68'), { sc: [1.5, .3, .9], d: 0, rough: .7, r: [0, a + s, .4] });
+            swayFrom(st, y, .35);
+          }
+          // a little plant label stuck in the corner, a carrot painted on it
+          S.box(.012, .15, .008, .31, .1, -.2, MCOL.woodL, { l: L_WOOD, rough: .8, r: [.08, 0, -.06] });
+          S.box(.075, .045, .008, .312, .17, -.2, C('#e6d2a8'), { l: L_WOOD, rough: .8, r: [.08, 0, -.06] });
+          S.box(.032, .01, .004, .312, .172, -.195, C('#e07a2e'), { l: L_PLAIN, rough: .8, r: [.08, 0, .5], jit: 0 });
+          S.box(.012, .008, .004, .292, .186, -.195, LEAF, { l: L_PLAIN, rough: .8, r: [.08, 0, -.4], jit: 0 });
+          // a couple of pulled weeds left drying on the frame
+          S.ico(.03, -.3, .095, .25, mixC(LEAF, C('#8a8a4a'), .5), { sc: [1.6, .3, .7], d: 0, rough: .9, r: [0, .5, .1] });
+          S.ico(.022, -.22, .093, .252, mixC(LEAF, C('#9a8f52'), .6), { sc: [1.7, .3, .6], d: 0, rough: .9, r: [0, -.3, .1] });
         }
       },
       well: {
@@ -6747,11 +7073,14 @@
 
       // (B) Swirling Flower Petals
       const PETAL_COUNT = 26;
+      // + cherry blossom petals drifting down from under each 벚나무 (same mesh: no extra draw call)
+      const CHERRY_PETALS = 40, CHERRY_TREES_MAX = 10;
       const petalInst = new THREE.InstancedMesh(
         new THREE.PlaneGeometry(0.085, 0.06),
         new THREE.MeshBasicMaterial({ color: '#ffffff', side: THREE.DoubleSide, transparent: true, opacity: 0.88 }),
-        PETAL_COUNT
+        PETAL_COUNT + CHERRY_PETALS
       );
+      petalInst.count = PETAL_COUNT;
       const petalData = [];
       const petalColors = ['#ffb5cc', '#ffe399', '#ffd1b8', '#f8d4ff'];
       const tmpPetalCol = new THREE.Color();
@@ -6765,6 +7094,11 @@
         });
         tmpPetalCol.set(petalColors[i % petalColors.length]);
         petalInst.setColorAt(i, tmpPetalCol);
+      }
+      const cherryPetalColors = ['#f8c3d3', '#fbd7e2', '#f2a9c0', '#fff0f4'];
+      for (let i = 0; i < CHERRY_PETALS; i++) {
+        tmpPetalCol.set(cherryPetalColors[i % cherryPetalColors.length]);
+        petalInst.setColorAt(PETAL_COUNT + i, tmpPetalCol);
       }
       petalInst.instanceColor.needsUpdate = true;
       scene.add(petalInst);
@@ -7118,7 +7452,8 @@
         rocks: 0.28,
         flowers: 0.12,
         reeds: 0.11,
-        mushrooms: 0.10
+        mushrooms: 0.10,
+        bush: 0.2
       };
 
       function isInsideCabinFootprint(wx, wz, pad = 0.0) {
@@ -7162,7 +7497,7 @@
         return out;
       }
       function gridSolidR(id) {
-        if (id === 'pine' || id === 'oak') return 0.24;
+        if (assetsById[id]?.def.tree) return 0.24;
         if (id === 'fence') return 0.16;
         return assetsById[id]?.def.solidRadius || 0.24;
       }
@@ -7304,7 +7639,7 @@
           let solidR = 0.24;
           if (entry.id === 'campfire') solidR = 0.42;
           else if (entry.id === 'bench') solidR = 0.34;
-          else if (entry.id === 'pine' || entry.id === 'oak') solidR = 0.24;
+          else if (assetsById[entry.id]?.def.tree) solidR = 0.24;
           else if (entry.id === 'lantern') solidR = 0.18;
           else if (entry.id === 'fence') solidR = 0.16;
           else if (assetsById[entry.id]?.def.solidRadius) solidR = assetsById[entry.id].def.solidRadius;
@@ -7710,7 +8045,7 @@
         placedItems.forEach((entry) => {
           const wx = entry.gx - HALF_GRID + 0.5;
           const wz = entry.gz - HALF_GRID + 0.5;
-          if (entry.id === 'pine' || entry.id === 'oak') {
+          if (assetsById[entry.id]?.def.tree) {
             for (let k = 0; k < 2; k++) {
               const a = hash2D(entry.gx, entry.gz, k * 3 + 1) * Math.PI * 2;
               spawnGrassCluster(wx + Math.cos(a) * 0.32, wz + Math.sin(a) * 0.32);
@@ -7734,8 +8069,8 @@
 
         // (B) Cluster right beside Rock Bases
         freeProps.forEach((fp) => {
-          if (fp.id === 'rocks') {
-            const r = 0.38 * (fp.scale || 1.0) + 0.08;
+          if (fp.id === 'rocks' || fp.id === 'bush') {
+            const r = (fp.id === 'bush' ? 0.3 : 0.38) * (fp.scale || 1.0) + 0.08;
             for (let k = 0; k < 2; k++) {
               const a = hash2D(fp.wx * 10, fp.wz * 10, k + 5) * Math.PI * 2;
               spawnGrassCluster(fp.wx + Math.cos(a) * r, fp.wz + Math.sin(a) * r);
@@ -9678,6 +10013,36 @@
           animDummy.updateMatrix();
           petalInst.setMatrixAt(i, animDummy.matrix);
         }
+        // cherry petals: each one loosens from under a crown, flutters down and lies on the grass a
+        // moment before the next one goes. Pure functions of time (no state); the first few trees only.
+        let petalN = PETAL_COUNT;
+        const cherries = intro.phase === 'done' && !isExploded ? (itemBuckets.cherry || []) : [];
+        if (cherries.length) {
+          const nowS = performance.now() * 0.001, nT = Math.min(cherries.length, CHERRY_TREES_MAX);
+          for (let i = 0; i < CHERRY_PETALS; i++) {
+            const tr = cherries[i % nT];
+            if (nowS - tr.spawnT < 1.4) continue; // still dropping in
+            const h1 = hash2D(i, 3, 211), h2 = hash2D(i, 5, 213), h3 = hash2D(i, 7, 217);
+            const period = 6.5 + h1 * 4.0, ph = ((elapsed / period + h2) % 1 + 1) % 1;
+            const cyc = Math.floor(elapsed / period + h2); // a new spot each fall
+            const a0 = hash2D(i, cyc, 219) * TAU, r0 = 0.12 + hash2D(i, cyc, 223) * 0.42;
+            const fallT = 0.82, f = Math.min(ph / fallT, 1), drop = f * f * (3 - 2 * f) * 0.35 + f * 0.65;
+            const y0 = tr.wy + 0.86 + h3 * 0.3, yG = getContinuousTerrainHeight(tr.wx + Math.cos(a0) * r0, tr.wz + Math.sin(a0) * r0) + 0.012;
+            const drift = f * (0.18 + h1 * 0.2), sway = Math.sin(elapsed * 2.3 + i * 1.7) * 0.07 * (1 - f * 0.6) * (f < 1 ? 1 : 0);
+            animDummy.position.set(
+              tr.wx + Math.cos(a0) * (r0 + drift) + sway,
+              y0 + (yG - y0) * drop,
+              tr.wz + Math.sin(a0) * (r0 + drift) + sway * 0.6
+            );
+            if (f < 1) animDummy.rotation.set(elapsed * 2.1 + i, elapsed * 1.3 + h2 * 6, elapsed * 1.7);
+            else animDummy.rotation.set(-Math.PI / 2, 0, h3 * 6); // lying flat on the turf
+            const k = ph < 0.04 ? ph / 0.04 : (ph > 0.94 ? (1 - ph) / 0.06 : 1); // pops in, fades out on the ground
+            animDummy.scale.setScalar(0.62 * k * (1.0 - curAtmo.nightFactor * 0.3));
+            animDummy.updateMatrix();
+            petalInst.setMatrixAt(petalN++, animDummy.matrix);
+          }
+        }
+        petalInst.count = petalN;
         petalInst.instanceMatrix.needsUpdate = true;
 
         // Hover bob on ghost
@@ -10217,7 +10582,9 @@
           eraseGhost: () => !!eraseGhost && eraseGhost.visible,
           vanishing: () => ({ list: vanishing.length, cabins: activeCabins.filter((c) => c.goneAt != null).length,
             inst: Object.keys(instancedById).reduce((n, k) => { const a = instancedById[k].geometry.attributes.aVanish; if (!a) return n; for (let i = 0; i < instancedById[k].count; i++) if (a.array[i] < 1e8) n++; return n; }, 0) }),
-          vanishHold: (on) => { vanishHold = !!on; },          undoDepth: () => [undoStack.length, redoStack.length],
+          vanishHold: (on) => { vanishHold = !!on; },
+          undoDepth: () => [undoStack.length, redoStack.length],
+          petals: () => petalInst.count, // ambient petals + cherry petals in flight
           undo: (dir = -1) => undoRedo(dir),
           islandList: () => JSON.stringify(serializeIsland()),
           grassTufts: () => Array.from({ length: grassClutterInst.count }, (_, i) => Array.from(grassClutterInst.instanceMatrix.array.subarray(i * 16, i * 16 + 16), (v) => Math.round(v * 1e5) / 1e5)),
