@@ -195,7 +195,37 @@
     #reset-popover { display: flex; gap: 10px; padding: 10px; }
 
     /* save slots: three cream paper cards, each with a little picture of the island it holds */
-    #save-panel { display: flex; gap: 12px; padding: 12px; }
+    /* no dark box: the cards float on their own. They slip out of the book token one by one, narrow
+       at first as if drawn through the book's spine (a light genie), then settle with a small bounce;
+       closing pulls them back in. --dx/--dy (book centre minus card top centre) are set on open. */
+    #save-panel {
+      display: flex; gap: 12px; padding: 12px;
+      background: none; box-shadow: none; backdrop-filter: none;
+      opacity: 1; transform: none; transition: none;
+    }
+    #save-panel:not(.ever) .save-card { visibility: hidden; }
+    #save-panel.ever:not(.open) .save-card { animation: card-in 0.3s cubic-bezier(0.5, 0, 0.75, 0.4) var(--d-in, 0s) both; }
+    #save-panel.open .save-card { animation: card-out 0.56s linear var(--d-out, 0s) both; }
+    #save-panel .save-card[data-slot="1"] { --d-out: 0.12s; --d-in: 0s; }
+    #save-panel .save-card[data-slot="2"] { --d-out: 0.06s; --d-in: 0.04s; }
+    #save-panel .save-card[data-slot="3"] { --d-out: 0s; --d-in: 0.08s; }
+    @keyframes card-out {
+      0% { transform: translate(var(--dx), var(--dy)) scale(0.05, 0.12) rotate(calc(var(--tilt) + 12deg)); opacity: 0; animation-timing-function: cubic-bezier(0.3, 0.6, 0.5, 1); }
+      14% { opacity: 1; }
+      42% { transform: translate(calc(var(--dx) * 0.3), calc(var(--dy) * 0.18)) scale(0.5, 0.92) rotate(calc(var(--tilt) + 5deg)); animation-timing-function: cubic-bezier(0.25, 0.5, 0.4, 1); }
+      74% { transform: translate(0, -5px) scale(1.035, 0.985) rotate(calc(var(--tilt) - 1.6deg)); opacity: 1; animation-timing-function: ease-in-out; }
+      100% { transform: rotate(var(--tilt)); opacity: 1; }
+    }
+    @keyframes card-in {
+      0% { transform: rotate(var(--tilt)); opacity: 1; }
+      55% { transform: translate(calc(var(--dx) * 0.3), calc(var(--dy) * 0.18)) scale(0.5, 0.9) rotate(calc(var(--tilt) + 5deg)); opacity: 1; }
+      100% { transform: translate(var(--dx), var(--dy)) scale(0.05, 0.12) rotate(calc(var(--tilt) + 12deg)); opacity: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #save-panel.open .save-card { animation: card-fade 0.18s ease both; }
+      #save-panel.ever:not(.open) .save-card { animation: card-fade 0.14s ease reverse both; }
+    }
+    @keyframes card-fade { from { opacity: 0; } to { opacity: 1; } }
     .save-card {
       width: 132px;
       padding: 7px 7px 4px;
@@ -205,8 +235,10 @@
       gap: 4px;
       border-radius: 9px 11px 10px 8px;
       background: linear-gradient(170deg, #fbf1dc, #ead6ae);
-      box-shadow: 0 3px 0 #b48a5c, 0 5px 6px rgba(10, 6, 2, 0.35), inset 0 1px 0 #fffaf0;
+      box-shadow: 0 3px 0 #b48a5c, 0 7px 14px rgba(10, 6, 2, 0.4), 0 2px 3px rgba(10, 6, 2, 0.25), inset 0 1px 0 #fffaf0;
       transform: rotate(var(--tilt, 0deg));
+      transform-origin: 50% 0;
+      --dx: 0px; --dy: 0px;
     }
     .save-thumb {
       width: 118px;
@@ -1570,6 +1602,28 @@
         g.gain.exponentialRampToValueAtTime(0.0001, t1 + 0.38);
         o.connect(g); this.out(g, pan);
         o.start(t1); o.stop(t1 + 0.4);
+      }
+      // save cards sliding out of (or back into) the book: three soft paper swishes, one per card,
+      // rising in pitch on the way out and falling on the way back, with a faint page tick
+      playPaper(open = true) {
+        if (!this.ctx || !this.enabled) return;
+        const ctx = this.ctx, t0 = ctx.currentTime;
+        for (let i = 0; i < 3; i++) {
+          const t = t0 + (open ? i * 0.06 : i * 0.04) + Math.random() * 0.012;
+          const dur = open ? 0.2 : 0.14;
+          const src = ctx.createBufferSource(); src.buffer = this.white;
+          const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 0.9;
+          const f0 = (open ? 1500 : 3000) * (0.93 + Math.random() * 0.14), f1 = open ? f0 * 2.1 : f0 * 0.5;
+          f.frequency.setValueAtTime(f0, t);
+          f.frequency.exponentialRampToValueAtTime(f1, t + dur);
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0.0001, t);
+          g.gain.linearRampToValueAtTime(0.045, t + dur * 0.35);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+          src.connect(f); f.connect(g); this.out(g, 0.35 - i * 0.12);
+          src.start(t, Math.random() * 0.8); src.stop(t + dur + 0.02);
+          if (open) this.noiseHit(t + dur * 0.9, { freq: 2600 + Math.random() * 500, q: 3, vol: 0.022, decay: 0.02, pan: 0.35 - i * 0.12 });
+        }
       }
       // terrain edit refused: a dull wooden knock
       playTerrainBlocked(pan = 0) {
@@ -8608,10 +8662,27 @@
         const open = !savePanel.classList.contains('open');
         if (!open) { closeSavePanel(); return; }
         refreshSlots();
-        savePanel.classList.add('open'); btnSave.classList.add('on');
+        aimCardsAtBook();
+        savePanel.classList.add('ever', 'open'); btnSave.classList.add('on');
         resetPopover.classList.remove('open'); toggleHelp(false);
-        audio.playUiBlip(560);
+        audio.playPaper(true);
       });
+      // each card flies from / back to the book token: offset from the card's resting top centre
+      // (its untransformed layout box) to the middle of the button
+      function aimCardsAtBook() {
+        const b = btnSave.getBoundingClientRect(), p = savePanel.getBoundingClientRect();
+        const bx = b.left + b.width / 2, by = b.top + b.height / 2;
+        slotCards.forEach((card) => {
+          card.style.setProperty('--dx', `${(bx - (p.left + card.offsetLeft + card.offsetWidth / 2)).toFixed(1)}px`);
+          card.style.setProperty('--dy', `${(by - (p.top + card.offsetTop)).toFixed(1)}px`);
+        });
+      }
+      // closing from anywhere (outside click, help, reset, photo mode) plays the paper back in
+      new MutationObserver(() => {
+        const open = savePanel.classList.contains('open');
+        if (open !== savePanel._wasOpen && !open && savePanel._wasOpen !== undefined) audio.playPaper(false);
+        savePanel._wasOpen = open;
+      }).observe(savePanel, { attributes: true, attributeFilter: ['class'] });
       // a risky press asks once more: the token wobbles and its label says so
       function armed(btn, hint) {
         if (btn.classList.contains('arm')) { disarmSlots(); return true; }
