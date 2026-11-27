@@ -195,37 +195,15 @@
     #reset-popover { display: flex; gap: 10px; padding: 10px; }
 
     /* save slots: three cream paper cards, each with a little picture of the island it holds */
-    /* no dark box: the cards float on their own. They slip out of the book token one by one, narrow
-       at first as if drawn through the book's spine (a light genie), then settle with a small bounce;
-       closing pulls them back in. --dx/--dy (book centre minus card top centre) are set on open. */
+    /* no dark box: the cards float on their own. The motion (cards flying out of / back into the book
+       token) is driven from JS with the Web Animations API (animateSaveCards); CSS only hides them
+       once closed. */
     #save-panel {
       display: flex; gap: 12px; padding: 12px;
       background: none; box-shadow: none; backdrop-filter: none;
       opacity: 1; transform: none; transition: none;
     }
-    #save-panel:not(.ever) .save-card { visibility: hidden; }
-    #save-panel.ever:not(.open) .save-card { animation: card-in 0.3s cubic-bezier(0.5, 0, 0.75, 0.4) var(--d-in, 0s) both; }
-    #save-panel.open .save-card { animation: card-out 0.56s linear var(--d-out, 0s) both; }
-    #save-panel .save-card[data-slot="1"] { --d-out: 0.12s; --d-in: 0s; }
-    #save-panel .save-card[data-slot="2"] { --d-out: 0.06s; --d-in: 0.04s; }
-    #save-panel .save-card[data-slot="3"] { --d-out: 0s; --d-in: 0.08s; }
-    @keyframes card-out {
-      0% { transform: translate(var(--dx), var(--dy)) scale(0.05, 0.12) rotate(calc(var(--tilt) + 12deg)); opacity: 0; animation-timing-function: cubic-bezier(0.3, 0.6, 0.5, 1); }
-      14% { opacity: 1; }
-      42% { transform: translate(calc(var(--dx) * 0.3), calc(var(--dy) * 0.18)) scale(0.5, 0.92) rotate(calc(var(--tilt) + 5deg)); animation-timing-function: cubic-bezier(0.25, 0.5, 0.4, 1); }
-      74% { transform: translate(0, -5px) scale(1.035, 0.985) rotate(calc(var(--tilt) - 1.6deg)); opacity: 1; animation-timing-function: ease-in-out; }
-      100% { transform: rotate(var(--tilt)); opacity: 1; }
-    }
-    @keyframes card-in {
-      0% { transform: rotate(var(--tilt)); opacity: 1; }
-      55% { transform: translate(calc(var(--dx) * 0.3), calc(var(--dy) * 0.18)) scale(0.5, 0.9) rotate(calc(var(--tilt) + 5deg)); opacity: 1; }
-      100% { transform: translate(var(--dx), var(--dy)) scale(0.05, 0.12) rotate(calc(var(--tilt) + 12deg)); opacity: 0; }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      #save-panel.open .save-card { animation: card-fade 0.18s ease both; }
-      #save-panel.ever:not(.open) .save-card { animation: card-fade 0.14s ease reverse both; }
-    }
-    @keyframes card-fade { from { opacity: 0; } to { opacity: 1; } }
+    #save-panel:not(.open) .save-card { visibility: hidden; transition: visibility 0s 0.36s; }
     .save-card {
       width: 132px;
       padding: 7px 7px 4px;
@@ -237,8 +215,7 @@
       background: linear-gradient(170deg, #fbf1dc, #ead6ae);
       box-shadow: 0 3px 0 #b48a5c, 0 7px 14px rgba(10, 6, 2, 0.4), 0 2px 3px rgba(10, 6, 2, 0.25), inset 0 1px 0 #fffaf0;
       transform: rotate(var(--tilt, 0deg));
-      transform-origin: 50% 0;
-      --dx: 0px; --dy: 0px;
+      transform-origin: 50% 35%;
     }
     .save-thumb {
       width: 118px;
@@ -8662,26 +8639,55 @@
         const open = !savePanel.classList.contains('open');
         if (!open) { closeSavePanel(); return; }
         refreshSlots();
-        aimCardsAtBook();
-        savePanel.classList.add('ever', 'open'); btnSave.classList.add('on');
+        savePanel.classList.add('open'); btnSave.classList.add('on');
         resetPopover.classList.remove('open'); toggleHelp(false);
-        audio.playPaper(true);
       });
-      // each card flies from / back to the book token: offset from the card's resting top centre
-      // (its untransformed layout box) to the middle of the button
-      function aimCardsAtBook() {
+      // Card motion. One continuous curve per property, no keyframe seams and no squashing:
+      // x and y travel on different curves (y settles first) so each card swings out on an arc from
+      // the book, while scale and tilt ride a lightly damped spring (about 3% overshoot, one settle).
+      // The three transform parts are separate animations stacked with composite 'add', in the order
+      // translateX → translateY → scale·rotate, so the scale never shrinks the travel.
+      const springEase = (() => {
+        const z = 0.74, w = 6.2 / z, wd = w * Math.sqrt(1 - z * z), pts = [];
+        for (let i = 0; i <= 40; i++) {
+          const t = i / 40, x = i === 40 ? 1 : 1 - Math.exp(-z * w * t) * (Math.cos(wd * t) + (z * w / wd) * Math.sin(wd * t));
+          pts.push(x.toFixed(4));
+        }
+        try { return CSS.supports('transition-timing-function', `linear(${pts.join(',')})`) ? `linear(${pts.join(',')})` : 'cubic-bezier(0.2, 1.1, 0.4, 1)'; } catch (e) { return 'cubic-bezier(0.2, 1.1, 0.4, 1)'; }
+      })();
+      const reduceMotion = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+      function animateSaveCards(open) {
         const b = btnSave.getBoundingClientRect(), p = savePanel.getBoundingClientRect();
         const bx = b.left + b.width / 2, by = b.top + b.height / 2;
-        slotCards.forEach((card) => {
-          card.style.setProperty('--dx', `${(bx - (p.left + card.offsetLeft + card.offsetWidth / 2)).toFixed(1)}px`);
-          card.style.setProperty('--dy', `${(by - (p.top + card.offsetTop)).toFixed(1)}px`);
+        const n = slotCards.length;
+        slotCards.forEach((card, k) => {
+          card.getAnimations().forEach((a) => a.cancel());
+          if (reduceMotion) { card.animate([{ opacity: open ? 0 : 1 }, { opacity: open ? 1 : 0 }], { duration: 160, fill: open ? 'backwards' : 'forwards' }); return; }
+          const tilt = parseFloat(card.style.getPropertyValue('--tilt')) || 0;
+          const dx = bx - (p.left + card.offsetLeft + card.offsetWidth / 2);
+          const dy = by - (p.top + card.offsetTop + card.offsetHeight * 0.35);
+          const near = n - 1 - k; // the right-hand card sits under the book
+          if (open) {
+            const delay = near * 45;
+            const o = { delay, fill: 'backwards' };
+            card.animate([{ transform: `translateX(${dx}px)` }, { transform: 'translateX(0)' }], { ...o, duration: 520, easing: 'cubic-bezier(0.32, 0.72, 0.24, 1)' });
+            card.animate([{ transform: `translateY(${dy}px)` }, { transform: 'translateY(0)' }], { ...o, duration: 420, easing: 'cubic-bezier(0.16, 0.9, 0.3, 1)', composite: 'add' });
+            card.animate([{ transform: `scale(0.42) rotate(${tilt + 7}deg)` }, { transform: `scale(1) rotate(${tilt}deg)` }], { ...o, duration: 560, easing: springEase, composite: 'add' });
+            card.animate([{ opacity: 0 }, { opacity: 1 }], { ...o, duration: 140, easing: 'ease-out' });
+          } else {
+            const o = { delay: k * 30, fill: 'forwards', duration: 230, easing: 'cubic-bezier(0.55, 0, 0.8, 0.35)' };
+            card.animate([{ transform: `rotate(${tilt}deg)` }, { transform: `translate(${dx}px, ${dy}px) scale(0.45) rotate(${tilt + 6}deg)` }], o);
+            card.animate([{ opacity: 1, offset: 0 }, { opacity: 1, offset: 0.45 }, { opacity: 0 }], o);
+          }
         });
       }
-      // closing from anywhere (outside click, help, reset, photo mode) plays the paper back in
+      // opening and closing from anywhere (outside click, help, reset, photo mode, loading a slot)
       new MutationObserver(() => {
         const open = savePanel.classList.contains('open');
-        if (open !== savePanel._wasOpen && !open && savePanel._wasOpen !== undefined) audio.playPaper(false);
+        if (open === !!savePanel._wasOpen) return;
         savePanel._wasOpen = open;
+        animateSaveCards(open);
+        audio.playPaper(open);
       }).observe(savePanel, { attributes: true, attributeFilter: ['class'] });
       // a risky press asks once more: the token wobbles and its label says so
       function armed(btn, hint) {
