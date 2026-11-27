@@ -2911,33 +2911,34 @@
         }
       },
       {
-        // short dark trunk splitting into three limbs, each limb carrying its own cloud of blossom
-        // (big and small, a little apart, a small one on top), branches showing in the gaps
+        // short dark trunk forking in a wide Y (each limb forking again) under one broad, shallow
+        // umbrella of blossom: a single cloud with a billowing rim, a drooping edge and a few
+        // windows low down where the limbs show
         id: 'cherry',
         name: '벚나무',
         category: 'flora',
         type: 'stack',
         freePlace: false,
         tree: true,
-        size: 26,
-        layers: 32,
-        layerStep: 0.05,
-        scale: 1.47, // same texel size as the oak (1.24 / 22), just more of them
+        size: 30,
+        layers: 40,
+        layerStep: 0.04, // thinner slices than the other trees: the shallow crown would show steps
+        scale: 1.69, // same texel size as the oak (1.24 / 22); the crown is about 1.5 tiles across
         aoBase: 0.8, // the stack's darkening toward the ground, kept light: blossom should look airy
         roughness: 0.86,
         metalness: 0.0,
         windStrength: 0.07,
         explodeSliceFactor: 0.75,
         explodeTier: 1,
-        canopySplit: 0.4,
+        canopySplit: 0.5,
         glow: null,
-        contactRadius: 0.6,
+        contactRadius: 0.68,
         drawSlice(ctx, emCtx, layer, total, s) {
           const cx = s / 2 - 0.5, cy = s / 2 - 0.5;
           // fallen petals around the foot
           if (layer === 0) for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
             const d = Math.hypot(x - cx, y - cy), n = hash2D(x, y, 91);
-            if (d > 3.2 && d < 11.5 && n > 0.87 - (d < 8 ? 0.04 : 0)) px(ctx, x, y, n > 0.95 ? '#fff0f4' : '#f6b9cc');
+            if (d > 3.2 && d < 13 && n > 0.87 - (d < 9 ? 0.04 : 0)) px(ctx, x, y, n > 0.95 ? '#fff0f4' : '#f6b9cc');
           }
           // trunk: dark cherry bark with pale horizontal lenticel bands
           const bark = (x, y, ox, oy) => {
@@ -2945,44 +2946,67 @@
             if (layer % 3 === 1 && n > 0.4) return '#7c5a4c';
             return (x - ox) + (y - oy) > 0.5 ? (n > 0.5 ? '#3d2924' : '#46302a') : (n > 0.5 ? '#5e4036' : '#53382f');
           };
-          if (layer < 12) {
-            const r = layer < 2 ? 2.6 : (layer < 5 ? 1.95 : 1.6), tx = cx + layer * 0.04, ty = cy;
+          // trunk: a flared foot, thick up to where it divides
+          if (layer < 11) {
+            const r = layer < 1 ? 3.0 : (layer < 2 ? 2.45 : (layer < 5 ? 2.0 : 1.75)), tx = cx + layer * 0.04, ty = cy;
             fillDisc(ctx, tx, ty, r, (x, y) => bark(x, y, tx, ty));
           }
-          // crown: three clouds set a little apart around the trunk (one big, two middling) and a small
-          // one riding on top, so there are gaps between them where the limbs show
-          const lobes = [
-            { ox: -5.0, oy: -1.4, lc: 22, hr: 5.6, R: 5.2 },
-            { ox: 4.6, oy: -2.6, lc: 20, hr: 4.6, R: 4.5 },
-            { ox: 0.6, oy: 5.0, lc: 23, hr: 4.8, R: 4.4 },
-            { ox: 0.2, oy: -0.4, lc: 28, hr: 3.4, R: 3.3 }
+          // limbs: crooked polylines [layer, radius, angle] around the trunk, straight between knots so
+          // they bend at each one. Nothing mirrors: one long low limb leaning out, one short steep one,
+          // a leader going up the middle, two lesser limbs off the first two and a few thin twigs.
+          // Every tip ends deep inside the crown (about 60-70% out, mid height), never under the rim.
+          const P = (L, r, a) => [L, cx + 0.3 + Math.cos(a) * r, cy + Math.sin(a) * r];
+          const limbs = [
+            { r0: 1.35, r1: 0.6, n: [P(7, 0.3, 0), P(11, 3.2, 2.75), P(15, 5.4, 3.0), P(21, 7.0, 2.68), P(28, 7.8, 2.82)] }, // low, long
+            { r0: 1.15, r1: 0.55, n: [P(10, 0.4, 0.2), P(16, 2.5, 0.25), P(22, 3.9, 0.58), P(30, 5.0, 0.2)] },              // high, steep
+            { r0: 1.0, r1: 0.5, n: [P(10, 0.3, 0), P(18, 1.2, 4.4), P(26, 2.1, 3.95), P(33, 2.7, 4.55)] },                  // leader
+            { r0: 0.75, r1: 0.5, n: [P(15, 5.4, 3.0), P(20, 5.6, 2.2), P(27, 6.6, 1.7)] },                                   // off the low limb
+            { r0: 0.7, r1: 0.5, n: [P(16, 2.5, 0.25), P(21, 4.2, -0.6), P(27, 6.4, -1.35)] },                                // off the steep limb
+            { r0: 0.55, r1: 0.5, n: [P(21, 7.0, 2.68), P(26, 9.2, 3.1)] },                                                   // twigs
+            { r0: 0.55, r1: 0.5, n: [P(22, 3.9, 0.58), P(27, 5.9, 1.05)] },
+            { r0: 0.55, r1: 0.5, n: [P(26, 2.1, 3.95), P(31, 4.2, 3.4)] },
+            { r0: 0.55, r1: 0.5, n: [P(20, 5.6, 2.2), P(25, 7.4, 2.45)] }
           ];
-          // limbs: from the top of the trunk (layer 9) up and out to the middle of each cloud
-          for (const l of lobes) {
-            const top = l.lc - 1;
-            if (layer < 9 || layer > top) continue;
-            const t = (layer - 9) / (top - 9), e = Math.sqrt(t); // spreads early, then climbs
-            const lx = cx + l.ox * e * 0.85, ly = cy + l.oy * e * 0.85;
-            fillDisc(ctx, lx, ly, t < 0.35 ? 1.1 : (t < 0.75 ? 0.8 : 0.6), (x, y) => bark(x, y, lx, ly));
-          }
-          // blossom: pale petals in the light, coral pink in the shade, soft lavender only on the very
-          // underside (no grey-purple darks: it should read light and airy)
-          for (const l of lobes) {
-            const dl = (layer - l.lc) / l.hr;
-            if (Math.abs(dl) >= 1) continue;
-            const r = l.R * Math.sqrt(1 - dl * dl), lx = cx + l.ox, ly = cy + l.oy;
-            for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
-              const dx = x - lx, dy = y - ly, d2 = dx * dx + dy * dy;
-              if (d2 > r * r) continue;
-              const n = hash2D(x, y, layer * 5 + 11);
-              if (d2 > (r - 1.2) * (r - 1.2) && n < 0.32) continue; // ragged, frilly edge
-              let col = '#f4adc3';
-              if (dl > 0.3 || dx + dy < -2.0) col = n > 0.4 ? '#fccbd9' : '#f8bccf';
-              else if (dl < -0.35 || dx + dy > 2.4) col = n > 0.5 ? '#ef9fb0' : '#e8939f';
-              if (dl < -0.62) col = n > 0.5 ? '#d9a5d6' : '#cf9ccf';
-              if (dl > 0.6 && n > 0.76) col = '#fff2f6';
-              px(ctx, x, y, col);
+          for (const lb of limbs) {
+            const N = lb.n, La = N[0][0], Lb = N[N.length - 1][0];
+            // sample a little above and below the slice so steep runs don't break into dots
+            for (const f of [-0.33, 0, 0.33]) {
+              const L = layer + f;
+              if (L < La || L > Lb) continue;
+              let k = 0; while (k < N.length - 2 && L > N[k + 1][0]) k++;
+              const t = (L - N[k][0]) / (N[k + 1][0] - N[k][0]);
+              const lx = N[k][1] + (N[k + 1][1] - N[k][1]) * t, ly = N[k][2] + (N[k + 1][2] - N[k][2]) * t;
+              fillDisc(ctx, lx, ly, lb.r0 + (lb.r1 - lb.r0) * (L - La) / (Lb - La), (x, y) => bark(x, y, lx, ly));
             }
+          }
+          // crown: one wide, shallow umbrella. The rim billows (low-frequency bumps around it), the top
+          // is a lumpy dome, the underside rises toward the trunk and droops at the edge.
+          for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+            const dx = x - cx, dy = y - cy, rho = Math.hypot(dx, dy), th = Math.atan2(dy, dx);
+            const A = 12.0 + 0.9 * Math.sin(3 * th + 0.7) + 0.6 * Math.sin(5 * th + 2.1) + 0.4 * Math.sin(2 * th + 4.0);
+            let u = rho / A;
+            // past the rim only stray sprigs of blossom poke out (a feathery edge, not a clean line)
+            if (u >= 1 && (u > 1.13 || hash2D(x, y, layer * 5 + 13) < 0.84)) continue;
+            u = Math.min(u, 0.99);
+            const n1 = vnoise(x * 0.32, y * 0.32, 5), n2 = vnoise(x * 0.3 + 7, y * 0.3, 6);
+            const mid = 32.5 - 6.5 * u * u, h = 5.0 * Math.sqrt(1 - u * u) + 0.6;
+            const top = mid + h + (n1 - 0.5) * 2.4, bot = mid - 0.85 * h - (n2 - 0.5) * 2.0;
+            if (layer < bot || layer > top) continue;
+            const n = hash2D(x, y, layer * 5 + 11);
+            if (n < 0.05 || (u > 0.86 && n < 0.42)) continue; // pin holes, a frilly rim
+            // see-through gaps all through the crown (more low down and toward the edge) where the
+            // dark limbs inside show, as in a real cherry in bloom
+            const gap = (layer - bot < 2.2 || u > 0.8) ? 0.26 : 0.18;
+            if (vnoise(x * 0.5, y * 0.5 + layer * 0.21, 9) < gap) continue;
+            // pale petals in the light, coral pink in the shade, soft lavender only on the very underside
+            // (no grey-purple darks: it should read light and airy)
+            const dl = (layer - mid) / h, side = (dx + dy) / A;
+            let col = '#f4adc3';
+            if (dl > 0.35 || side < -0.55) col = n > 0.4 ? '#fccbd9' : '#f8bccf';
+            else if (dl < -0.3 || side > 0.6) col = n > 0.5 ? '#ef9fb0' : '#e8939f';
+            if (dl < -0.65) col = n > 0.5 ? '#d9a5d6' : '#cf9ccf';
+            if (dl > 0.65 && n > 0.76) col = '#fff2f6';
+            px(ctx, x, y, col);
           }
         }
       },
@@ -10042,9 +10066,9 @@
             const h1 = hash2D(i, 3, 211), h2 = hash2D(i, 5, 213), h3 = hash2D(i, 7, 217);
             const period = 6.5 + h1 * 4.0, ph = ((elapsed / period + h2) % 1 + 1) % 1;
             const cyc = Math.floor(elapsed / period + h2); // a new spot each fall
-            const a0 = hash2D(i, cyc, 219) * TAU, r0 = 0.15 + hash2D(i, cyc, 223) * 0.5;
+            const a0 = hash2D(i, cyc, 219) * TAU, r0 = 0.15 + hash2D(i, cyc, 223) * 0.52;
             const fallT = 0.82, f = Math.min(ph / fallT, 1), drop = f * f * (3 - 2 * f) * 0.35 + f * 0.65;
-            const y0 = tr.wy + 0.86 + h3 * 0.3, yG = getContinuousTerrainHeight(tr.wx + Math.cos(a0) * r0, tr.wz + Math.sin(a0) * r0) + 0.012;
+            const y0 = tr.wy + 0.98 + h3 * 0.16, yG = getContinuousTerrainHeight(tr.wx + Math.cos(a0) * r0, tr.wz + Math.sin(a0) * r0) + 0.012;
             const drift = f * (0.18 + h1 * 0.2), sway = Math.sin(elapsed * 2.3 + i * 1.7) * 0.07 * (1 - f * 0.6) * (f < 1 ? 1 : 0);
             animDummy.position.set(
               tr.wx + Math.cos(a0) * (r0 + drift) + sway,
