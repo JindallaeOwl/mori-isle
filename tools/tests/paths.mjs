@@ -179,6 +179,69 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
     ok('undo depth counts the edits (click, drag, erase; undone drag)', (await J(`${M}.undoDepth()`))[0] === u0 + 2, JSON.stringify(await J(`${M}.undoDepth()`)));
     await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
   }
+  // ---- wooden stairs: on the lower tile, turned up toward the neighbour one step higher ----
+  const DIRS = [[0, 1], [1, 0], [0, -1], [-1, 0]]; // rotation 0..3 -> local +z in world (sin, cos)
+  const isl2 = JSON.parse(await J(`${M}.islandList()`));
+  const taken = (gx, gz) => isl2.placed.some((p) => p[1] === gx && p[2] === gz)
+    || isl2.snap.concat(isl2.free).some((o) => Math.hypot(o[1] - tileW(gx), o[2] - tileW(gz)) < 1.0);
+  let foot = null;
+  for (let gz2 = 0; gz2 < 12 && !foot; gz2++) for (let gx2 = 0; gx2 < 12 && !foot; gx2++) {
+    if (taken(gx2, gz2) || (await J(`${M}.pond(${tileW(gx2)}, ${tileW(gz2)})`)) < 1.2) continue;
+    const lv = await J(`${M}.terrainLevel(${gx2}, ${gz2})`);
+    const ups = [];
+    for (let r = 0; r < 4; r++) {
+      const nx = gx2 + DIRS[r][0], nz = gz2 + DIRS[r][1];
+      if (nx < 0 || nz < 0 || nx > 11 || nz > 11) continue;
+      if ((await J(`${M}.terrainLevel(${nx}, ${nz})`)) === lv + 1 && !taken(nx, nz)) ups.push(r);
+    }
+    if (ups.length === 1) foot = { gx: gx2, gz: gz2, rot: ups[0] };
+  }
+  ok('found a bank to put stairs on', !!foot, JSON.stringify(foot));
+  if (foot) {
+    await tool('stairs');
+    const [dx, dz] = DIRS[foot.rot], n1 = (await J(`${M}.state()`)).placed;
+    // aim a little toward the bank (the side the stairs should climb)
+    await clickWorld(tileW(foot.gx) + dx * 0.15, tileW(foot.gz) + dz * 0.15);
+    const placedNow = JSON.parse(await J(`${M}.islandList()`)).placed.find((p) => p[0] === 'stairs' && p[1] === foot.gx && p[2] === foot.gz);
+    ok('stairs placed on the lower tile', (await J(`${M}.state()`)).placed === n1 + 1 && !!placedNow, JSON.stringify(placedNow));
+    ok('stairs turned up the bank by themselves', placedNow && placedNow[3] === foot.rot, `${placedNow && placedNow[3]} vs ${foot.rot}`);
+    const top = [foot.gx + dx, foot.gz + dz];
+    ok('ground edits refused at the foot and the top', !(await J(`${M}.terrainAllowed(${foot.gx}, ${foot.gz}, 1)`)) && !(await J(`${M}.terrainAllowed(${top[0]}, ${top[1]}, -1)`)));
+    // a tree on the top tile would stand in them
+    await tool('oak');
+    await clickWorld(tileW(top[0]), tileW(top[1]));
+    ok('no tree on the tile at the top', (await J(`${M}.state()`)).placed === n1 + 1);
+    // a rock on the flight is refused
+    await tool('rocks');
+    const fr = (await J(`${M}.state()`)).free;
+    await clickWorld(tileW(foot.gx) + dx * 0.5, tileW(foot.gz) + dz * 0.5);
+    ok('no rock on the stairs', (await J(`${M}.state()`)).free === fr);
+    // the eraser picks them from the middle of the flight; undo brings them back
+    await tool('delete');
+    const [mx, my] = await J(`${M}.project(${tileW(foot.gx) + dx * 0.5}, ${(await J(`${M}.terrainLevel(${foot.gx}, ${foot.gz})`)) * 0.48 + 0.24}, ${tileW(foot.gz) + dz * 0.5})`);
+    await mouse('mouseMoved', mx, my); await wait(400);
+    ok('eraser picks the stairs', (await J(`${M}.eraseTarget()`))?.id === 'stairs', JSON.stringify(await J(`${M}.eraseTarget()`)));
+    await mouse('mousePressed', mx, my, { button: 'left', buttons: 1, clickCount: 1 });
+    await mouse('mouseReleased', mx, my, { button: 'left', clickCount: 1 }); await wait(1200);
+    ok('erased the stairs', (await J(`${M}.state()`)).placed === n1);
+    await J(`${M}.undo(-1)`); await wait(1500);
+    ok('undo puts them back', (await J(`${M}.state()`)).placed === n1 + 1);
+    // flat ground: a free tile with no side neighbour one step up refuses stairs
+    let flat = null;
+    for (let gz2 = 1; gz2 < 11 && !flat; gz2++) for (let gx2 = 1; gx2 < 11 && !flat; gx2++) {
+      if (taken(gx2, gz2) || (await J(`${M}.pond(${tileW(gx2)}, ${tileW(gz2)})`)) < 1.2) continue;
+      if (JSON.parse(await J(`${M}.islandList()`)).placed.some((p) => p[1] === gx2 && p[2] === gz2)) continue;
+      const lv = await J(`${M}.terrainLevel(${gx2}, ${gz2})`);
+      let up = false;
+      for (const [ax, az] of DIRS) if ((await J(`${M}.terrainLevel(${gx2 + ax}, ${gz2 + az})`)) === lv + 1) up = true;
+      if (!up) flat = [gx2, gz2];
+    }
+    await tool('stairs');
+    if (flat) await clickWorld(tileW(flat[0]), tileW(flat[1]));
+    ok('no stairs on flat ground', !!flat && (await J(`${M}.state()`)).placed === n1 + 1, JSON.stringify(flat));
+    await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
+  }
+
   await wait(1500);
   const errs = await J('window.__errs');
   ok('no console errors or warnings', errs.length === 0, errs.slice(0, 3).join(' | '));

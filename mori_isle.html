@@ -4822,6 +4822,61 @@
           // a pebble on the pond floor beside it
           S.rock(rng.range(.035, .05), rng.range(-.2, .2), -.24, rng.range(.15, .2), mixC(MCOL.stoneD, WET, .4), { sq: .6, flat: .3, rough: .4, d: 0 });
         }
+      },
+      // Wooden stairs set into the bank between two terrace steps (def.stairs). They stand on the lower
+      // tile and climb toward the neighbour one step up (local +z, turned automatically: STAIRS). The
+      // model follows the real slope (getHillHeight: smoothstep from 0.22 to 0.78 of the way to the next
+      // tile centre), so each tread's back edge meets the turf: a log riser, a plank tread, packed earth
+      // under it, a stake at each end; edging logs up both sides, moss and grass where they meet the bank.
+      stairs: {
+        name: '나무 계단',
+        category: 'paths',
+        type: 'soup',
+        seed: 271,
+        stairs: true,
+        windStrength: 0.0,
+        explodeSliceFactor: 0.40,
+        explodeTier: 0,
+        glow: null,
+        contactRadius: 0,
+        solidRadius: 0.2,
+        build(S, rng) {
+          const H = STEP_HEIGHT, N = 4, W = .22;
+          const ground = (z) => H * THREE.MathUtils.smoothstep(z, .22, .78);
+          const zAt = (y) => { let a = .22, b = .78; for (let i = 0; i < 30; i++) { const m = (a + b) / 2; if (ground(m) < y) a = m; else b = m; } return (a + b) / 2; };
+          const EARTH = C('#6b5038'), EARTH_D = C('#4f3a28');
+          for (let i = 0; i < N; i++) {
+            const y0 = H * i / N, y1 = H * (i + 1) / N;
+            const za = i === 0 ? .14 : zAt(y0), zb = zAt(y1) + .02, d = zb - za;
+            // packed earth under the tread (its front shows between riser and the step below)
+            S.box(W * 2 - .02, y1 - y0 + .05, d, rng.range(-.005, .005), (y0 + y1) / 2 - .03, (za + zb) / 2, mixC(EARTH_D, EARTH, rng()), { l: L_DIRT, rough: 1 });
+            // log riser across the front, a plank tread on top, overhanging a little
+            S.cyl(.032, W * 2 + .02, rng.range(-.006, .006), y1 - .03, za + .02, mixC(BARK, BARK_L, rng() * .5), { n: 7, l: L_WOOD, rough: .95, r: [0, 0, Math.PI / 2] });
+            S.box(W * 2 - .01, .028, d + .01, rng.range(-.008, .008), y1 - .006, (za + zb) / 2 - .008, mixC(MCOL.wood, MCOL.woodL, rng() * .6), { l: L_WOOD, rough: .78, r: [rng.range(-.02, .02), rng.range(-.03, .03), 0] });
+            if (rng() < .5) S.box(.012, .006, d * .7, rng.range(-.12, .12), y1 + .009, (za + zb) / 2, mulC(MCOL.woodD, .9), { l: L_WOOD, rough: .9, jit: .03 }); // a crack in the plank
+            // stakes holding the riser at both ends
+            for (const s of [-1, 1]) S.box(.03, .1, .03, s * (W + .012), y1 - .04, za + .015, MCOL.woodD, { l: L_WOOD, rough: .9, r: [0, rng.range(-.2, .2), s * .04] });
+          }
+          // edging logs up both sides, from the foot to the top of the bank
+          for (const s of [-1, 1]) {
+            const st = S.verts;
+            S.seg([s * (W + .04), .02, .1], [s * (W + .04), H + .02, .84], .03, .026, mixC(BARK, BARK_L, rng() * .4), { n: 6, l: L_WOOD, rough: .95 });
+            S.cover(st, mixC(MOSS_D, MCOL.moss, rng() * .6), .6, L_MOSS, 31 + s);
+          }
+          // moss pads and grass tufts where the stairs meet the bank
+          for (let k = 0; k < 5; k++) {
+            const s = rng() < .5 ? -1 : 1, z = rng.range(.12, .85);
+            S.ico(rng.range(.025, .04), s * rng.range(W - .02, W + .08), ground(z) + .015, z, mixC(MOSS_D, MCOL.moss, rng()), { sc: [1.4, .45, 1.1], d: 0, rough: 1, l: L_MOSS });
+          }
+          for (let k = 0; k < 4; k++) {
+            const s = k % 2 ? -1 : 1, z = rng.range(.1, .8), x = s * rng.range(W + .07, W + .12), st = S.verts;
+            for (let b = 0; b < 3; b++) {
+              const a = rng() * TAU;
+              S.seg([x, ground(z) - .005, z], [x + Math.cos(a) * .025, ground(z) + rng.range(.05, .08), z + Math.sin(a) * .025], .006, .002, mixC(C('#5f8a36'), C('#8fb653'), rng()), { n: 3, rough: .9, l: L_PLAIN });
+            }
+            for (let v = st; v < S.verts; v++) S.S[v * 4 + 2] = .45 * clamp((S.P[v * 3 + 1] - ground(z)) / .08, 0, 1);
+          }
+        }
       }
     };
     if (HASH.stack !== '1') { // #stack=1 keeps the old sprite-stack versions for comparison
@@ -8038,6 +8093,25 @@
         return out;
       }
       const railRects = () => fenceRailRects().concat(wallRunRects());
+      // ---- stairs (def.stairs): on the lower tile, climbing toward a side neighbour one step up ----
+      const STAIR_RECT = [-0.28, 0.28, 0.1, 0.88]; // local footprint (+z = up the stairs), into the bank
+      const rotDir = (rot) => [Math.round(Math.sin(rot * Math.PI / 2)), Math.round(Math.cos(rot * Math.PI / 2))]; // local +z in world
+      const isStairs = (e) => !!assetsById[e.id]?.def.stairs;
+      const stairsRect = (e) => localRect(STAIR_RECT, e.gx - HALF_GRID + 0.5, e.gz - HALF_GRID + 0.5, e.rotation);
+      const stairsTop = (e) => { const [dx, dz] = rotDir(e.rotation); return [e.gx + dx, e.gz + dz]; };
+      // which way stairs on this tile would climb: a side neighbour exactly one step up; with several,
+      // the one the pointer leans toward. null = no step to climb here
+      function stairsFor(hit) {
+        const lv = getHillLevel(hit.gx, hit.gz), cx = hit.gx - HALF_GRID + 0.5, cz = hit.gz - HALF_GRID + 0.5;
+        let best = null, lean = -9;
+        for (let rot = 0; rot < 4; rot++) {
+          const [dx, dz] = rotDir(rot), nx = hit.gx + dx, nz = hit.gz + dz;
+          if (nx < 0 || nz < 0 || nx >= GRID_SIZE || nz >= GRID_SIZE || getHillLevel(nx, nz) !== lv + 1) continue;
+          const l = (hit.wx - cx) * dx + (hit.wz - cz) * dz;
+          if (l > lean) { lean = l; best = { rot, nx, nz }; }
+        }
+        return best;
+      }
       // can a snap prop with world footprint `r` stand here? (skipIdx: a snapProps entry to ignore)
       const rectSamples = (r) => { const out = []; for (const fx of [0, 0.5, 1]) for (const fz of [0, 0.5, 1]) out.push([r.x0 + (r.x1 - r.x0) * fx, r.z0 + (r.z1 - r.z0) * fz]); return out; };
       // shore props (def.shore = { land, water } local rects): the land end on flat dry ground, the water end over the pond
@@ -8065,7 +8139,8 @@
           const ex = e.gx - HALF_GRID + 0.5, ez = e.gz - HALF_GRID + 0.5;
           if (e.id === 'path') { // may brush the path's edge, not stand on it
             if (rectsOverlap(r, { x0: ex - 0.3, x1: ex + 0.3, z0: ez - 0.3, z1: ez + 0.3 })) return true;
-          } else if (rectHitsCircle(r, ex, ez, gridSolidR(e.id))) return true;
+          } else if (isStairs(e)) { if (rectsOverlap(r, stairsRect(e))) return true; }
+          else if (rectHitsCircle(r, ex, ez, gridSolidR(e.id))) return true;
         }
         for (const rail of railRects()) if (rectsOverlap(r, rail)) return true;
         for (const fp of freeProps) {
@@ -8160,6 +8235,7 @@
         // 3. Solid grid-placed objects (campfire flames, tree trunks, benches, lanterns, fence posts)
         for (const entry of placedItems.values()) {
           if (entry.id === 'cabin' || entry.id === 'path') continue;
+          if (isStairs(entry)) { if (rectHitsCircle(stairsRect(entry), wx, wz, selfRadius)) return true; continue; }
           const ex = entry.gx - HALF_GRID + 0.5;
           const ez = entry.gz - HALF_GRID + 0.5;
           let solidR = 0.24;
@@ -8239,6 +8315,26 @@
           if (isPondTile(hit.gx, hit.gz)) return false;
           const key = `${hit.gx},${hit.gz}`;
           if (placedItems.has(key)) return false;
+          // the tile at the top of a flight of stairs keeps its edge clear (a path may meet them there)
+          if (def.type !== 'auto_path') for (const e of placedItems.values()) {
+            if (isStairs(e)) { const [tx, tz] = stairsTop(e); if (tx === hit.gx && tz === hit.gz) return false; }
+          }
+          if (def.stairs) { // a step one up beside it, a dry bank, nothing in the way, a free landing on top
+            const s = stairsFor(hit);
+            if (!s) return false;
+            const top = placedItems.get(`${s.nx},${s.nz}`);
+            if (top && top.id !== 'path') return false;
+            const r = localRect(STAIR_RECT, hit.gx - HALF_GRID + 0.5, hit.gz - HALF_GRID + 0.5, s.rot);
+            for (const [px, pz] of rectSamples(r)) if (getPondSDF(px, pz) < 0.12) return false;
+            for (const o of snapProps) if (rectsOverlap(r, footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation))) return false;
+            for (const fp of freeProps) {
+              const solid = fp.id === 'rocks' ? 0.3 : assetsById[fp.id]?.def.solidRadius;
+              if (rectHitsCircle(r, fp.wx, fp.wz, solid ? solid * (fp.scale || 1) : 0.05)) return false;
+            }
+            for (const run of railRects()) if (rectsOverlap(r, run)) return false;
+            for (const c of cabinRects()) if (rectsOverlap(r, c)) return false;
+            return true;
+          }
           // a cabin is wider than a tile's flat middle: its four neighbours must sit at the same step
           if (def.type === '3d_cabin') {
             const lv = getHillLevel(hit.gx, hit.gz);
@@ -9161,6 +9257,11 @@
         if (gx < 0 || gx >= GRID_SIZE || gz < 0 || gz >= GRID_SIZE) return false;
         const k = gz * GRID_SIZE + gx, cur = terrain.level[k], next = cur + dir;
         if (next < 0 || next > TERRAIN_MAX) return false;
+        for (const e of placedItems.values()) { // stairs need their foot and their top exactly one step apart
+          if (!isStairs(e)) continue;
+          const [tx, tz] = stairsTop(e);
+          if ((e.gx === gx && e.gz === gz) || (tx === gx && tz === gz)) return false;
+        }
         const cx = gx - HALF_GRID + 0.5, cz = gz - HALF_GRID + 0.5;
         for (let i = -4; i <= 4; i++) for (let j = -4; j <= 4; j++) {
           if (getPondSDF(cx + i * TERRAIN_REACH / 4, cz + j * TERRAIN_REACH / 4) < 0.1) return false;
@@ -9228,6 +9329,7 @@
           if (e.id === 'cabin') continue;
           const ex = e.gx - HALF_GRID + 0.5, ez = e.gz - HALF_GRID + 0.5;
           if (e.id === 'path') { if (rectHitsCircle({ x0: ex - 0.46, x1: ex + 0.46, z0: ez - 0.46, z1: ez + 0.46 }, cx, cz, CELL_R + 0.04)) return true; }
+          else if (isStairs(e)) { if (rectHitsCircle(stairsRect(e), cx, cz, R)) return true; }
           else if (Math.hypot(cx - ex, cz - ez) < Math.max(0.18, gridSolidR(e.id)) + R) return true; // stays off isPondTile
         }
         for (const rail of railRects()) if (rectHitsCircle(rail, cx, cz, R)) return true;
@@ -9381,7 +9483,8 @@
           triggerPlaceJuice(def, hit.wx, getContinuousTerrainHeight(hit.wx, hit.wz), hit.wz);
         } else {
           const key = `${hit.gx},${hit.gz}`;
-          placedItems.set(key, { id: selectedTool, gx: hit.gx, gz: hit.gz, rotation: currentRotation, spawnT: performance.now() * 0.001 });
+          const rotation = def.stairs ? stairsFor(hit).rot : currentRotation; // stairs face up the bank by themselves
+          placedItems.set(key, { id: selectedTool, gx: hit.gx, gz: hit.gz, rotation, spawnT: performance.now() * 0.001 });
           rebuildInstances();
           triggerPlaceJuice(def, hit.gx - HALF_GRID + 0.5, getTileElevation(hit.gx, hit.gz), hit.gz - HALF_GRID + 0.5);
         }
@@ -9431,6 +9534,11 @@
         };
         placedItems.forEach((e) => {
           const def = assetsById[e.id].def, x = e.gx - HALF_GRID + 0.5, z = e.gz - HALF_GRID + 0.5;
+          if (def.stairs) { // a segment up the middle of the flight
+            const [dx, dz] = rotDir(e.rotation), y = getTileElevation(e.gx, e.gz);
+            consider({ kind: 'placed', ref: e, id: e.id }, x + dx * 0.5, y, z + dz * 0.5, STEP_HEIGHT, 0.26);
+            return;
+          }
           const r = def.type === '3d_cabin' ? 0.52 : (def.type === 'auto_path' ? 0.42 : (def.type === 'auto_fence' ? 0.12 : Math.max(gridSolidR(e.id), def.contactRadius || 0, 0.12)));
           consider({ kind: 'placed', ref: e, id: e.id }, x, getTileElevation(e.gx, e.gz), z, itemHeight(e.id), r);
         });
@@ -9629,6 +9737,7 @@
             ghost.position.set(tileX, tileY + 0.02, tileZ);
             ghost.rotation.y = currentRotation * (Math.PI / 2);
             if (ghost.userData.varOfs) { const d = assetsById[selectedTool].def; ghost.userData.varOfs.value = variantAt(d, tileX, tileZ) / d.variants; }
+            if (def.stairs) { const s = stairsFor(hoveredHit); if (s) ghost.rotation.y = s.rot * (Math.PI / 2); }
             if (ghost.userData.conn) { // a wall ghost shows the joins it would make, turned like the real one
               const L = wallLook(selectedTool, gx, gz);
               ghost.rotation.y = L.rot * (Math.PI / 2);
