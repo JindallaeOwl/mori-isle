@@ -66,8 +66,25 @@ export default async ({ wait, evaluate, mouse, key, log }) => {
     return false;
   };
 
+  // water props (stepping stones) go out on the pond: aim at the water surface around its middle
+  const placeWater = async (tool) => {
+    await evaluate(`document.querySelector('#hud-dock [data-tool="${tool}"]').click()`);
+    await wait(300);
+    for (let a = 0; a < 12; a++) {
+      const wx = 2.35 + Math.cos(a) * 0.4 * (a % 3), wz = 2.35 + Math.sin(a) * 0.4 * (a % 3);
+      const [x, y] = await J(`window.__mori.project(${wx}, ${await J(`window.__mori.waterY(${wx}, ${wz})`)}, ${wz})`);
+      const before = await total();
+      await mouse('mouseMoved', x, y); await wait(250);
+      await mouse('mousePressed', x, y, { button: 'left', buttons: 1, clickCount: 1 });
+      await mouse('mouseReleased', x, y, { button: 'left', clickCount: 1 });
+      await wait(700);
+      if ((await total()) > before) return true;
+    }
+    return false;
+  };
+
   // 2) every tool places
-  for (const d of items) ok(`places ${d.id} (${d.category})`, d.id === 'dock' ? await placeShore(d.id) : await placeSomewhere(d.id));
+  for (const d of items) ok(`places ${d.id} (${d.category})`, d.id === 'dock' ? await placeShore(d.id) : (d.id === 'steppingstone' ? await placeWater(d.id) : await placeSomewhere(d.id)));
   // a cherry tree sheds petals once it has landed (extra instances on the petal mesh, no new draw call)
   await wait(2500);
   ok('cherry petals drift down', (await J('window.__mori.petals()')) > 26, String(await J('window.__mori.petals()')));

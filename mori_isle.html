@@ -1591,6 +1591,24 @@
         this.noiseHit(t, { freq: P[0] * (0.92 + Math.random() * 0.16), q: P[1], vol: P[2], decay: 0.07, pan });
         if (mat === 3) this.noiseHit(t + 0.025, { freq: 2400 + Math.random() * 600, q: 6, vol: 0.05, decay: 0.018, pan });
       }
+      // a step stone set into the pond (`delay`: when it lands): a deep plop, the dull knock of stone
+      // on the pond floor, a little splash of droplets
+      playStoneDrop(pan = 0, delay = 0) {
+        if (!this.ctx || !this.enabled) return;
+        const t = this.ctx.currentTime + delay, p = 0.88 + Math.random() * 0.25;
+        const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+        o.type = 'sine';
+        o.frequency.setValueAtTime(420 * p, t);
+        o.frequency.exponentialRampToValueAtTime(150 * p, t + 0.12);
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.linearRampToValueAtTime(0.09, t + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+        o.connect(g); this.out(g, pan);
+        o.start(t); o.stop(t + 0.2);
+        this.noiseHit(t + 0.004, { freq: 420 * p, q: 1.4, vol: 0.06, decay: 0.05, pan });
+        this.noiseHit(t + 0.02, { freq: 2600 + Math.random() * 900, q: 1.0, vol: 0.022, decay: 0.12, pan });
+        for (let i = 0; i < 3; i++) this.noiseHit(t + 0.09 + i * 0.05 + Math.random() * 0.03, { freq: 3200 + Math.random() * 2000, q: 4, vol: 0.012, decay: 0.02, pan: pan + (Math.random() - 0.5) * 0.3 });
+      }
       // wildflower seeds: a patter of tiny seeds, then a soft chime as the flowers come up
       playSeeds(pan = 0) {
         if (!this.ctx || !this.enabled) return;
@@ -4760,6 +4778,49 @@
             for (const sd of [-1, 1]) if (rng() < .75) { const s = rng.range(.16, .44); tuft(dx * s - dz * sd * .13, dz * s + dx * sd * .13); }
             S.arms.push([a0, S.verts, i + 1]);
           });
+        }
+      },
+      // Stepping stones: free placement on the water only (def.onWater), y = 0 is the water surface.
+      // A flat stone with a dry top a few cm proud of the surface, a wet dark body going down into the
+      // pond (seen through the water), algae at the waterline, a moss patch. Click = one stone; drag
+      // over the water and they follow the stroke at a stride apart (STEP STONES).
+      steppingstone: {
+        name: '징검다리',
+        category: 'paths',
+        type: 'soup',
+        seed: 263,
+        freePlace: true,
+        onWater: true,
+        windStrength: 0.0,
+        explodeSliceFactor: 0.35,
+        explodeTier: 0,
+        glow: null,
+        contactRadius: 0,
+        solidRadius: 0.15,
+        build(S, rng) {
+          const WET = C('#3f4a40'), ALGAE = C('#5f7a36');
+          const dry = mixC(MCOL.stone, MCOL.stoneL, rng.range(.2, .6));
+          // the wet body under the surface: wider, darker, smooth with water
+          S.add(gIco(0), { s: [.17, .15, .155], p: [0, -.13, 0], r: [0, rng() * TAU, 0], c: mixC(MCOL.stoneD, WET, .55), l: L_ROCK, rough: .38, uvs: 1.0 });
+          // the top slab: flat-topped, lumpy rim, darkening into the waterline
+          const sd = rng() * 100, start = S.verts;
+          S.add(gIco(1), {
+            s: [.165, .075, .14], p: [0, -.004, 0], r: [0, rng() * TAU, 0], c: dry, l: L_ROCK, rough: .72, uvs: 1.0,
+            grad: [-.05, .02, .5],
+            deform: (v) => {
+              v.multiplyScalar(.86 + .28 * vnoise(v.x * 11 + sd, v.z * 11 + v.y * 6 + sd, 7));
+              if (v.y > .045) v.y = .045 + (v.y - .045) * .18; // stood on for years: worn flat
+            }
+          });
+          if (rng() < .8) S.cover(start, mixC(MOSS_D, MCOL.moss, rng() * .6), .9, L_MOSS, Math.floor(rng() * 999));
+          // algae fringe at the waterline on the shaded side, a wet sheen just above it
+          const side = rng() * TAU;
+          for (let k = 0; k < 5; k++) {
+            const a = side + rng.range(-.9, .9), r = rng.range(.14, .17);
+            S.ico(rng.range(.014, .024), Math.cos(a) * r, -.012, Math.sin(a) * r * .88, mixC(ALGAE, MOSS_D, rng()), { sc: [1.4, .5, 1.1], d: 0, rough: .5, l: L_MOSS });
+          }
+          // a pebble on the pond floor beside it
+          S.rock(rng.range(.035, .05), rng.range(-.2, .2), -.24, rng.range(.15, .2), mixC(MCOL.stoneD, WET, .4), { sq: .6, flat: .3, rough: .4, d: 0 });
         }
       }
     };
@@ -8126,11 +8187,49 @@
         return false;
       }
 
+      /* ---- STEP STONES (def.onWater): free props that stand in the water ---- */
+      const WATER_SURF = -0.09;     // the water surface below its step's height (same as the pond sheets)
+      const STONE_GAP = 0.34;    // stride between stones laid by a drag
+      const STONE_CLEAR = 0.27;  // nearest another stone's centre may be (at scale 1)
+      // the height a free prop stands at: the ground, or the water surface for step stones
+      const freePropY = (def, wx, wz) => (def && def.onWater ? getHillHeight(wx, wz) + WATER_SURF : getContinuousTerrainHeight(wx, wz));
+      // the pointer ray hits the pond floor; walk back up the same ray to the water surface
+      const _camDir = new THREE.Vector3();
+      function waterPoint(hit) {
+        camera.getWorldDirection(_camDir);
+        let x = hit.wx, z = hit.wz;
+        for (let i = 0; i < 2; i++) { // the surface height is the step's height there (flat inside a pond)
+          const t = (getHillHeight(x, z) + WATER_SURF - hit.wy) / _camDir.y;
+          x = hit.wx + _camDir.x * t; z = hit.wz + _camDir.z * t;
+        }
+        return { wx: x, wz: z, wy: getHillHeight(x, z) + WATER_SURF };
+      }
+      // can a step stone stand here? in open, flat water (not on a falls' lip or its splash), clear of
+      // the other stones and of a dock's deck
+      function stoneSpotOk(wx, wz, scale = 1, skip = null) {
+        const lim = HALF_GRID - 0.3;
+        if (Math.abs(wx) > lim || Math.abs(wz) > lim) return false;
+        if (getPondSDF(wx, wz) > -0.1) return false;
+        const h = getHillHeight(wx, wz);
+        for (const [ox, oz] of [[0.18, 0], [-0.18, 0], [0, 0.18], [0, -0.18]]) if (Math.abs(getHillHeight(wx + ox, wz + oz) - h) > 0.01) return false;
+        for (const f of fallFeet) if (Math.hypot(wx - f.x, wz - f.z) < 0.38) return false;
+        for (const fp of freeProps) {
+          if (fp === skip || !assetsById[fp.id]?.def.onWater) continue;
+          if (Math.hypot(wx - fp.wx, wz - fp.wz) < STONE_CLEAR * ((scale + (fp.scale || 1)) / 2)) return false;
+        }
+        for (const o of snapProps) {
+          const def = assetsById[o.id].def;
+          if (rectHitsCircle(def.shore ? localRect(def.shore.water, o.wx, o.wz, o.rotation) : footprintRect(def, o.wx, o.wz, o.rotation), wx, wz, 0.14)) return false;
+        }
+        return true;
+      }
+
       function canPlaceAtHit(toolId, hit) {
         if (!hit || toolId === 'delete') return true;
         const def = assetsById[toolId]?.def;
         if (!def) return false;
 
+        if (def.onWater) { const p = waterPoint(hit); return stoneSpotOk(p.wx, p.wz); }
         if (def.snapPlace) return snapPlacement(def, hit).valid;
         if (def.freePlace) {
           const r = PROP_SELF_RADIUS[toolId] || 0.12;
@@ -8272,7 +8371,7 @@
         let wx = o.wx, wz = o.wz, wy, scale = 1;
         if (kind === 'placed') { wx = o.gx - HALF_GRID + 0.5; wz = o.gz - HALF_GRID + 0.5; wy = getTileElevation(o.gx, o.gz); }
         else if (kind === 'snap') wy = snapGroundY(def, o.wx, o.wz, o.rotation);
-        else { wy = getContinuousTerrainHeight(o.wx, o.wz); scale = o.scale || 1; }
+        else { wy = freePropY(def, o.wx, o.wz); scale = o.scale || 1; }
         const cabin = def.type === '3d_cabin';
         if (def.connect && kind === 'placed') { // as it was drawn: joined to the neighbours still standing
           const L = wallLook(o.id, o.gx, o.gz);
@@ -8449,11 +8548,18 @@
         });
         pickPointLights(true);
 
+        // 2a. Step stones whose water went away (a plunge pool leaves with its falls) float off with it
+        for (let i = freeProps.length - 1; i >= 0; i--) {
+          const fp = freeProps[i];
+          if (!assetsById[fp.id]?.def.onWater || getPondSDF(fp.wx, fp.wz) < -0.04) continue;
+          freeProps.splice(i, 1);
+          vanishItem('free', fp);
+        }
         // 2. Process Free-Placed Overlapping Decor (Flowers, Reeds, Rocks, Mushrooms)
         freeProps.forEach((fp) => {
           const def = assetsById[fp.id]?.def;
           if (!def || !isInstancedDef(def)) return;
-          const wy = getContinuousTerrainHeight(fp.wx, fp.wz);
+          const wy = freePropY(def, fp.wx, fp.wz);
           buckets[fp.id].push({ wx: fp.wx, wy, wz: fp.wz, rotation: fp.rotation, scale: fp.scale || 1.0, spawnT: fp.spawnT ?? -100, ref: fp });
           if (def.contactRadius > 0) {
             contactShadowBaseList.push({
@@ -8728,6 +8834,39 @@
       }
       function endSeedStroke() { seedStroke = null; }
 
+      // step stones: a click sets one stone on the water; dragging lays the next one each STONE_GAP
+      // along the stroke (a little to either side, like a path you'd hop), skipping spots that are
+      // taken or not open water. One stroke = one undo step (beginEdit / commitEdit around it).
+      let stoneStroke = null;
+      function setStone(wx, wz) {
+        const scale = 0.88 + Math.random() * 0.24;
+        if (!stoneSpotOk(wx, wz, scale)) return false;
+        const now = performance.now() * 0.001, def = assetsById[selectedTool].def;
+        freeProps.push({ id: selectedTool, wx, wz, rotation: Math.floor(Math.random() * 4), scale, spawnT: now });
+        rebuildInstances();
+        const y = freePropY(def, wx, wz), land = dropTotalTime(def.layers), pan = screenPan(wx, y, wz);
+        spawnRing(now + land, wx, y + 0.012, wz, { r0: 0.12 * scale, r1: 0.5 * scale, w: 0.03, a: 0.5, exp: 2, dur: 0.7 });
+        audio.playStoneDrop(pan, land);
+        return true;
+      }
+      function beginStoneStroke(hit) {
+        const p = waterPoint(hit);
+        stoneStroke = { wx: p.wx, wz: p.wz, n: 0, side: Math.random() < 0.5 ? -1 : 1 };
+        if (setStone(p.wx, p.wz)) stoneStroke.n++;
+        else audio.playTerrainBlocked(screenPan(p.wx, p.wy, p.wz));
+      }
+      function stoneStrokeTo(hit) {
+        const p = waterPoint(hit), s = stoneStroke;
+        for (let k = 0; k < 6; k++) { // a fast drag may cover several strides in one move
+          const dx = p.wx - s.wx, dz = p.wz - s.wz, d = Math.hypot(dx, dz);
+          if (d < STONE_GAP) return;
+          const ux = dx / d, uz = dz / d, off = s.side * (0.03 + Math.random() * 0.04);
+          s.wx += ux * STONE_GAP; s.wz += uz * STONE_GAP; s.side = -s.side;
+          if (setStone(s.wx - uz * off, s.wz + ux * off)) s.n++;
+        }
+      }
+      function endStoneStroke() { stoneStroke = null; }
+
       /* ---- SAVE (step 5): the island lives on in this browser ---- */
       // The current island is written to a hidden auto slot one second after the last edit (a few
       // KB, only on edits, never per frame) and comes back, assembling, on the next visit. The time
@@ -8834,7 +8973,7 @@
         document.getElementById('btn-redo')?.classList.toggle('off', !redoStack.length);
       }
       function undoRedo(dir) { // -1 undo, +1 redo
-        if (intro.phase !== 'done' || isPhotoMode || paintStroke || seedStroke || eraseStroke) return false;
+        if (intro.phase !== 'done' || isPhotoMode || paintStroke || seedStroke || stoneStroke || eraseStroke) return false;
         commitEdit();
         const from = dir < 0 ? undoStack : redoStack, to = dir < 0 ? redoStack : undoStack;
         const isl = from.length ? parseIsland(from[from.length - 1]) : null;
@@ -9098,6 +9237,7 @@
           else if (rectHitsCircle(footprintRect(def, o.wx, o.wz, o.rotation), cx, cz, R)) return true;
         }
         for (const fp of freeProps) {
+          if (assetsById[fp.id]?.def.onWater) continue; // step stones stand in water already
           const solid = fp.id === 'rocks' ? 0.34 : assetsById[fp.id]?.def.solidRadius;
           if (Math.hypot(cx - fp.wx, cz - fp.wz) < (solid ? solid * (fp.scale || 1) : 0.12) + R) return true;
         }
@@ -9108,6 +9248,9 @@
         for (const o of snapProps) {
           const def = assetsById[o.id].def;
           if (def.shore && rectHitsCircle(localRect(def.shore.water, o.wx, o.wz, o.rotation), cx, cz, CELL_R + 0.3)) return true;
+        }
+        for (const fp of freeProps) { // ...or a step stone standing on dry ground
+          if (assetsById[fp.id]?.def.onWater && Math.hypot(cx - fp.wx, cz - fp.wz) < CELL_R + 0.3) return true;
         }
         return false;
       }
@@ -9215,6 +9358,7 @@
         if (assetsById[selectedTool]?.def.seedScatter) { beginSeedStroke(hit); return; }
         const tt = terrainToolById(selectedTool);
         if (tt) { if (tt.paint !== undefined) beginPaintStroke(hit, tt.paint); else editTerrainAt(hit.gx, hit.gz, tt.dir); return; }
+        if (assetsById[selectedTool]?.def.onWater) { beginStoneStroke(hit); return; }
         if (!canPlaceAtHit(selectedTool, hit)) {
           return; // Blocked by collision/water; red ghost provides clear visual feedback
         }
@@ -9297,7 +9441,7 @@
         });
         freeProps.forEach((fp) => {
           const def = assetsById[fp.id].def, sc = fp.scale || 1;
-          consider({ kind: 'free', ref: fp, id: fp.id }, fp.wx, getContinuousTerrainHeight(fp.wx, fp.wz), fp.wz,
+          consider({ kind: 'free', ref: fp, id: fp.id }, fp.wx, freePropY(def, fp.wx, fp.wz), fp.wz,
             itemHeight(fp.id) * sc, (fp.id === 'rocks' ? 0.34 : (def.solidRadius || 0.1)) * sc);
         });
         const now = performance.now() * 0.001;
@@ -9450,6 +9594,19 @@
           freeCursorRing.scale.set(SEED_R / 0.27, 1, SEED_R / 0.27);
           freeCursorRing.position.set(wx, wy + 0.03, wz);
           ringMat.color.set(seedSpotFree(wx, wz, 0.03) ? '#ffe29c' : '#ff5252');
+        } else if (def.onWater) { // step stone: ring and ghost on the water surface above the hit
+          const p = waterPoint(hoveredHit), ok = stoneSpotOk(p.wx, p.wz);
+          freeCursorRing.visible = true;
+          freeCursorRing.scale.set(0.2 / 0.27, 1, 0.2 / 0.27);
+          freeCursorRing.position.set(p.wx, p.wy + 0.02, p.wz);
+          ringMat.color.set(ok ? '#ffe29c' : '#ff5252');
+          if (ghost) {
+            ghost.visible = true;
+            ghost.position.set(p.wx, p.wy + 0.02, p.wz);
+            ghost.userData.baseY = p.wy;
+            ghost.rotation.y = currentRotation * (Math.PI / 2);
+            setGhostValidityColor(ghost, ok);
+          }
         } else if (def.freePlace) {
           freeCursorRing.visible = true;
           freeCursorRing.position.set(wx, wy + 0.03, wz);
@@ -10025,6 +10182,7 @@
           const hit = getHitUnderClient(e.clientX, e.clientY);
           if (paintStroke && hit && (e.buttons & 1)) paintStrokeTo(hit.wx, hit.wz);
           if (seedStroke && hit && (e.buttons & 1)) seedStrokeTo(hit.wx, hit.wz);
+          if (stoneStroke && hit && (e.buttons & 1)) stoneStrokeTo(hit);
           hoveredHit = hit;
           updateHoverVisuals();
         }
@@ -10037,10 +10195,10 @@
         updateHoverVisuals();
       });
 
-      window.addEventListener('pointercancel', () => { endPaintStroke(); endSeedStroke(); endEraseStroke(); commitEdit(); }); // a cancelled touch still finishes the stroke
+      window.addEventListener('pointercancel', () => { endPaintStroke(); endSeedStroke(); endStoneStroke(); endEraseStroke(); commitEdit(); }); // a cancelled touch still finishes the stroke
       window.addEventListener('pointerup', (e) => {
         if (paintStroke && e.button === 0) endPaintStroke();
-        if (e.button === 0) { endSeedStroke(); endEraseStroke(); commitEdit(); }
+        if (e.button === 0) { endSeedStroke(); endStoneStroke(); endEraseStroke(); commitEdit(); }
         if (isOrbiting && e.button === orbitButton) {
           if (orbitButton === 2 && !isPanning && !hasMovedSignificantly && performance.now() - dragStartTime < 350 && !isPhotoMode && !isExploded) {
             beginEdit(); // a short right click erases the nearest object, with any tool
@@ -10566,7 +10724,7 @@
           const ghost = ghostMeshesById[selectedTool];
           if (ghost && ghost.visible) {
             const def = assetsById[selectedTool].def;
-            const baseY = def.snapPlace ? (ghost.userData.baseY ?? hoveredHit.wy) : (def.freePlace ? hoveredHit.wy : getTileElevation(hoveredHit.gx, hoveredHit.gz));
+            const baseY = (def.snapPlace || def.onWater) ? (ghost.userData.baseY ?? hoveredHit.wy) : (def.freePlace ? hoveredHit.wy : getTileElevation(hoveredHit.gx, hoveredHit.gz));
             ghost.position.y = baseY + 0.03 + Math.sin(elapsed * 5.0) * 0.025;
           }
         }
@@ -10897,7 +11055,7 @@
         freeProps.forEach((fp) => {
           const def = assetsById[fp.id].def;
           fp.spawnT = spawnAt(def, fp.wx, fp.wz);
-          landing(def, fp.wx, getContinuousTerrainHeight(fp.wx, fp.wz), fp.wz, fp.spawnT);
+          landing(def, fp.wx, freePropY(def, fp.wx, fp.wz), fp.wz, fp.spawnT);
         });
         snapProps.forEach((o) => {
           const def = assetsById[o.id].def;
@@ -11121,6 +11279,10 @@
             }
             return out;
           },
+          // step stones as drawn (instance positions, still standing ones) and the rules they follow
+          stones: () => { const m = instancedById.steppingstone, e = m.instanceMatrix.array, v = m.geometry.attributes.aVanish.array, out = []; for (let i = 0; i < m.count; i++) if (v[i] > 1e8) out.push([e[i * 16 + 12], e[i * 16 + 13], e[i * 16 + 14]]); return out; },
+          waterY: (x, z) => getHillHeight(x, z) + WATER_SURF,
+          stoneOk: (x, z) => stoneSpotOk(x, z),
           wallTris: (id = 'stonewall') => { const a = instancedById[id].geometry.attributes.aArm.array, n = [0, 0, 0, 0, 0]; for (let v = 0; v < a.length; v += 3) n[a[v]]++; return n; }, // [middle, arm 1..4]
           wallGhostConn: () => { const g = ghostMeshesById.stonewall; return g.visible ? g.userData.conn.value : null; },
           undo: (dir = -1) => undoRedo(dir),

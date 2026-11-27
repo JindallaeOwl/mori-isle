@@ -113,6 +113,72 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
   ok('undo: island exactly as before', sameIsland(island3, s2), why(island3, s2));
   await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
 
+  // ---- stepping stones: on the water only, a click = one, a drag lays a row (one undo step) ----
+  const sdef = items.find((d) => d.id === 'steppingstone');
+  ok('stepping stone is a free prop in paths', sdef && sdef.category === 'paths' && sdef.freePlace, JSON.stringify(sdef));
+  const onWater = async (wx, wz) => J(`${M}.project(${wx}, ${await J(`${M}.waterY(${wx}, ${wz})`)}, ${wz})`); // aim at the surface
+  const pressAt = async ([x, y]) => { await mouse('mouseMoved', x, y); await wait(300); await mouse('mousePressed', x, y, { button: 'left', buttons: 1, clickCount: 1 }); };
+  const release = async ([x, y]) => { await mouse('mouseReleased', x, y, { button: 'left', clickCount: 1 }); await wait(1200); };
+  // a spot deep in the pond, and a straight line across open water from it
+  let P = null, Q = null;
+  for (let z = -5; z <= 5 && !Q; z += 0.25) for (let x = -5; x <= 5 && !Q; x += 0.25) {
+    if ((await J(`${M}.pond(${x}, ${z})`)) > -0.45 || !(await J(`${M}.stoneOk(${x}, ${z})`))) continue;
+    for (const [dx, dz] of [[1, 0], [0, 1], [-1, 0], [0, -1]]) {
+      let good = true;
+      for (let s = 0.25; s <= 1.4 && good; s += 0.25) if ((await J(`${M}.pond(${x + dx * s}, ${z + dz * s})`)) > -0.3) good = false;
+      if (good) { P = [x, z]; Q = [x + dx * 1.4, z + dz * 1.4]; break; }
+    }
+  }
+  ok('found open water for a row of stones', !!Q, JSON.stringify([P, Q]));
+  if (Q) {
+    await tool('steppingstone');
+    const f0 = (await J(`${M}.state()`)).free, u0 = (await J(`${M}.undoDepth()`))[0];
+    // one click: one stone, standing at the water surface right where the pointer aimed
+    const a = await onWater(P[0], P[1]);
+    await pressAt(a); await release(a);
+    let st = await J(`${M}.stones()`);
+    const near = st.find((s) => Math.hypot(s[0] - P[0], s[2] - P[1]) < 0.08);
+    ok('click sets one stone where aimed', (await J(`${M}.state()`)).free === f0 + 1 && !!near, JSON.stringify(st));
+    ok('stone stands at the water surface', near && Math.abs(near[1] - (await J(`${M}.waterY(${P[0]}, ${P[1]})`))) < 1e-4, JSON.stringify(near));
+    // the same spot again: too close to the first
+    await pressAt(a); await release(a);
+    ok('no second stone on top of the first', (await J(`${M}.state()`)).free === f0 + 1);
+    // on land: refused
+    const land = await at(tileW(g0), tileW(gz) + 1.2);
+    await pressAt(land); await release(land);
+    ok('no stone on dry land', (await J(`${M}.state()`)).free === f0 + 1);
+    // drag across the water from just past the first stone: a row at a stride apart
+    const dx = (Q[0] - P[0]) / 1.4, dz = (Q[1] - P[1]) / 1.4;
+    const u1 = (await J(`${M}.undoDepth()`))[0];
+    const from = [P[0] + dx * 0.36, P[1] + dz * 0.36];
+    await pressAt(await onWater(from[0], from[1]));
+    for (let s = 0.4; s <= 1.4001; s += 0.1) {
+      const [x, y] = await onWater(P[0] + dx * s, P[1] + dz * s);
+      await mouse('mouseMoved', x, y, { button: 'left', buttons: 1 }); await wait(250);
+    }
+    await release(await onWater(Q[0], Q[1]));
+    st = await J(`${M}.stones()`);
+    const made = (await J(`${M}.state()`)).free - (f0 + 1);
+    let minGap = 9;
+    for (let i = 0; i < st.length; i++) for (let j = i + 1; j < st.length; j++) minGap = Math.min(minGap, Math.hypot(st[i][0] - st[j][0], st[i][2] - st[j][2]));
+    ok('a drag lays a row of stones', made >= 3, `${made} more`);
+    ok('stones keep apart', minGap > 0.22, minGap.toFixed(3));
+    ok('the drag is one undo step', (await J(`${M}.undoDepth()`))[0] === u1 + 1, JSON.stringify(await J(`${M}.undoDepth()`)));
+    // painting land over a stone's water is refused
+    const qx = Math.floor((P[0] + HALF) * 4), qz = Math.floor((P[1] + HALF) * 4);
+    ok('ground paint refused under a stone', (await J(`${M}.paintAllowed(${qx}, ${qz}, 0)`)) === false);
+    // erase one: it floats off; undo the row: back to the single stone
+    await J(`${M}.undo(-1)`); await wait(1500);
+    ok('undo takes the whole row back', (await J(`${M}.state()`)).free === f0 + 1);
+    await tool('delete');
+    const [ex, ey] = await onWater(P[0], P[1]);
+    await mouse('mouseMoved', ex, ey); await wait(400);
+    ok('eraser picks the stone', (await J(`${M}.eraseTarget()`))?.id === 'steppingstone', JSON.stringify(await J(`${M}.eraseTarget()`)));
+    await pressAt([ex, ey]); await release([ex, ey]);
+    ok('erased the stone', (await J(`${M}.state()`)).free === f0);
+    ok('undo depth counts the edits (click, drag, erase; undone drag)', (await J(`${M}.undoDepth()`))[0] === u0 + 2, JSON.stringify(await J(`${M}.undoDepth()`)));
+    await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
+  }
   await wait(1500);
   const errs = await J('window.__errs');
   ok('no console errors or warnings', errs.length === 0, errs.slice(0, 3).join(' | '));
