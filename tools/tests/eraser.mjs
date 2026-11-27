@@ -98,6 +98,13 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
   ok('Ctrl+Shift+Z redoes it', same(await isl(), I3));
   await ctrlKey('KeyY');
   ok('nothing left to redo: no change', same(await isl(), I3));
+  // the touch tokens in the top right do the same, and fade when their side is empty
+  const offs = () => J(`['btn-undo', 'btn-redo'].map((id) => document.getElementById(id).classList.contains('off'))`);
+  ok('undo token lit, redo token faded', same(await offs(), [false, true]));
+  await J(`(document.getElementById('btn-undo').click(), 0)`);
+  ok('undo token undoes the drag', same(await isl(), I2) && same(await offs(), [false, false]));
+  await J(`(document.getElementById('btn-redo').click(), 0)`);
+  ok('redo token redoes it', same(await isl(), I3) && same(await offs(), [false, true]));
   await ctrlKey('KeyZ'); await ctrlKey('KeyZ'); await ctrlKey('KeyZ');
   ok('three undos: the starting island', same(await isl(), I0), JSON.stringify(await J(`${M}.undoDepth()`)));
   await wait(1500); // the cabin and the tree drop back in

@@ -147,6 +147,9 @@
     .sys-btn:active { transform: scale(0.9); }
     .sys-btn .token { filter: drop-shadow(0 3px 2.5px rgba(10, 6, 2, 0.38)) saturate(0.9) brightness(0.93); }
     .sys-btn.on .token { filter: drop-shadow(0 0 7px var(--glow-soft)) drop-shadow(0 3px 2.5px rgba(10, 6, 2, 0.35)) brightness(1.06); }
+    /* undo / redo with nothing to step to: a worn, faded token (still pressable, it just knocks) */
+    .sys-btn.off > span, .sys-btn.off > svg { opacity: 0.42; transition: opacity 0.25s ease; }
+    .sys-btn.off .token { filter: drop-shadow(0 2px 1.5px rgba(10, 6, 2, 0.3)) saturate(0.45) brightness(0.86); }
 
     #sys-sep {
       width: 1px;
@@ -505,6 +508,8 @@
     <button class="sys-btn" id="btn-explode" aria-label="분해 보기 (E)" data-hint="분해 보기 (E)"></button>
     <button class="sys-btn" id="btn-photo" aria-label="감상 모드" data-hint="감상 모드"></button>
     <div id="sys-sep"></div>
+    <button class="sys-btn off" id="btn-undo" aria-label="되돌리기 (Ctrl+Z)" data-hint="되돌리기 (Ctrl+Z)"></button>
+    <button class="sys-btn off" id="btn-redo" aria-label="다시 하기 (Ctrl+Shift+Z)" data-hint="다시 하기 (Ctrl+Shift+Z)"></button>
     <button class="sys-btn" id="btn-save" aria-label="섬 저장" data-hint="섬 저장"></button>
     <button class="sys-btn" id="btn-reset" aria-label="섬 초기화" data-hint="섬 초기화"></button>
     <button class="sys-btn" id="btn-help" aria-label="조작법 (H)" data-hint="조작법 (H)"></button>
@@ -2608,6 +2613,17 @@
       load: [
         { el: 'path', d: 'M13.5 33.5h8l2.2 3.4h8.6l2.2-3.4h8v9h-29z', f: '#c48c55' },
         { el: 'path', d: 'M28 30.5v-18M21.8 18.7l6.2-6.2 6.2 6.2' }
+      ],
+      // undo / redo: a hooked arrow turning back (a leaf on the hook, so it is not the round reset arrow)
+      undo: [
+        { el: 'path', d: 'M16.5 24.5h13a8.5 8.5 0 0 1 0 17h-6' },
+        { el: 'path', d: 'M22.5 17.5l-7 7 7 7' },
+        { el: 'path', d: 'M23.5 41.5c-2.6-3.6-6.6-4.4-9.5-2.6c2.2 3.4 6.3 4.6 9.5 2.6z', f: '#8db35a' }
+      ],
+      redo: [
+        { el: 'path', d: 'M39.5 24.5h-13a8.5 8.5 0 0 0 0 17h6' },
+        { el: 'path', d: 'M33.5 17.5l7 7-7 7' },
+        { el: 'path', d: 'M32.5 41.5c2.6-3.6 6.6-4.4 9.5-2.6c-2.2 3.4-6.3 4.6-9.5 2.6z', f: '#8db35a' }
       ]
     };
 
@@ -7968,15 +7984,22 @@
         undoStack.push(snap);
         if (undoStack.length > UNDO_MAX) undoStack.shift();
         redoStack.length = 0;
+        syncUndoButtons();
+      }
+      // the two tokens in the top right fade when there is nothing to step to
+      function syncUndoButtons() {
+        document.getElementById('btn-undo')?.classList.toggle('off', !undoStack.length);
+        document.getElementById('btn-redo')?.classList.toggle('off', !redoStack.length);
       }
       function undoRedo(dir) { // -1 undo, +1 redo
         if (intro.phase !== 'done' || isPhotoMode || paintStroke || seedStroke || eraseStroke) return false;
         commitEdit();
         const from = dir < 0 ? undoStack : redoStack, to = dir < 0 ? redoStack : undoStack;
         const isl = from.length ? parseIsland(from[from.length - 1]) : null;
-        if (!isl) { if (from.length) from.pop(); audio.playTerrainBlocked(0); return false; }
+        if (!isl) { if (from.length) from.pop(); syncUndoButtons(); audio.playTerrainBlocked(0); return false; }
         from.pop();
         to.push(serializeIsland());
+        syncUndoButtons();
         restoreIsland(isl);
         audio.playUndo(dir);
         return true;
@@ -8676,6 +8699,8 @@
       setToken('#btn-photo', 'camera', { round: true });
       setToken('#btn-reset', 'reset', { round: true });
       setToken('#btn-save', 'book', { round: true });
+      setToken('#btn-undo', 'undo', { round: true });
+      setToken('#btn-redo', 'redo', { round: true });
       document.querySelectorAll('#save-panel .slot-save').forEach((el) => { el.innerHTML = makeToken('save_in', { round: true }); });
       document.querySelectorAll('#save-panel .slot-load').forEach((el) => { el.innerHTML = makeToken('load', { round: true }); });
       document.querySelectorAll('#save-panel .slot-del').forEach((el) => { el.innerHTML = makeToken('trash', { round: true }); });
@@ -8922,6 +8947,9 @@
         resetPopover.classList.toggle('open');
         if (resetPopover.classList.contains('open')) { toggleHelp(false); savePanel.classList.remove('open'); }
       });
+      // touch-friendly undo / redo (same as Ctrl+Z / Ctrl+Shift+Z; an empty side knocks)
+      document.getElementById('btn-undo').addEventListener('click', () => undoRedo(-1));
+      document.getElementById('btn-redo').addEventListener('click', () => undoRedo(1));
       document.addEventListener('click', (e) => { // click anywhere else closes the small panels
         if (!resetPopover.contains(e.target)) resetPopover.classList.remove('open');
         if (!savePanel.contains(e.target)) closeSavePanel();
