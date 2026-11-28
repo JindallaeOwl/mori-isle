@@ -92,4 +92,18 @@ export default async ({ wait, evaluate, mouse, key, log }) => {
     if (a.x0 < b.x1 - 1e-6 && a.x1 > b.x0 + 1e-6 && a.z0 < b.z1 - 1e-6 && a.z1 > b.z0 + 1e-6) overlap = true;
   }
   ok('no two footprints overlap', !overlap);
+
+  // Parallel diagonal benches can fit even when their world-axis bounds overlap.
+  await tool('bench');
+  for (let i = 0; i < 3; i++) await key('r');
+  await click(-3.5, 3.5);
+  await click(-3, 3.75);
+  const added = (await snaps()).slice(all.length);
+  ok('both diagonal benches fit', added.length === 2 && added.every((o) => o.id === 'bench' && o.rotation === 0.5));
+  if (added.length === 2) {
+    const [a, b] = added.map((o) => o.rect);
+    ok('their world-axis bounds overlap', a.x0 < b.x1 && a.x1 > b.x0 && a.z0 < b.z1 && a.z1 > b.z0);
+  }
+  await click(-3.5, 3.5);
+  ok('a third bench directly on the first is blocked', (await snaps()).length === all.length + added.length);
 };

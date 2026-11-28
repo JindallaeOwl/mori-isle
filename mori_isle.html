@@ -8280,30 +8280,64 @@
         for (const entry of placedItems.values()) {
           if (entry.id !== 'cabin') continue;
           const r = localRect([-0.52 - pad, 0.52 + pad, -0.48 - pad, 0.48 + pad], entry.gx - HALF_GRID + 0.5, entry.gz - HALF_GRID + 0.5, entry.rotation);
-          if (wx > r.x0 && wx < r.x1 && wz > r.z0 && wz < r.z1) return true;
+          if (rectContains(r, wx, wz)) return true;
         }
         return false;
       }
 
       /* ---- SNAP PLACEMENT: quarter-tile props that sit right up against walls and each other ----
-         Each snap prop has a ground footprint rectangle (def.footprint, local [x0, x1, z0, z1]);
-         the world footprint is the axis-aligned box around the turned rectangle (exact on quarter turns,
-         a little generous in between: 15° steps). */
+         Keep world bounds for quick rejection and snapping. At intermediate headings,
+         keep the two local axes as well, for exact placement and terrain checks. */
       const SNAP_STEP = 0.25, SNAP_GAP = 0.012, SNAP_PULL = 0.16;
-      const footprintRect = (def, wx, wz, rot) => localRect(def.footprint || [-0.3, 0.3, -0.3, 0.3], wx, wz, rot);
+      const DEFAULT_FOOTPRINT = [-0.3, 0.3, -0.3, 0.3];
+      const CABIN_FOOTPRINT = [-0.52, 0.52, -0.48, 0.48];
+      const footprintRect = (def, wx, wz, rot) => localRect(def.footprint || DEFAULT_FOOTPRINT, wx, wz, rot);
       function localRect(f, wx, wz, rot) {
         const th = rot * Math.PI / 2, quarter = Math.abs(rot - Math.round(rot)) < 1e-6;
         const c = quarter ? Math.round(Math.cos(th)) : Math.cos(th), s = quarter ? Math.round(Math.sin(th)) : Math.sin(th);
-        let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
-        for (const lx of [f[0], f[1]]) for (const lz of [f[2], f[3]]) { // same turn as the instance matrix (rotation.y)
-          const x = lx * c + lz * s, z = -lx * s + lz * c;
-          x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z);
-        }
-        return { x0: wx + x0, x1: wx + x1, z0: wz + z0, z1: wz + z1 };
+        const ax = c * f[0], bx = c * f[1], az = s * f[2], bz = s * f[3];
+        const dx = -s * f[0], ex = -s * f[1], dz = c * f[2], ez = c * f[3];
+        const r = {
+          x0: wx + (Math.min(ax, bx) + Math.min(az, bz)), x1: wx + (Math.max(ax, bx) + Math.max(az, bz)),
+          z0: wz + (Math.min(dx, ex) + Math.min(dz, ez)), z1: wz + (Math.max(dx, ex) + Math.max(dz, ez))
+        };
+        if (!quarter) r.axes = { c, s, hx: (f[1] - f[0]) / 2, hz: (f[3] - f[2]) / 2 };
+        return r;
       }
-      const rectsOverlap = (a, b) => a.x0 < b.x1 && a.x1 > b.x0 && a.z0 < b.z1 && a.z1 > b.z0;
-      const rectHitsCircle = (r, cx, cz, rad) => Math.hypot(Math.max(r.x0 - cx, 0, cx - r.x1), Math.max(r.z0 - cz, 0, cz - r.z1)) < rad;
-      function cabinRect(cx, cz, rot) { return localRect([-0.52, 0.52, -0.48, 0.48], cx, cz, rot); }
+      // Separating-axis test in the first rectangle's local frame.
+      function separatedOnLocalAxes(a, b, dx, dz) {
+        const { c, s, hx, hz } = a.axes, other = b.axes;
+        const bx = other ? other.hx : (b.x1 - b.x0) / 2;
+        const bz = other ? other.hz : (b.z1 - b.z0) / 2;
+        const cos = Math.abs(other ? c * other.c + s * other.s : c);
+        const sin = Math.abs(other ? s * other.c - c * other.s : s);
+        return Math.abs(dx * c - dz * s) >= hx + bx * cos + bz * sin - 1e-10 ||
+               Math.abs(dx * s + dz * c) >= hz + bx * sin + bz * cos - 1e-10;
+      }
+      function rectsOverlap(a, b) {
+        if (a.x0 >= b.x1 || a.x1 <= b.x0 || a.z0 >= b.z1 || a.z1 <= b.z0) return false;
+        if (!a.axes && !b.axes) return true;
+        const dx = (b.x0 + b.x1 - a.x0 - a.x1) / 2, dz = (b.z0 + b.z1 - a.z0 - a.z1) / 2;
+        return !(a.axes && separatedOnLocalAxes(a, b, dx, dz)) && !(b.axes && separatedOnLocalAxes(b, a, dx, dz));
+      }
+      function rectContains(r, x, z, pad = 0) {
+        if (!r.axes) return x > r.x0 - pad && x < r.x1 + pad && z > r.z0 - pad && z < r.z1 + pad;
+        const dx = x - (r.x0 + r.x1) / 2, dz = z - (r.z0 + r.z1) / 2;
+        const { c, s, hx, hz } = r.axes;
+        return Math.abs(dx * c - dz * s) < hx + pad && Math.abs(dx * s + dz * c) < hz + pad;
+      }
+      function rectHitsCircle(r, x, z, rad) {
+        if (x <= r.x0 - rad || x >= r.x1 + rad || z <= r.z0 - rad || z >= r.z1 + rad) return false;
+        let gapX = Math.max(r.x0 - x, 0, x - r.x1), gapZ = Math.max(r.z0 - z, 0, z - r.z1);
+        if (r.axes) {
+          const dx = x - (r.x0 + r.x1) / 2, dz = z - (r.z0 + r.z1) / 2;
+          const { c, s, hx, hz } = r.axes;
+          gapX = Math.max(0, Math.abs(dx * c - dz * s) - hx);
+          gapZ = Math.max(0, Math.abs(dx * s + dz * c) - hz);
+        }
+        return gapX * gapX + gapZ * gapZ < rad * rad;
+      }
+      function cabinRect(cx, cz, rot) { return localRect(CABIN_FOOTPRINT, cx, cz, rot); }
       function cabinRects() {
         const out = [];
         for (const e of placedItems.values()) {
@@ -8383,7 +8417,17 @@
         return best;
       }
       // can a snap prop with world footprint `r` stand here? (skipIdx: a snapProps entry to ignore)
-      const rectSamples = (r) => { const out = []; for (const fx of [0, 0.5, 1]) for (const fz of [0, 0.5, 1]) out.push([r.x0 + (r.x1 - r.x0) * fx, r.z0 + (r.z1 - r.z0) * fz]); return out; };
+      function rectSamples(r, divisions = 2) {
+        const out = [];
+        for (let i = 0; i <= divisions; i++) for (let j = 0; j <= divisions; j++) {
+          if (r.axes) {
+            const { c, s, hx, hz } = r.axes;
+            const u = hx * (2 * i / divisions - 1), v = hz * (2 * j / divisions - 1);
+            out.push([(r.x0 + r.x1) / 2 + c * u + s * v, (r.z0 + r.z1) / 2 - s * u + c * v]);
+          } else out.push([r.x0 + (r.x1 - r.x0) * i / divisions, r.z0 + (r.z1 - r.z0) * j / divisions]);
+        }
+        return out;
+      }
       // shore props (def.shore = { land, water } local rects): the land end on flat dry ground, the water end over the pond
       function shoreOk(land, water) {
         const h0 = getContinuousTerrainHeight((land.x0 + land.x1) / 2, (land.z0 + land.z1) / 2);
@@ -8458,21 +8502,28 @@
         const gridX = Math.round(hit.wx / SNAP_STEP) * SNAP_STEP, gridZ = Math.round(hit.wz / SNAP_STEP) * SNAP_STEP;
         const walls = cabinRects();
         snapProps.forEach((o) => walls.push(footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation)));
-        const pull = (raw, grid, lo, hi, otherLo, otherHi, axis) => { // axis 0: x, 1: z
+        const pull = (raw, grid, lo, hi, otherLo, otherHi, axis, crossPos) => { // axis 0: x, 1: z
           let best = grid, bd = SNAP_PULL;
           for (const w of walls) {
             const [wlo, whi, olo, ohi] = axis === 0 ? [w.x0, w.x1, w.z0, w.z1] : [w.z0, w.z1, w.x0, w.x1];
             if (otherHi <= olo || otherLo >= ohi) continue; // not side by side along this axis
             for (const cand of [whi + SNAP_GAP - lo, wlo - SNAP_GAP - hi]) {
               const d = Math.abs(cand - raw);
-              if (d < bd) { bd = d; best = cand; }
+              if (d >= bd) continue;
+              if (f0.axes || w.axes) {
+                // Pull only toward a real edge or corner, never toward empty space in the bounds.
+                const contact = cand + (cand > (wlo + whi) / 2 ? -1 : 1) * (SNAP_GAP + .0001);
+                const touching = axis === 0 ? footprintRect(def, contact, crossPos, rot) : footprintRect(def, crossPos, contact, rot);
+                if (!rectsOverlap(touching, w)) continue;
+              }
+              bd = d; best = cand;
             }
           }
           return best;
         };
         const tries = [];
-        const px = pull(hit.wx, gridX, f0.x0, f0.x1, gridZ + f0.z0, gridZ + f0.z1, 0);
-        const pz = pull(hit.wz, gridZ, f0.z0, f0.z1, px + f0.x0, px + f0.x1, 1);
+        const px = pull(hit.wx, gridX, f0.x0, f0.x1, gridZ + f0.z0, gridZ + f0.z1, 0, gridZ);
+        const pz = pull(hit.wz, gridZ, f0.z0, f0.z1, px + f0.x0, px + f0.x1, 1, px);
         tries.push([px, pz], [px, gridZ], [gridX, pz], [gridX, gridZ]);
         for (const [x, z] of tries) {
           const rect = footprintRect(def, x, z, rot);
@@ -8484,8 +8535,8 @@
       function snapPropAt(wx, wz) { // the snap prop whose footprint holds this point (smallest wins)
         let best = -1, area = 1e9;
         snapProps.forEach((o, i) => {
-          const r = footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation), a = (r.x1 - r.x0) * (r.z1 - r.z0);
-          if (wx > r.x0 - 0.04 && wx < r.x1 + 0.04 && wz > r.z0 - 0.04 && wz < r.z1 + 0.04 && a < area) { area = a; best = i; }
+          const r = footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation), a = r.axes ? 4 * r.axes.hx * r.axes.hz : (r.x1 - r.x0) * (r.z1 - r.z0);
+          if (rectContains(r, wx, wz, 0.04) && a < area) { area = a; best = i; }
         });
         return best;
       }
@@ -9535,8 +9586,8 @@
       function rectDeviation(r) { // how far the ground under a footprint strays from its centre
         const h0 = getContinuousTerrainHeight((r.x0 + r.x1) / 2, (r.z0 + r.z1) / 2);
         let d = 0;
-        for (let i = 0; i <= 4; i++) for (let j = 0; j <= 4; j++) {
-          d = Math.max(d, Math.abs(getContinuousTerrainHeight(r.x0 + (r.x1 - r.x0) * i / 4, r.z0 + (r.z1 - r.z0) * j / 4) - h0));
+        for (const [x, z] of rectSamples(r, 4)) {
+          d = Math.max(d, Math.abs(getContinuousTerrainHeight(x, z) - h0));
         }
         return d;
       }
@@ -9762,12 +9813,11 @@
         const tt = terrainToolById(selectedTool);
         if (tt) { if (tt.paint !== undefined) beginPaintStroke(hit, tt.paint); else editTerrainAt(hit.gx, hit.gz, tt.dir); return; }
         if (assetsById[selectedTool]?.def.onWater) { beginStoneStroke(hit); return; }
-        if (!canPlaceAtHit(selectedTool, hit)) {
-          return; // Blocked by collision/water; red ghost provides clear visual feedback
-        }
         const def = assetsById[selectedTool].def;
-        if (def.snapPlace) {
-          const p = snapPlacement(def, hit);
+        const placement = def.snapPlace ? snapPlacement(def, hit) : null;
+        if (!(placement ? placement.valid : canPlaceAtHit(selectedTool, hit))) return;
+        if (placement) {
+          const p = placement;
           snapProps.push({ id: selectedTool, wx: p.wx, wz: p.wz, rotation: p.rot, spawnT: performance.now() * 0.001 });
           rebuildInstances();
           triggerPlaceJuice(def, p.wx, p.wy, p.wz);
@@ -10001,10 +10051,17 @@
       }
       function endEraseStroke() { eraseStroke = null; }
 
+      function orientFootprintCursor(f, rot) {
+        // The outline is 28 pixels wide inside the 32-pixel texture on a 0.98-unit plane.
+        const outline = 0.98 * 28 / 32;
+        cursorTile.scale.set((f[1] - f[0]) / outline, (f[3] - f[2]) / outline, 1);
+        cursorTile.rotation.z = rot * Math.PI / 2;
+      }
       function updateHoverVisuals() {
         ITEM_DEFS.forEach((d) => { ghostMeshesById[d.id].visible = false; });
         cursorTile.visible = false;
         cursorTile.scale.set(1, 1, 1);
+        cursorTile.rotation.z = 0;
         freeCursorRing.visible = false;
         freeCursorRing.scale.set(1, 1, 1);
         if (eraseGhost) { eraseGhost.scale.set(1, 1, 1); eraseGhost.rotation.z = 0; eraseGhost = null; }
@@ -10053,14 +10110,18 @@
 
         const def = assetsById[selectedTool].def;
         const ghost = ghostMeshesById[selectedTool];
-        const valid = canPlaceAtHit(selectedTool, hoveredHit);
+        const placement = def.snapPlace ? snapPlacement(def, hoveredHit) : null;
+        const valid = placement ? placement.valid : canPlaceAtHit(selectedTool, hoveredHit);
+        const showTile = def.category !== 'living' && def.category !== 'build';
 
-        if (def.snapPlace) {
-          const p = snapPlacement(def, hoveredHit);
-          cursorTile.visible = true;
-          cursorTile.scale.set((p.rect.x1 - p.rect.x0 + 0.06) / 0.98, (p.rect.z1 - p.rect.z0 + 0.06) / 0.98, 1);
-          cursorTile.position.set((p.rect.x0 + p.rect.x1) / 2, p.wy + 0.025, (p.rect.z0 + p.rect.z1) / 2);
-          cursorMat.color.set(p.valid ? '#a8ffbe' : '#ff5252');
+        if (placement) {
+          const p = placement, f = def.footprint || DEFAULT_FOOTPRINT;
+          if (showTile) {
+            cursorTile.visible = true;
+            orientFootprintCursor(f, p.rot);
+            cursorTile.position.set((p.rect.x0 + p.rect.x1) / 2, p.wy + 0.025, (p.rect.z0 + p.rect.z1) / 2);
+            cursorMat.color.set(p.valid ? '#a8ffbe' : '#ff5252');
+          }
           if (ghost) {
             ghost.visible = true;
             ghost.position.set(p.wx, p.wy + 0.02, p.wz);
@@ -10104,7 +10165,7 @@
           const tileX = gx - HALF_GRID + 0.5;
           const tileZ = gz - HALF_GRID + 0.5;
           const tileY = getTileElevation(gx, gz);
-          cursorTile.visible = true;
+          cursorTile.visible = showTile;
           cursorTile.position.set(tileX, tileY + 0.025, tileZ);
           cursorMat.color.set(valid ? '#a8ffbe' : '#ff5252');
           if (ghost) {
