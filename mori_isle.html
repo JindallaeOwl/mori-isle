@@ -2673,10 +2673,11 @@
     }
 
     // HEADPHONE CAT (동물). Vertex tags ride in aSurf.z (attribute slots are few): -(10 + part * 4 + role),
-    // part 0 body / 1 head / 3 tail, role 0 fixed colour / 1 fur / 2 stripes / 3 cream. The model is built
+    // part 0 body / 1 head / 3 tail / 4 front legs / 5 hind feet, role 0 fixed colour / 1 fur / 2 stripes / 3 cream. The model is built
     // in the first coat; the shader multiplies fur roles by coat / first coat. The face is a photo
     // (CAT_FACES) projected onto the flattened front of the head, its layer picked by the coat.
-    // Instance aLook = (yaw, pitch, roll, yawn) from CAT LIFE each frame, aVariant = the coat.
+    // Instance aLook = (yaw, pitch, roll, w) from CAT LIFE each frame (w: 2 yawning, else 0..1 legs splayed),
+    // aVariant = the coat.
     const CAT = {
       neck: [0, .08, 0], tail: [.008, .013, -.046], yawnCoat: 1,
       face: { w: .064, y0: .07, h: .056 }, // the photo's square on the head front (local x across, y up): a small face
@@ -2720,6 +2721,13 @@
               float cc = -aSurf.z - 10.0, part = floor(cc / 4.0 + 0.01);
               if (cc > -0.5) {
                 if (part > 0.5 && part < 2.5) transformed = uCatNeck + catHead(aLook) * (transformed - uCatNeck);
+                if (part > 3.5 && aLook.w < 1.5) { // legs (4) and hind feet (5) splay out, falling or jumping
+                  float sd = sign(transformed.x);
+                  vec3 pv = part < 4.5 ? vec3(sd * 0.012, 0.03, 0.036) : vec3(sd * 0.028, 0.02, 0.018);
+                  float a = sd * aLook.w * (part < 4.5 ? 1.0 : 0.8), c = cos(a), s = sin(a);
+                  vec3 q = transformed - pv;
+                  transformed = pv + vec3(c * q.x - s * q.y, s * q.x + c * q.y, q.z + aLook.w * 0.01 * (part < 4.5 ? 1.0 : -1.0));
+                }
                 if (part > 2.5) { // the tail sways slowly, more toward the tip, and the tip lifts a little
                   vec2 d = transformed.xz - uCatTail.xz;
                   float ph = 0.0;
@@ -2741,7 +2749,7 @@
             }`)
           .replace('#include <project_vertex>', `#include <project_vertex>
             if (abs(aSurf.x - ${L_CATFACE.toFixed(1)}) < 0.5) // the face photo of this coat (the ginger yawns now and then)
-              vSurf.x = aLook.w > 0.5 && abs(aVariant - ${CAT.yawnCoat.toFixed(1)}) < 0.5 ? ${(L_CATFACE + CAT.fur.length).toFixed(1)} : ${L_CATFACE.toFixed(1)} + aVariant;`);
+              vSurf.x = aLook.w > 1.5 && abs(aVariant - ${CAT.yawnCoat.toFixed(1)}) < 0.5 ? ${(L_CATFACE + CAT.fur.length).toFixed(1)} : ${L_CATFACE.toFixed(1)} + aVariant;`);
       };
       const base2 = mat.onBeforeCompile;
       mat.onBeforeCompile = (sh, renderer) => {
@@ -5473,9 +5481,9 @@
           }
           S.cyl(.024, .02, 0, .074, 0, BASE, fur(0, 1, { n: 8 }));
           for (const s of [-1, 1]) {
-            S.cyl(.0115, .026, s * .017, .013, .036, BASE, fur(0, 1, { n: 6 }));
-            S.sph(.012, s * .017, .004, .042, PAW, facet(fur(0, 3, { sc: [1, .5, 1.2], w: 7, h: 5 })));
-            S.sph(.012, s * .036, .005, .024, PAW, facet(fur(0, 3, { sc: [1, .5, 1.35], w: 7, h: 5 })));
+            S.cyl(.0115, .026, s * .017, .013, .036, BASE, fur(4, 1, { n: 6 }));
+            S.sph(.012, s * .017, .004, .042, PAW, facet(fur(4, 3, { sc: [1, .5, 1.2], w: 7, h: 5 })));
+            S.sph(.012, s * .036, .005, .024, PAW, facet(fur(5, 3, { sc: [1, .5, 1.35], w: 7, h: 5 })));
           }
           // tail: up the right side behind, curling over at the tip, ringed
           const tp = [CAT.tail, [.032, .013, -.05], [.05, .03, -.046], [.056, .057, -.038], [.05, .079, -.03], [.039, .089, -.024]];
@@ -8594,6 +8602,7 @@
             ray = _catRay.ray;
           }
           const bps = audio.catBpm / 60, heard = audio.catBeat(), beat = heard ?? elapsed * bps;
+          let moved = false;
           const seen = new Set();
           for (let i = 0; i < n; i++) {
             const o = i * 16, x = e[o + 12], y = e[o + 13], z = e[o + 14];
@@ -8633,9 +8642,51 @@
             look[i * 4] = st.yaw * st.w * (1 - yk) + lw * 0.16 * Math.sin(beat * Math.PI / 4 + st.ph);
             look[i * 4 + 1] = st.pitch * st.w * (1 - yk) + lw * (0.03 + 0.17 * nod) - yk * 0.38;
             look[i * 4 + 2] = lw * 0.24 * Math.sin(beat * Math.PI / 2 + st.ph) + st.w * st.yaw * 0.22 * (1 - yk) + yk * 0.12;
-            look[i * 4 + 3] = yawning && yt > 0.12 && yt < 0.88 ? 1 : 0;
+            look[i * 4 + 3] = yawning && yt > 0.12 && yt < 0.88 ? 2 : 0;
+            // where it belongs (the rebuild set it): falls when its perch went, hops back up when it is back.
+            // A cat put on a perch looks again now and then while it sits on the ground below (the perch may
+            // have come back by undo, and a cabin dropping in only counts once it has landed)
+            const base = mesh.userData.base, ref = mesh.userData.refs[i];
+            let target = base && base.length > o + 13 ? base[o + 13] : y;
+            if (st.baseY !== target) { st.baseY = target; st.recheck = 0; } // rebuilt: look for its perch now
+            if (ref && ref.up && alive && st.mode !== 1 && elapsed > (st.recheck || 0)) {
+              st.recheck = elapsed + 0.5;
+              const py = catPerchY(ref.wx, ref.wz);
+              st.perchY = py;
+            }
+            if (ref && ref.up && st.perchY != null && st.perchY > target + 0.015) target = st.perchY;
+            if (st.y === undefined || !alive) { st.y = target; st.mode = 0; }
+            if (st.mode === 0 && target < st.y - 0.015) { st.mode = 1; st.v = 0; }
+            else if (st.mode === 0 && target > st.y + 0.015) { st.mode = 2; st.t0 = elapsed; st.from = st.y; st.to = target; st.T = 0.3 + 0.22 * Math.sqrt(target - st.y); }
+            let splay = 0, sy = 1;
+            if (st.mode === 1) { // falling: legs out, lands with a squash
+              st.v -= 6 * dt; st.y += st.v * dt; splay = Math.min(1, -st.v * 1.6);
+              if (st.y <= target) { st.y = target; st.mode = 0; st.landAt = elapsed; }
+            } else if (st.mode === 2) { // hop: crouch, a curve up, lands with a squash
+              st.to = target;
+              const u = elapsed - st.t0;
+              if (u < 0.16) sy = 1 - 0.2 * Math.sin(u / 0.16 * Math.PI);
+              else {
+                const f = Math.min(1, (u - 0.16) / st.T);
+                st.y = st.from + (st.to - st.from) * (1 - (1 - f) * (1 - f)) + 0.06 * Math.sin(f * Math.PI);
+                splay = 0.55 * Math.sin(f * Math.PI);
+                if (f >= 1) { st.y = st.to; st.mode = 0; st.landAt = elapsed; }
+              }
+            } else st.y = target;
+            const lk = (elapsed - (st.landAt ?? -9)) / 0.28;
+            if (lk > 0 && lk < 1) sy = 1 - 0.22 * Math.sin(lk * Math.PI) * (1 - lk);
+            if (look[i * 4 + 3] < 1.5) look[i * 4 + 3] = splay; // (a yawn keeps its 2)
+            if (base && base.length > o + 15) { // place it: its plain matrix at the shown height, squashed
+              const w = 1 + (1 - sy) * 0.5;
+              for (let c = 0; c < 16; c++) e[o + c] = base[o + c];
+              for (const c of [0, 1, 2]) e[o + c] *= w;
+              for (const c of [4, 5, 6]) e[o + c] *= sy;
+              for (const c of [8, 9, 10]) e[o + c] *= w;
+              e[o + 13] = st.y;
+              if (st.mode !== 0 || sy !== 1 || Math.abs(st.y - base[o + 13]) > 1e-6) { moved = true; }
+            }
             if (!alive) { look[i * 4] = look[i * 4 + 1] = look[i * 4 + 2] = 0; st.noteAt = Math.max(st.noteAt, elapsed + 0.8); }
-            else if (lw > 0.6 && elapsed >= st.noteAt) { // a note rises from the head every 2 beats or so
+            else if (lw > 0.6 && elapsed >= st.noteAt && st.mode === 0) { // a note rises from the head every 2 beats or so
               st.noteAt = elapsed + (2 / bps) * (0.85 + Math.random() * 0.3);
               if (catNotes.length < CAT_NOTES) {
                 const a = st.ph + Math.random() * 2 - 1;
@@ -8646,6 +8697,8 @@
             if (alive && dv < bestD) { bestD = dv; best = { x, y, z }; }
           }
           attr.needsUpdate = true;
+          mesh.instanceMatrix.needsUpdate = true;
+          if (moved) markShadowsDirty(0.15); // a falling or hopping cat: its shadow follows
           if (catStates.size > seen.size) for (const k of catStates.keys()) if (!seen.has(k)) catStates.delete(k);
         } else if (catStates.size) catStates.clear();
         // notes: rise and drift, grow in quickly, fade out
@@ -9372,7 +9425,71 @@
       const STONE_GAP = 0.34;    // stride between stones laid by a drag
       const STONE_CLEAR = 0.27;  // nearest another stone's centre may be (at scale 1)
       // the height a free prop stands at: the ground, or the water surface for step stones
-      const freePropY = (def, wx, wz) => (def && def.onWater ? getHillHeight(wx, wz) + WATER_SURF : getContinuousTerrainHeight(wx, wz));
+      // CAT PERCHES (동물): cats sit on top of nearly every built thing, on the shape's real top found by a ray
+      // (nothing measured per model): every soup model (stumps, benches, logs, woodpiles, the well, sheds,
+      // the windmill but not its turning sails, rocks, stepping stones, lily pads, stairs, brick wall caps...)
+      // and cabin roofs. Not plants (sprite stacks), the campfire, the pointed fence, the pebbles (their
+      // stones move in the shader) or other cats. Placing: the pointer's own ray is tried on them first (getHitUnderClient), so the cat
+      // goes where the pointer is on the object, not on the ground behind it. Standing: a ray straight down
+      // at each rebuild (rebuildInstances, after the meshes are filled), so a cat whose perch is erased or
+      // moved comes down to the ground.
+      const CAT_NO_PERCH = new Set(['campfire', 'fence', 'fence:post', 'pebbles']);
+      let catPerchIds = null; // the instanced meshes cats may sit on (filled on first use)
+      const perchIds = () => catPerchIds || (catPerchIds = Object.keys(instancedById).filter((id) => {
+        const d = instancedById[id].userData.def || assetsById[id]?.def;
+        return d && d.type === 'soup' && !d.cat && !CAT_NO_PERCH.has(id);
+      }));
+      const _perchRay = new THREE.Raycaster(), _perchHits = [], _perchN = new THREE.Vector3(), _perchV = new THREE.Vector3();
+      const _perchMesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
+      const _perchDown = new THREE.Ray(new THREE.Vector3(), new THREE.Vector3(0, -1, 0));
+      // nearest hit of `ray` on any perch: its point if the face there looks up (a top), else null
+      function perchHit(ray) {
+        _perchRay.ray.copy(ray);
+        let best = null, bestUp = 0;
+        const take = (h) => {
+          if (best && h.distance >= best.distance) return;
+          const surf = h.object.geometry.attributes.aSurf;
+          if (surf && h.face && surf.getZ(h.face.a) < -0.5 && surf.getZ(h.face.a) > -9.5) return; // turning parts (sails)
+          best = h; bestUp = h.face ? _perchN.copy(h.face.normal).transformDirection(h.object.matrixWorld).y : 0;
+        };
+        for (const id of perchIds()) {
+          const m = instancedById[id];
+          if (!m || !m.visible) continue;
+          const van = m.geometry.attributes.aVanish.array, e = m.instanceMatrix.array, bs = m.geometry.boundingSphere;
+          const reach = (bs.radius * 1.35 + 0.05) ** 2; // scale up to ~1.3 (trees aside, nothing is bigger)
+          _perchMesh.geometry = m.geometry;
+          for (let i = 0; i < m.count; i++) {
+            if (van[i] < 1e8) continue; // floating away
+            _perchMesh.matrixWorld.fromArray(e, i * 16);
+            if (ray.distanceSqToPoint(_perchV.copy(bs.center).applyMatrix4(_perchMesh.matrixWorld)) > reach) continue;
+            _perchHits.length = 0;
+            _perchMesh.raycast(_perchRay, _perchHits);
+            for (const h of _perchHits) take(h);
+          }
+        }
+        const now = performance.now() * 0.001;
+        for (const c of activeCabins) {
+          if (c.goneAt !== undefined || !c.mesh || now - (c.spawnT ?? -100) < 3) continue; // gone, or still dropping in
+          if (ray.distanceSqToPoint(_perchV.set(c.baseX, c.baseY + 0.6, c.baseZ)) > 2.6) continue;
+          c.mesh.updateMatrixWorld(true);
+          _perchHits.length = 0;
+          _perchRay.intersectObject(c.mesh, true, _perchHits);
+          for (const h of _perchHits) take(h);
+        }
+        return best && bestUp > 0.45 ? best.point.clone() : null;
+      }
+      // a cat's own saved fields: up = put on a perch (only those look for one, so a cat beside a cabin
+      // never climbs onto the eaves above it). catFields checks what comes from a save
+      const catExtra = (fp) => (fp.up ? { up: 1 } : null);
+      const catFields = (x) => (x && typeof x === 'object' && x.up === 1 ? { up: 1 } : {});
+      // the top a cat at (wx, wz) sits on, or null on open ground
+      function catPerchY(wx, wz) {
+        _perchDown.origin.set(wx, 8, wz);
+        const p = perchHit(_perchDown);
+        return p && p.y > getContinuousTerrainHeight(wx, wz) + 0.03 ? p.y : null;
+      }
+      const freePropY = (def, wx, wz, fp = null) => (def && def.onWater ? getHillHeight(wx, wz) + WATER_SURF
+        : (def && def.cat && fp && fp.up ? catPerchY(wx, wz) ?? getContinuousTerrainHeight(wx, wz) : getContinuousTerrainHeight(wx, wz)));
       // the pointer ray hits the pond floor; walk back up the same ray to the water surface
       const _camDir = new THREE.Vector3();
       function waterPoint(hit) {
@@ -9415,6 +9532,7 @@
         if (def.line) { const p = lineStartAt(def, hit); return !lineBayBlocked(def, p.x - 0.02, p.z, p.x + 0.02, p.z); }
         if (def.onWater) { const p = waterPoint(hit); return waterSpotOk(def, p.wx, p.wz); }
         if (def.snapPlace) return snapPlacement(def, hit).valid;
+        if (def.cat && hit.perch) return true; // on top of a stump, wall, bench...
         if (def.freePlace) {
           const r = PROP_SELF_RADIUS[toolId] || 0.12;
           return !isBlockedForPoint(hit.wx, hit.wz, r, true, toolId === 'pebbles');
@@ -9502,9 +9620,10 @@
       // which look (def.variants) stands at this spot: from the position, never a running random, so a
       // tree keeps its look through reloads, undo and loading a slot (nothing extra to save)
       const variantAt = (def, wx, wz) => Math.min(def.variants - 1, Math.floor(hash2D(Math.round(wx * 4) + 211, Math.round(wz * 4) + 223, 401) * def.variants));
-      function fillItemMeshes() {
+      function fillItemMeshes(only = null) {
         const now = performance.now() * 0.001;
         for (const key in instancedById) {
+          if (only && key !== only) continue;
           const mesh = instancedById[key], def = mesh.userData.def || assetsById[key].def;
           if (!isInstancedDef(def) || def.seedScatter) continue;
           const geo = mesh.geometry, maxN = mesh.userData.maxN || MAX_INSTANCES;
@@ -9545,6 +9664,9 @@
           geo.attributes.aHot.needsUpdate = true;
           if (vari) geo.attributes.aVariant.needsUpdate = true;
           if (lineA) geo.attributes.aLine.needsUpdate = true;
+          if (def.cat) { // where each cat belongs, and its plain matrix: CAT LIFE drops or hops it there
+            mesh.userData.base = Float32Array.from(mesh.instanceMatrix.array.subarray(0, n * 16));
+          }
         }
         hotMarks.length = 0;
         applyEraseHot();
@@ -9557,7 +9679,7 @@
         let wx = o.wx, wz = o.wz, wy, scale = 1;
         if (kind === 'placed') { wx = o.gx - HALF_GRID + 0.5; wz = o.gz - HALF_GRID + 0.5; wy = getTileElevation(o.gx, o.gz); }
         else if (kind === 'snap') wy = snapGroundY(def, o.wx, o.wz, o.rotation);
-        else { wy = freePropY(def, o.wx, o.wz); scale = o.scale || 1; }
+        else { wy = freePropY(def, o.wx, o.wz, o); scale = o.scale || 1; }
         const cabin = def.type === '3d_cabin';
         if (isInstancedDef(def)) vanishing.push({ kind: 'inst', id: o.id, wx, wy, wz, rotation: o.rotation, scale, spawnT: -100, goneAt: now });
         else if (cabin) vanishing.push({ kind: 'cabin', wx, wy, wz, rotY: o.rotation * (Math.PI / 2), goneAt: now });
@@ -9730,9 +9852,11 @@
           vanishItem('free', fp);
         }
         // 2. Process Free-Placed Overlapping Decor (Flowers, Reeds, Rocks, Mushrooms)
+        const cats = [];
         freeProps.forEach((fp) => {
           const def = assetsById[fp.id]?.def;
           if (!def || !isInstancedDef(def)) return;
+          if (def.cat) { cats.push(fp); return; } // after the meshes are filled (they may sit on them)
           const wy = freePropY(def, fp.wx, fp.wz);
           buckets[fp.id].push({ wx: fp.wx, wy, wz: fp.wz, rotation: fp.rotation, scale: fp.scale || 1.0, spawnT: fp.spawnT ?? -100, ref: fp });
           if (def.contactRadius > 0) {
@@ -9754,6 +9878,19 @@
         // Apply InstancedMeshes (+ the erased ones still floating away)
         itemBuckets = buckets;
         fillItemMeshes();
+        if (cats.length) { // cats on their perches (or the ground), then their mesh again
+          for (const fp of cats) {
+            const def = assetsById[fp.id].def, perch = fp.up ? catPerchY(fp.wx, fp.wz) : null, wy = perch ?? getContinuousTerrainHeight(fp.wx, fp.wz);
+            if (perch === null && getPondSDF(fp.wx, fp.wz) < 0.02) { // its lily pad or stone went: no swimming
+              freeProps.splice(freeProps.indexOf(fp), 1);
+              vanishItem('free', fp);
+              continue;
+            }
+            buckets[fp.id].push({ wx: fp.wx, wy, wz: fp.wz, rotation: fp.rotation, scale: fp.scale || 1.0, spawnT: fp.spawnT ?? -100, ref: fp });
+            if (perch === null) contactShadowBaseList.push({ x: fp.wx, y: wy + 0.026, z: fp.wz, r: def.contactRadius * 1.75 * (fp.scale || 1.0), tier: 0 });
+          }
+          fillItemMeshes('cat');
+        }
         // erased cabins come apart part by part (unmerged prefab, animated in animate)
         for (const v of vanishing) {
           if (v.kind !== 'cabin' || performance.now() * 0.001 - v.goneAt > VANISH_T) continue;
@@ -10237,7 +10374,7 @@
           mat: bytesToB64(terrain.mat),
           placed: [...placedItems.values()].map((e) => [e.id, e.gx, e.gz, e.rotation]),
           snap: snapProps.map((o) => [o.id, o.wx, o.wz, o.rotation]),
-          free: freeProps.map((fp) => [fp.id, fp.wx, fp.wz, fp.rotation, fp.scale]),
+          free: freeProps.map((fp) => { const x = catExtra(fp); return x ? [fp.id, fp.wx, fp.wz, fp.rotation, fp.scale, x] : [fp.id, fp.wx, fp.wz, fp.rotation, fp.scale]; }),
           seeds: seedFlowers.filter((f) => !f.erased).map((f) => [f.wx, f.wz, f.rot, f.scale, f.tint]),
           lines: fenceLines.map((ln) => [ln.id, ln.pts.slice(), ln.ph || 0])
         };
@@ -10289,9 +10426,9 @@
           if (def && def.snapPlace && onIsland(wx, wz) && num(rotation)) snap.push({ id, wx, wz, rotation });
         }
         const free = [];
-        for (const [id, wx, wz, rotation, scale] of list(isl.free)) {
+        for (const [id, wx, wz, rotation, scale, extra] of list(isl.free)) {
           const def = defOf(id);
-          if (def && def.freePlace && !def.seedScatter && onIsland(wx, wz) && num(rotation) && num(scale) && scale > 0.1 && scale < 4) free.push({ id, wx, wz, rotation, scale });
+          if (def && def.freePlace && !def.seedScatter && onIsland(wx, wz) && num(rotation) && num(scale) && scale > 0.1 && scale < 4) free.push(Object.assign({ id, wx, wz, rotation, scale }, def.cat ? catFields(extra) : null));
         }
         const seeds = [], maxSeeds = assetsById.seeds ? assetsById.seeds.def.maxInstances : 0;
         for (const [wx, wz, rot, scale, tint] of list(isl.seeds)) {
@@ -10384,7 +10521,7 @@
         };
         const placed = diff([...placedItems.values()], isl.placed, (e) => `${e.id}|${e.gx}|${e.gz}|${e.rotation}`, 'placed');
         const snap = diff(snapProps, isl.snap, (o) => `${o.id}|${o.wx}|${o.wz}|${o.rotation}`, 'snap');
-        const free = diff(freeProps, isl.free, (o) => `${o.id}|${o.wx}|${o.wz}|${o.rotation}|${o.scale}`, 'free');
+        const free = diff(freeProps, isl.free, (o) => `${o.id}|${o.wx}|${o.wz}|${o.rotation}|${o.scale}|${JSON.stringify(catExtra(o))}`, 'free');
         const sPool = new Map();
         for (const f of seedFlowers) if (!f.erased) sPool.set(`${f.wx}|${f.wz}`, f);
         const seeds = isl.seeds.map((n) => {
@@ -10777,7 +10914,8 @@
             wz: p.wz,
             rotation: currentRotation,
             scale: def.onWater ? 1 : (selectedTool === 'pebbles' ? nextPebbleScale : randomFreeScale()),
-            spawnT: performance.now() * 0.001
+            spawnT: performance.now() * 0.001,
+            ...(def.cat && hit.perch ? { up: 1 } : null) // put on a stump, wall, bench...
           });
           if (selectedTool === 'pebbles') nextPebbleScale = randomFreeScale();
           rebuildInstances();
@@ -10842,7 +10980,7 @@
         });
         freeProps.forEach((fp) => {
           const def = assetsById[fp.id].def, sc = fp.scale || 1;
-          add('free', fp, fp.wx, freePropY(def, fp.wx, fp.wz), fp.wz,
+          add('free', fp, fp.wx, freePropY(def, fp.wx, fp.wz, fp), fp.wz,
             itemHeight(fp.id) * sc, (fp.id === 'rocks' ? 0.34 : (def.solidRadius || 0.1)) * sc);
         });
         for (const m of lineMods) { const L = lineDef(m.id).line; add('line', m, m.x, m.y, m.z, L.height, L.step * 0.55); }
@@ -11656,6 +11794,13 @@
         pointerNDC.y = -(clientY / window.innerHeight) * 2 + 1;
         raycaster.setFromCamera(pointerNDC, camera);
         const hits = raycaster.intersectObjects(rayTargets, false);
+        if (assetsById[selectedTool]?.def.cat) { // a perch the pointer is on, nearer than the ground behind it
+          const q = perchHit(raycaster.ray);
+          if (q && (!hits.length || raycaster.ray.origin.distanceTo(q) < hits[0].distance)) {
+            const gx = Math.floor(q.x + HALF_GRID), gz = Math.floor(q.z + HALF_GRID);
+            if (gx >= 0 && gx < GRID_SIZE && gz >= 0 && gz < GRID_SIZE) return { gx, gz, wx: q.x, wz: q.z, wy: q.y, perch: true };
+          }
+        }
         if (hits.length === 0) return null;
         const p = hits[0].point;
         const gx = Math.floor(p.x + HALF_GRID);
@@ -12627,7 +12772,7 @@
             return;
           }
           fp.spawnT = spawnAt(def, fp.wx, fp.wz);
-          landing(def, fp.wx, freePropY(def, fp.wx, fp.wz), fp.wz, fp.spawnT);
+          landing(def, fp.wx, freePropY(def, fp.wx, fp.wz, fp), fp.wz, fp.spawnT);
         });
         snapProps.forEach((o) => {
           const def = assetsById[o.id].def;
@@ -12848,6 +12993,8 @@
           cats: () => { const m = instancedById.cat, a = m.geometry.attributes.aLook.array; return { n: m.visible ? m.count : 0, looks: Array.from(a.slice(0, (m.visible ? m.count : 0) * 4)), notes: catNotes.length, noteMesh: catNoteMesh.visible ? noteGeo.instanceCount : 0, level: audio.catLevel, bpm: audio.catBpm, beat: audio.catBeat(), scheduled: audio.catNext }; },
           catPointer: (x, y) => { catPointer = x === null ? null : [x, y]; },
           catYawn: () => { catYawnNow = true; },
+          catPerchY: (x, z) => catPerchY(x, z),
+          catY: () => { const m = instancedById.cat; return Array.from({ length: m.visible ? m.count : 0 }, (_, i) => m.instanceMatrix.array[i * 16 + 13]); },
           variantsOf: (id) => { const m = instancedById[id], a = m && m.geometry.attributes.aVariant; return a ? Array.from(a.array.slice(0, m.count)) : null; },
           // fences and walls (LINES): the lines as saved, and as drawn (bays and posts standing, path gaps,
           // instances still floating away), the placing rule for one bay, triangles of the two models

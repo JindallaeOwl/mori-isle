@@ -87,10 +87,10 @@ export default async ({ wait, evaluate, mouse, wheel, send, log }) => {
     await wait(1500);
     await evaluate('__mori.catYawn()');
     let yawn = 0, back = 0;
-    for (let i = 0; i < 30; i++) { const y = await cats(); if (y.looks[gi * 4 + 3] === 1) { yawn = 1; back = Math.min(back, y.looks[gi * 4 + 1]); } await wait(100); }
+    for (let i = 0; i < 30; i++) { const y = await cats(); if (y.looks[gi * 4 + 3] === 2) { yawn = 1; back = Math.min(back, y.looks[gi * 4 + 1]); } await wait(100); }
     ok('the ginger yawns (yawning face, head back)', yawn === 1 && back < -0.1, `face ${yawn} pitch ${back}`);
-    for (let i = 0; i < 40; i++) { if ((await cats()).looks[gi * 4 + 3] === 0) break; await wait(150); }
-    ok('the yawn ends', (await cats()).looks[gi * 4 + 3] === 0);
+    for (let i = 0; i < 40; i++) { if ((await cats()).looks[gi * 4 + 3] < 1.5) break; await wait(150); }
+    ok('the yawn ends', (await cats()).looks[gi * 4 + 3] < 1.5);
   }
   // keep only the first cat for the rest
   for (const o of (await list()).slice(1)) {
@@ -108,6 +108,61 @@ export default async ({ wait, evaluate, mouse, wheel, send, log }) => {
   ok('headphone music heard when zoomed in close', m.level > 0.2, `level ${m.level.toFixed(2)} dist ${st.dist.toFixed(1)}`);
   ok('music steps are being scheduled', m.scheduled !== null && m.beat !== null, JSON.stringify([m.scheduled, m.beat]));
   ok('bouncy song by day', m.bpm === 112, String(m.bpm));
+
+  // perches: put a cat on a stump (the pointer on the stump top), it sits up there; save keeps it; erase the
+  // stump and the cat comes down to the ground
+  {
+    await evaluate(`document.querySelector('#hud-dock [data-tool="stump"]').click()`); await wait(300);
+    const spots = []; for (let x = -4.25; x <= 4.3; x += 1.5) for (let z = -4.25; z <= 4.3; z += 1.5) spots.push([x, z]);
+    log('  info: tool ' + (await J('__mori.state()')).tool);
+    for (const [wx, wz] of spots) {
+      if ((await J('__mori.snaps()')).some((o) => o.id === 'stump')) break;
+      await click(...await J(`__mori.project(${wx}, 0, ${wz})`));
+    }
+    await evaluate(`document.querySelector('#hud-dock [data-tool="stump"]').click()`); await wait(200);
+    const st = (await J('__mori.snaps()')).find((o) => o.id === 'stump');
+    ok('a stump to sit on', !!st);
+    if (st) {
+      const sx = (st.rect.x0 + st.rect.x1) / 2, sz = (st.rect.z0 + st.rect.z1) / 2, g = await J(`__mori.ground(${sx}, ${sz})`);
+      const top = await J(`__mori.catPerchY(${sx}, ${sz})`);
+      ok('stump top found from above', top !== null && top > g + 0.12 && top < g + 0.25, `${top} ground ${g}`);
+      const n0 = (await list()).length;
+      await evaluate(`document.querySelector('#hud-dock [data-tool="cat"]').click()`); await wait(300);
+      await click(...await J(`__mori.project(${sx}, ${g + 0.172}, ${sz})`));
+      await evaluate(`document.querySelector('#hud-dock [data-tool="cat"]').click()`); await wait(200);
+      await evaluate('__mori.catPointer(null)');
+      const cl = await list(), up = cl.find((o) => Math.hypot(o[1] - sx, o[2] - sz) < 0.14);
+      ok('the cat goes on the stump, marked up', cl.length === n0 + 1 && up && up[5] && up[5].up === 1, JSON.stringify(cl));
+      const ci = cl.indexOf(up), ys = await J('__mori.catY()'), here = up ? await J(`__mori.catPerchY(${up[1]}, ${up[2]})`) : null;
+      ok('it sits on the stump top where it stands', up && here !== null && Math.abs(ys[ci] - here) < 0.01 && here > g + 0.12, `${ys[ci]} vs ${here}`);
+      // the stump goes: the cat comes down (pick a screen point where the eraser takes the stump, not the cat)
+      await evaluate(`document.querySelector('#hud-dock [data-tool="delete"]').click()`); await wait(300);
+      let at = null;
+      for (const [dx, dy, dz] of [[0.2, 0.05, 0], [-0.2, 0.05, 0], [0, 0.05, 0.2], [0, 0.05, -0.2], [0.15, 0.02, 0.15]]) {
+        const pt = await J(`__mori.project(${sx + dx}, ${g + dy}, ${sz + dz})`);
+        const t = await J(`__mori.erasePick(${pt[0]}, ${pt[1]})`);
+        if (t && t.id === 'stump') { at = pt; break; }
+      }
+      ok('a point that picks the stump', !!at);
+      if (at) {
+        const i2 = (await list()).findIndex((o) => Math.hypot(o[1] - sx, o[2] - sz) < 0.14);
+        await mouse('mouseMoved', ...at); await wait(200);
+        await mouse('mousePressed', ...at, { button: 'left', buttons: 1, clickCount: 1 });
+        await mouse('mouseReleased', ...at, { button: 'left', clickCount: 1 }); // sample the fall at once
+        const yOf = async () => (await J('__mori.catY()'))[i2];
+        const watch = async (want, ms) => { const seen = []; for (let k = 0; k < ms / 150; k++) { const v = await yOf(); seen.push(+v.toFixed(3)); if (Math.abs(v - want) < 0.01) break; await wait(150); } return seen; };
+        const fall = await watch(g, 12000);
+        await evaluate(`document.querySelector('#hud-dock [data-tool="delete"]').click()`); await wait(200);
+        ok('stump erased: the cat falls through the air to the ground', i2 >= 0 && Math.abs(fall[fall.length - 1] - g) < 0.01 && fall.some((v) => v > g + 0.01 && v < here - 0.01), JSON.stringify(fall));
+        await evaluate('__mori.undo(-1)'); // the stump comes back: the cat hops up onto it again
+        const hop = await watch(here, 15000);
+        ok('undo brings the stump back and the cat hops up onto it', Math.abs(hop[hop.length - 1] - here) < 0.01, JSON.stringify(hop));
+        await evaluate('__mori.undo(-1)'); await wait(600); // take back the cat
+        await evaluate('__mori.undo(-1)'); await wait(600); // and the stump
+      }
+      ok('back to one cat', (await list()).length === n0, JSON.stringify(await list()));
+    }
+  }
 
   // eraser takes it away
   await evaluate(`document.querySelector('#btn-eraser, #hud-dock [data-tool="delete"]').click()`); await wait(300);
