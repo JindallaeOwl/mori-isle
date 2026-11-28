@@ -4977,6 +4977,52 @@
           }
         }
       },
+      fallenlog: {
+        name: '쓰러진 통나무',
+        category: 'nature',
+        type: 'soup',
+        seed: 297,
+        snapPlace: true,
+        footprint: [-.55, .59, -.14, .14],
+        contactRadius: .23,
+        explodeTier: 0,
+        explodeSliceFactor: .35,
+        build(S, rng) {
+          // Shared angular samples keep the bark, exposed wood and splintered lip watertight.
+          const sides = 11;
+          const radius = Array.from({ length: sides }, () => rng.range(.94, 1.05));
+          const breaks = [.07, .015, .09, -.008, .035, -.035, .008, -.024, .018, -.01, .05];
+          const ring = (x, y, z, r, relief = 0) => radius.map((k, i) => {
+            const a = i * TAU / sides;
+            return [x + relief * breaks[i], y + r * k * Math.cos(a), z + r * k * Math.sin(a)];
+          });
+          const back = ring(-.55, .127, -.015, .14);
+          const bend = ring(-.12, .124, .009, .145);
+          const lip = ring(.50, .114, -.002, .125, 1);
+          const sap = ring(.501, .114, -.002, .101, .72);
+          const core = ring(.503, .117, .003, .057, .36);
+          const trunk = new Soup();
+          for (let i = 0; i < sides; i++) {
+            const j = (i + 1) % sides, bark = mixC(BARK, BARK_L, rng.range(.12, .57));
+            trunk.quad(back[i], back[j], bend[j], bend[i], bark, L_WOOD, .98);
+            trunk.quad(bend[i], bend[j], lip[j], lip[i], bark, L_WOOD, .98);
+            trunk.tri([-.55, .127, -.015], back[j], back[i], mulC(RING, .85), L_WOOD, 1);
+            trunk.quad(lip[i], lip[j], sap[j], sap[i], mixC(BARK, SAP, .42), L_WOOD, .95);
+            trunk.quad(sap[i], sap[j], core[j], core[i], SAP, L_WOOD, .94);
+            trunk.tri([.51, .119, .007], core[i], core[j], mixC(RING, SAP, .36), L_WOOD, .94);
+          }
+          S.merge(trunk);
+          // A snapped branch and a shorter knot interrupt the long bark silhouette.
+          S.seg([-.18, .18, .065], [-.27, .30, .17], .054, .033, BARK, { n: 7, l: L_WOOD });
+          S.seg([-.27, .30, .17], [-.273, .306, .175], .030, .027, SAP, { n: 7, l: L_WOOD });
+          S.seg([.18, .17, -.07], [.24, .217, -.139], .046, .023, BARK_L, { n: 6, l: L_WOOD });
+          for (let i = 0; i < 7; i++) {
+            const x = -.37 + i * .08, z = .015 + .037 * Math.sin(i * .78);
+            S.ico(rng.range(.05, .074), x, .253 - Math.max(x, 0) * .03 - z * .22, z,
+              mixC(MOSS_D, MCOL.moss, rng.range(.32, .84)), { sc: [1.28, .32, .88], d: 0, l: L_MOSS, rough: 1 });
+          }
+        }
+      },
       pebbles: {
         name: '조약돌',
         category: 'nature',
