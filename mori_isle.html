@@ -9600,10 +9600,11 @@
         }
         return best;
       }
-      // where a click would set its short piece: from a line end, carrying the line on; elsewhere across the
-      // screen, centred on the point (from the side of a line: starting there). The other way round when
-      // that way is blocked. { pts, dx, dz, ok }
+      // where a click would set its short piece: from a line end, carrying the line on; elsewhere the way
+      // the last line was drawn (lineLastDir; before any, across the screen), centred on the point (from the
+      // side of a line: starting there). The other way round when that way is blocked. { pts, dx, dz, ok }
       const _lineRight = new THREE.Vector3();
+      let lineLastDir = null; // [dx, dz] of the last bay laid (a stroke or a click), so the ghost keeps facing that way
       function lineClickPlan(def, x, z) {
         const step = def.line.step, nb = def.line.clickBays, t = lineSnapTarget(def.id, x, z);
         let dx, dz, from = 0;
@@ -9612,8 +9613,8 @@
           const P = t.line.pts, n = P.length;
           [dx, dz] = t.first ? [P[0] - P[2], P[1] - P[3]] : [P[n - 2] - P[n - 4], P[n - 1] - P[n - 3]];
         } else {
-          _lineRight.setFromMatrixColumn(camera.matrixWorld, 0);
-          dx = _lineRight.x; dz = _lineRight.z;
+          if (lineLastDir) [dx, dz] = lineLastDir;
+          else { _lineRight.setFromMatrixColumn(camera.matrixWorld, 0); dx = _lineRight.x; dz = _lineRight.z; }
           if (!t) from = -nb / 2;
         }
         const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
@@ -9717,8 +9718,13 @@
         } else if (!st.made.length && st.arc[st.arc.length - 1] < step) {
           // a click: the short piece the ghost showed (lineClickPlan)
           const x = st.path[0], z = st.path[1], plan = lineClickPlan(def, x, z);
-          if (plan.ok) { fenceLines.push({ id: def.id, pts: plan.pts }); laid++; st.made.push(1); }
+          if (plan.ok) { const ln = { id: def.id, pts: plan.pts }; fenceLines.push(ln); laid++; st.made.push(ln); }
           else audio.playTerrainBlocked(screenPan(x, lineGround(x, z), z));
+        }
+        const last = st.cur || [...st.made].reverse().find((m) => m && m.pts) || fenceLines[fenceLines.length - 1];
+        if ((st.made.length || laid) && last && last.pts.length >= 4) { // remember which way it went
+          const P = last.pts, n = P.length, dx = P[n - 2] - P[n - 4], dz = P[n - 1] - P[n - 3], l = Math.hypot(dx, dz);
+          if (l > 1e-6) lineLastDir = [dx / l, dz / l];
         }
         if (st.made.length || laid) {
           rebuildInstances(); // grass, rules and the rest catch up once
@@ -11260,7 +11266,7 @@
       window.addEventListener('pointercancel', () => { endPaintStroke(); endSeedStroke(); endStoneStroke(); endLineStroke(); endEraseStroke(); commitEdit(); }); // a cancelled touch still finishes the stroke
       window.addEventListener('pointerup', (e) => {
         if (paintStroke && e.button === 0) endPaintStroke();
-        if (e.button === 0) { endSeedStroke(); endStoneStroke(); endLineStroke(); endEraseStroke(); commitEdit(); }
+        if (e.button === 0) { const drew = !!lineStroke; endSeedStroke(); endStoneStroke(); endLineStroke(); endEraseStroke(); commitEdit(); if (drew) updateHoverVisuals(); }
         if (isOrbiting && e.button === orbitButton) {
           if (orbitButton === 2 && !isPanning && !hasMovedSignificantly && performance.now() - dragStartTime < 350 && !isPhotoMode && !isExploded) {
             beginEdit(); // a short right click erases the nearest object, with any tool

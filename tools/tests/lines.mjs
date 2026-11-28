@@ -112,6 +112,15 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
   const pf = await J(`${M}.lineParts('fence')`);
   ok('all bays drawn and standing', pf.bays === 16 + bays && pf.liveBays === pf.bays && pf.gaps === 0, JSON.stringify(pf));
   const fenceLine = mine[0];
+  // after drawing, the ghost keeps facing the way the line went (not back across the screen)
+  {
+    const P = fenceLine.pts, n = P.length, l = Math.hypot(P[n - 2] - P[n - 4], P[n - 1] - P[n - 3]);
+    const ldx = (P[n - 2] - P[n - 4]) / l, ldz = (P[n - 1] - P[n - 3]) / l;
+    const [x, y] = await at(cx, cz + R * 0.3); // off the line, inside the curve
+    await mouse('mouseMoved', x, y); await wait(400);
+    const g2 = await J(`${M}.lineGhost('fence')`);
+    ok('after drawing the ghost faces the way the line went', Math.abs(g2.dx * ldx + g2.dz * ldz) > 0.99, JSON.stringify([g2, ldx, ldz]));
+  }
 
   // ---- props and ground edits stay off it ----
   const mid = [fenceLine.pts[Math.floor(fenceLine.bays / 2) * 2], fenceLine.pts[Math.floor(fenceLine.bays / 2) * 2 + 1]];
