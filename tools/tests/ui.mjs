@@ -9,7 +9,7 @@ export default async ({ wait, evaluate, mouse, key, log }) => {
   const sel = () => J(`document.querySelector('#hud-dock .item.active, #btn-eraser.active')?.dataset.tool || null`);
   const openCat = () => J(`[...document.querySelectorAll('.cat-wrap')].findIndex(w => w.classList.contains('open'))`);
 
-  ok('six category slots (five item kinds + terrain)', (await J(`document.querySelectorAll('.cat').length`)) === 6);
+  ok('seven category slots (six item kinds + terrain)', (await J(`document.querySelectorAll('.cat').length`)) === 7);
   ok('no instruction banner or counter', !(await J(`!!document.querySelector('.hints-pill, #item-counter, #active-item-label')`)));
   ok('no browser tooltips on HUD buttons', (await J(`document.querySelectorAll('#hud-dock [title], #sys [title], .panel [title]').length`)) === 0);
   ok('no key numbers under the dock icons', (await J(`document.querySelectorAll('#hud-dock .key').length`)) === 0);

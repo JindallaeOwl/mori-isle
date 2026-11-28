@@ -1057,6 +1057,25 @@
     /* =========================================================================
        3. SYNTHESIZED COZY WEB AUDIO ENGINE (WITH CASCADING EXPLODE BLOCK SFX)
        ========================================================================= */
+    // Headphone music (동물): tiny original loops, eighth-note steps over 4 bars (MIDI numbers, null = rest).
+    // day: bouncy pentatonic pluck over a root-fifth bounce, ticks and claps; calm (sunset, night): a music
+    // box arpeggio with a slow tune on top
+    const CAT_SONGS = {
+      day: {
+        bpm: 112,
+        mel: [76, null, 79, null, 81, 79, 76, null, 74, null, 76, 79, 76, null, 72, null,
+              76, null, 79, null, 84, 81, 79, null, 81, 79, 76, 74, 72, null, null, null],
+        bass: [60, 67, 60, 67, 57, 64, 57, 64, 53, 60, 53, 60, 55, 62, 55, 62] // quarters
+      },
+      calm: {
+        bpm: 72,
+        arp: [60, 64, 67, 71, 72, 71, 67, 64, 57, 60, 64, 67, 69, 67, 64, 60,
+              53, 57, 60, 64, 65, 64, 60, 57, 55, 59, 62, 65, 67, 65, 62, 59],
+        top: [84, null, null, null, 83, null, 79, null, 81, null, null, null, 76, null, null, null,
+              77, null, null, null, 76, null, 72, null, 74, null, null, null, 71, null, null, null]
+      }
+    };
+
     class CozyAudio {
       constructor() {
         this.ctx = null;
@@ -1065,6 +1084,9 @@
         this.wantOn = true; // sound is on by default; it actually starts on the first click / key
         this.chimeTimer = null;
         this.isNight = false;
+        // headphone music (동물): song, beat clock (beat catPos at audio time catPosT), level from the view
+        this.catSong = CAT_SONGS.day; this.catBpm = CAT_SONGS.day.bpm; this.catPos = 0; this.catPosT = 0;
+        this.catLevel = 0; this.catPanValue = 0; this.catNext = null;
       }
 
       init() {
@@ -1129,6 +1151,19 @@
         this.fallGain.connect(this.fallPan); this.fallPan.connect(this.masterGain);
         fsrc.start();
         this.fallLevel = 0; this.fallPanValue = 0; this.fallNext = 0;
+
+        // Headphone music (setCatMusic / updateCatMusic): what leaks out of a cat's headphones, so no low
+        // end and a little boxy; from the cat nearest the view. Its clock (catBeat) also drives the head bob
+        this.catIn = ctx.createGain();
+        const catHP = ctx.createBiquadFilter(); catHP.type = 'highpass'; catHP.frequency.value = 380; catHP.Q.value = 0.7;
+        const catBox = ctx.createBiquadFilter(); catBox.type = 'peaking'; catBox.frequency.value = 1700; catBox.Q.value = 1.1; catBox.gain.value = 5;
+        const catLP = ctx.createBiquadFilter(); catLP.type = 'lowpass'; catLP.frequency.value = 5200;
+        this.catGain = ctx.createGain(); this.catGain.gain.value = 0;
+        this.catPan = ctx.createStereoPanner ? ctx.createStereoPanner() : ctx.createGain();
+        this.catIn.connect(catHP); catHP.connect(catBox); catBox.connect(catLP); catLP.connect(this.catGain);
+        this.catGain.connect(this.catPan); this.catPan.connect(this.masterGain);
+        this.catLevel = 0; this.catPanValue = 0; this.catNext = null;
+        this.catPosT = ctx.currentTime; // beat 0 (the song itself may already be set: setCatCalm)
 
         // Pause audio while the tab is hidden
         document.addEventListener('visibilitychange', () => {
@@ -1247,6 +1282,65 @@
           o.start(t); o.stop(t + 0.08);
         }
       }
+      // Headphone music: level 0..1 from the cat nearest the view + zoom, pan from screen position
+      setCatMusic(level, pan) {
+        if (!this.ctx) return;
+        this.catLevel = level; this.catPanValue = pan;
+        const now = this.ctx.currentTime;
+        this.catGain.gain.setTargetAtTime(this.enabled ? level * 0.55 : 0, now, 0.4);
+        if (this.catPan.pan) this.catPan.pan.setTargetAtTime(pan, now, 0.3);
+      }
+      catBeatAt(t) { return this.catPos + (t - this.catPosT) * this.catBpm / 60; }
+      // the beat being heard now (null while the audio clock is not running): the head bob follows it
+      catBeat() {
+        const ctx = this.ctx;
+        if (!ctx || ctx.state !== 'running') return null;
+        return this.catBeatAt(ctx.currentTime - (ctx.outputLatency || ctx.baseLatency || 0));
+      }
+      // the song follows the time of day (calm at sunset and night); the beat count carries on through a
+      // change of tempo, so the bob never jumps
+      setCatCalm(calm) {
+        const song = calm ? CAT_SONGS.calm : CAT_SONGS.day;
+        if (song === this.catSong) return;
+        if (this.ctx) { const now = this.ctx.currentTime; this.catPos = this.catBeatAt(now); this.catPosT = now; }
+        this.catSong = song; this.catBpm = song.bpm; this.catNext = null;
+      }
+      updateCatMusic() { // schedules the next steps a little ahead (nothing while no cat is heard)
+        if (!this.ctx || !this.enabled || document.hidden || this.ctx.state !== 'running' || this.catLevel < 0.01) { this.catNext = null; return; }
+        const now = this.ctx.currentTime, spb = 30 / this.catBpm; // seconds per eighth
+        const tOf = (k) => this.catPosT + (k / 2 - this.catPos) * spb * 2;
+        let k = this.catNext;
+        if (k === null || tOf(k) < now - 0.3) k = Math.ceil(this.catBeatAt(now + 0.02) * 2);
+        for (; tOf(k) < now + 0.2; k++) if (tOf(k) >= now - 0.01) this.catStepAt(k, tOf(k));
+        this.catNext = k;
+      }
+      catTone(t, midi, type, vol, dur, partial = 0, pvol = 0) {
+        const ctx = this.ctx, f = 440 * Math.pow(2, (midi - 69) / 12);
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = type; o.frequency.value = f;
+        g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vol, t + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        o.connect(g); g.connect(this.catIn); o.start(t); o.stop(t + dur + 0.02);
+        if (partial) { // music box tine / pluck brightness: a quick upper partial
+          const o2 = ctx.createOscillator(), g2 = ctx.createGain(), d2 = dur * 0.3;
+          o2.type = 'sine'; o2.frequency.value = f * partial;
+          g2.gain.setValueAtTime(0.0001, t); g2.gain.linearRampToValueAtTime(vol * pvol, t + 0.003); g2.gain.exponentialRampToValueAtTime(0.0001, t + d2);
+          o2.connect(g2); g2.connect(this.catIn); o2.start(t); o2.stop(t + d2 + 0.02);
+        }
+      }
+      catStepAt(k, t) {
+        const song = this.catSong, step = ((k % 32) + 32) % 32;
+        if (song === CAT_SONGS.day) {
+          const m = song.mel[step];
+          if (m) this.catTone(t, m, 'triangle', 0.075, 0.2, 2, 0.35);
+          if (step % 2 === 0) this.catTone(t, song.bass[step / 2], 'triangle', 0.06, 0.16);
+          else this.noiseHit(t, { type: 'highpass', freq: 7000, q: 0.7, vol: 0.022, decay: 0.03, dest: this.catIn });
+          if (step % 8 === 4) this.noiseHit(t, { type: 'bandpass', freq: 1600, q: 1.2, vol: 0.05, decay: 0.08, dest: this.catIn });
+        } else {
+          this.catTone(t, song.arp[step] + 12, 'sine', 0.035, 1.1, 4, 0.5);
+          const m = song.top[step];
+          if (m) this.catTone(t, m, 'sine', 0.06, 1.6, 4, 0.6);
+        }
+      }
       updateFire(dt) {
         if (!this.ctx || !this.enabled || this.fireLevel < 0.02 || document.hidden) return;
         // crackle pops: random rate, random brightness, a few big snaps
@@ -1287,6 +1381,7 @@
         this.masterGain.gain.setTargetAtTime(this.enabled ? 0.42 : 0.0001, now, silent ? 0.9 : 0.25);
         this.setFire(this.fireLevel, this.firePanValue);
         this.setFalls(this.fallLevel, this.fallPanValue);
+        this.setCatMusic(this.catLevel, this.catPanValue);
 
         if (this.enabled) {
           this.scheduleChime();
@@ -2555,6 +2650,77 @@
       mat.customProgramCacheKey = () => 'mori-pebbles-' + pass;
     }
 
+    // HEADPHONE CAT (동물). Vertex tags ride in aSurf.z (attribute slots are few): -(10 + part * 4 + role),
+    // part 0 body / 1 head / 2 eyes (head + blink) / 3 tail, role 0 fixed colour / 1 fur / 2 stripes /
+    // 3 cream. The model is built in the first coat; the shader multiplies fur roles by coat / first coat.
+    // Instance aLook = (yaw, pitch, roll, blink) from CAT LIFE each frame, aVariant = the coat.
+    const CAT = {
+      neck: [0, .08, 0], eyeY: .109, tail: [0, .012, -.044],
+      fur: [ // base, stripes, cream
+        ['#b5885d', '#6e4b30', '#efdfc6'], // brown tabby (the picture)
+        ['#d99548', '#a85f27', '#f6e8d2'], // ginger
+        ['#8e8b89', '#4c4847', '#e8e4de'], // grey tabby
+        ['#3a3434', '#252121', '#efe9df'], // tuxedo
+        ['#e9d7bb', '#b8946f', '#f8f1e4']  // cream
+      ]
+    };
+    const catTag = (part, role) => -(10 + part * 4 + role);
+    function shapeCat(mat) {
+      const base = mat.onBeforeCompile;
+      const first = CAT.fur[0].map((h) => C(h));
+      const coats = CAT.fur.flatMap((coat) => coat.map((h, r) => { const c = C(h); return new THREE.Vector3(c[0] / first[r][0], c[1] / first[r][1], c[2] / first[r][2]); }));
+      mat.onBeforeCompile = (sh, renderer) => {
+        base.call(mat, sh, renderer);
+        sh.uniforms.uCatFur = { value: coats };
+        sh.uniforms.uCatNeck = { value: new THREE.Vector3(...CAT.neck) };
+        sh.uniforms.uCatTail = { value: new THREE.Vector3(...CAT.tail) };
+        sh.vertexShader = sh.vertexShader
+          .replace('#include <common>', `#include <common>
+            attribute vec4 aLook;
+            attribute float aVariant;
+            uniform vec3 uCatFur[${coats.length}];
+            uniform vec3 uCatNeck;
+            uniform vec3 uCatTail;
+            mat3 catHead(vec4 lk) { // yaw (y), then pitch (x, + looks down), then roll (z)
+              float cy = cos(lk.x), sy = sin(lk.x), cp = cos(lk.y), sp = sin(lk.y), cr = cos(lk.z), sr = sin(lk.z);
+              return mat3(cy, 0.0, -sy, 0.0, 1.0, 0.0, sy, 0.0, cy)
+                   * mat3(1.0, 0.0, 0.0, 0.0, cp, sp, 0.0, -sp, cp)
+                   * mat3(cr, sr, 0.0, -sr, cr, 0.0, 0.0, 0.0, 1.0);
+            }`)
+          .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
+            {
+              float cc = -aSurf.z - 10.0, part = floor(cc / 4.0 + 0.01);
+              if (cc > -0.5 && part > 0.5 && part < 2.5) objectNormal = catHead(aLook) * objectNormal;
+            }`)
+          .replace('#include <begin_vertex>', `#include <begin_vertex>
+            {
+              float cc = -aSurf.z - 10.0, part = floor(cc / 4.0 + 0.01);
+              if (cc > -0.5) {
+                if (part > 1.5 && part < 2.5) transformed.y = ${CAT.eyeY.toFixed(3)} + (transformed.y - ${CAT.eyeY.toFixed(3)}) * (1.0 - 0.9 * aLook.w);
+                if (part > 0.5 && part < 2.5) transformed = uCatNeck + catHead(aLook) * (transformed - uCatNeck);
+                if (part > 2.5) { // the tail sways slowly, more toward the tip, and the tip lifts a little
+                  vec2 d = transformed.xz - uCatTail.xz;
+                  float ph = 0.0;
+                  #ifdef USE_INSTANCING
+                    ph = instanceMatrix[3][0] * 5.1 + instanceMatrix[3][2] * 3.7;
+                  #endif
+                  float k = clamp(length(d) / 0.06, 0.0, 1.0);
+                  float a = (sin(uTime * 1.25 + ph) * 0.32 + sin(uTime * 2.9 + ph * 1.7) * 0.06) * k;
+                  float c = cos(a), s = sin(a);
+                  transformed.xz = uCatTail.xz + mat2(c, s, -s, c) * d;
+                  transformed.y += max(0.0, sin(uTime * 1.25 + ph + 1.2)) * 0.007 * k * k;
+                }
+              }
+            }`)
+          .replace('#include <color_vertex>', `#include <color_vertex>
+            {
+              float cc = -aSurf.z - 10.0, part = floor(cc / 4.0 + 0.01), role = cc - part * 4.0;
+              if (cc > -0.5 && role > 0.5) vColor.rgb *= uCatFur[int(aVariant + 0.5) * 3 + int(role + 0.5) - 1];
+            }`);
+      };
+      mat.customProgramCacheKey = () => 'mori-cat';
+    }
+
     // Small iso icon rendered from the real model (HDR target -> gamma -> 40px canvas)
     function renderSoupIcon(renderer, geometry) {
       const mat = makeSoupMaterial(null);
@@ -2654,6 +2820,15 @@
         { el: 'circle', cx: 31.6, cy: 23.2, r: 1.7, f: '#fff3e2', ns: true },
         { el: 'circle', cx: 34.6, cy: 28.6, r: 1.4, f: '#fff3e2', ns: true },
         { el: 'path', d: 'M14.5 42.5l1.8-5M17.6 42.5l.8-6M20.4 42.5l-.4-4' }
+      ],
+      // animal: a cat's face, ears up
+      animal: [
+        { el: 'path', d: 'M15.5 41.5c-2.4-3.8-3-8.6-1.6-12.8L13 14.5l9.2 7.2c1.9-.7 3.8-1 5.8-1s3.9.3 5.8 1l9.2-7.2-.9 14.2c1.4 4.2.8 9-1.6 12.8c-3 3-7.6 4.5-12.5 4.5s-9.5-1.5-12.5-4.5z', f: '#dba364' },
+        { el: 'path', d: 'M17 19.5l.5 6.5 4.6-3.6zM39 19.5l-.5 6.5-4.6-3.6z', f: '#eba3a6', ns: true },
+        { el: 'circle', cx: 22.4, cy: 32, r: 2.3, f: '#5b3a1f', ns: true },
+        { el: 'circle', cx: 33.6, cy: 32, r: 2.3, f: '#5b3a1f', ns: true },
+        { el: 'path', d: 'M26.2 36.6h3.6L28 38.8z', f: '#e8798a' },
+        { el: 'path', d: 'M28 38.8v1.6M11.5 36.5l6 1M11.5 40.5l6-1M44.5 36.5l-6 1M44.5 40.5l-6-1' }
       ],
       // terrain: two grassy terraces / a mound with an arrow up / a dip with an arrow down
       terrain: [
@@ -5220,6 +5395,90 @@
           stone(.047, .117, .056, .035, .040, -.76, mixC(warmGrey, MCOL.stoneL, .48));
           stone(-.105, .106, .034, .025, .028, .34, mixC(MCOL.stoneD, warmGrey, .42));
         }
+      },
+      // 동물: a kitten in white headphones with a pink bow, sitting (real size: a little lower than a
+      // bench seat). Parts are tagged in aSurf.z (catTag) so the shader can turn the head about the
+      // neck, squint the eyes to blink, sway the tail and recolour the fur (CAT, shapeCat, CAT LIFE)
+      cat: {
+        name: '헤드셋 고양이',
+        category: 'animal',
+        type: 'soup',
+        seed: 307,
+        freePlace: true,
+        cat: true,
+        variants: CAT.fur.length,
+        solidRadius: 0.07,
+        contactRadius: 0.06,
+        explodeTier: 0,
+        explodeSliceFactor: 0.35,
+        ao: [0, 0.05, 0.82],
+        build(S, rng) {
+          const [BASE, STRIPE, LIGHT] = CAT.fur[0].map((h) => C(h));
+          const EYE = C('#120d0b'), SHINE = C('#ffffff'), NOSE = C('#d9808c'), EAR_IN = C('#e3a1a4');
+          const PHONE = C('#f2f0ea'), PAD = C('#b4aea6'), CAP = C('#dcd8d0'), BOW = C('#ff78a0'), BOW_D = C('#e0527a');
+          const t = (part, role) => catTag(part, role);
+          const fur = (part, role, o = {}) => Object.assign({ l: L_PLAIN, rough: .95, jit: .04, sway: t(part, role) }, o);
+          const facet = (o) => Object.assign({ smooth: false, w: 9, h: 7 }, o);
+          const shell = (part, o = {}) => Object.assign({ sway: t(part, 0), jit: 0 }, o);
+          // body: a pear-shaped sit, haunches, a cream chest, front legs and paws, stripes down the back
+          S.sph(.04, 0, .043, -.006, BASE, facet(fur(0, 1, { sc: [1, 1.12, 1.08] })));
+          for (let k = 0; k < 3; k++) S.ico(.012, 0, .068 - k * .016, -.043 + k * .002, STRIPE, fur(0, 2, { sc: [2.4, .5, .55], d: 0, r: [.35, 0, 0] }));
+          S.sph(.024, 0, .052, .022, LIGHT, facet(fur(0, 3, { sc: [1, 1.35, .75], w: 8, h: 6 })));
+          S.cyl(.024, .02, 0, .074, 0, BASE, fur(0, 1, { n: 8 }));
+          S.sph(.018, 0, .072, .017, LIGHT, facet(fur(0, 3, { w: 7, h: 5 })));
+          for (const s of [-1, 1]) {
+            S.sph(.025, s * .028, .024, -.012, BASE, facet(fur(0, 1, { sc: [.85, 1, 1.15], w: 8, h: 6 })));
+            S.ico(.007, s * .046, .03, -.012, STRIPE, fur(0, 2, { sc: [.4, 1.8, 1.2], d: 0, r: [0, 0, s * .3] }));
+            S.sph(.011, s * .03, .006, .014, LIGHT, facet(fur(0, 3, { sc: [1, .6, 1.4], w: 7, h: 5 })));
+            S.seg([s * .014, .05, .02], [s * .015, .008, .028], .0095, .009, BASE, fur(0, 1, { n: 6 }));
+            S.cyl(.0099, .004, s * .0146, .03, .0245, STRIPE, fur(0, 2, { n: 6 }));
+            S.sph(.0105, s * .015, .006, .033, LIGHT, facet(fur(0, 3, { sc: [1, .65, 1.25], w: 7, h: 5 })));
+          }
+          // tail curled round the right side to the front, ringed
+          const tp = [CAT.tail, [.03, .01, -.047], [.052, .009, -.025], [.056, .008, 0], [.045, .009, .022]];
+          for (let k = 0; k < 4; k++) S.seg(tp[k], tp[k + 1], .0088 - k * .0005, .0085 - k * .0005, k % 2 ? STRIPE : BASE, fur(3, k % 2 ? 2 : 1, { n: 6 }));
+          S.sph(.0075, tp[4][0], tp[4][1], tp[4][2], STRIPE, facet(fur(3, 2, { w: 6, h: 5 })));
+          // head: big and round, fluffy cheeks, cream muzzle, pink nose, an M of stripes on the brow
+          S.sph(.043, 0, .108, .006, BASE, facet(fur(1, 1, { sc: [1.13, .94, 1], w: 10, h: 8 })));
+          for (const s of [-1, 1]) {
+            S.sph(.02, s * .03, .094, .02, BASE, facet(fur(1, 1, { sc: [1.1, .85, .9], w: 7, h: 5 })));
+            S.cone(.008, .018, s * .05, .092, .012, BASE, fur(1, 1, { n: 4, r: [0, 0, -s * 1.7] }));
+            S.ico(.005, s * .044, .108, .018, STRIPE, fur(1, 2, { sc: [.35, 1.7, .5], d: 0, r: [0, 0, s * .5] }));
+          }
+          S.sph(.017, 0, .093, .039, LIGHT, facet(fur(1, 3, { sc: [1.35, .78, .8], w: 8, h: 6 })));
+          S.sph(.011, 0, .083, .033, LIGHT, facet(fur(1, 3, { w: 6, h: 5 })));
+          S.ico(.0045, 0, .1, .052, NOSE, shell(1, { sc: [1.3, .8, .9], d: 0, rough: .5 }));
+          for (const [x, a] of [[-.012, .3], [0, 0], [.012, -.3]]) S.ico(.006, x, .14, .03, STRIPE, fur(1, 2, { sc: [.45, .28, 1.7], d: 0, r: [-.75, a, 0] }));
+          // big wet eyes with a highlight (part 2: squints shut to blink)
+          for (const s of [-1, 1]) {
+            S.sph(.0125, s * .019, CAT.eyeY, .041, EYE, shell(2, { sc: [1, 1.12, .62], w: 8, h: 6, rough: .12 }));
+            S.sph(.0032, s * .019 + .004, CAT.eyeY + .0045, .0485, SHINE, shell(2, { w: 5, h: 4, rough: .2 }));
+            S.sph(.0016, s * .019 - .003, CAT.eyeY - .004, .049, SHINE, shell(2, { w: 4, h: 3, rough: .2 }));
+          }
+          // ears poking up in front of the headband
+          for (const s of [-1, 1]) {
+            S.cone(.016, .03, s * .026, .146, -.002, BASE, fur(1, 1, { n: 4, r: [-.1, 0, -s * .32] }));
+            S.cone(.01, .02, s * .0262, .144, .003, EAR_IN, shell(1, { n: 4, r: [-.1, 0, -s * .32], rough: .8 }));
+          }
+          // white headphones: an arched band, cups with grey cushions and a pale cap
+          const R = .055, HC = [0, .106, -.012];
+          for (let k = 0; k < 8; k++) {
+            const a0 = k / 8 * Math.PI, a1 = (k + 1) / 8 * Math.PI;
+            S.seg([HC[0] + Math.cos(a0) * R, HC[1] + Math.sin(a0) * R, HC[2]], [HC[0] + Math.cos(a1) * R, HC[1] + Math.sin(a1) * R, HC[2]], .0058, .0058, PHONE, shell(1, { n: 6, rough: .35 }));
+          }
+          for (const s of [-1, 1]) {
+            S.cyl(.021, .016, s * .056, .1, -.008, PHONE, shell(1, { n: 10, r: [0, 0, Math.PI / 2], rough: .35 }));
+            S.cyl(.019, .008, s * .046, .1, -.008, PAD, shell(1, { n: 10, r: [0, 0, Math.PI / 2], rough: .9, l: L_CLOTH }));
+            S.cyl(.014, .004, s * .065, .1, -.008, CAP, shell(1, { n: 10, r: [0, 0, Math.PI / 2], rough: .3 }));
+            S.seg([s * .055, .113, -.012], [s * .056, .104, -.009], .0045, .0045, PHONE, shell(1, { n: 6, rough: .35 }));
+          }
+          // pink bow on top, in front of the band
+          for (const s of [-1, 1]) {
+            S.ico(.013, s * .0135, .146, .027, BOW, shell(1, { sc: [1.25, .8, .5], d: 1, rough: .3, r: [-.5, 0, s * .35] }));
+            S.ico(.006, s * .007, .136, .032, BOW_D, shell(1, { sc: [.6, 1.6, .4], d: 0, rough: .35, r: [-.4, 0, s * .5] }));
+          }
+          S.ico(.006, 0, .145, .031, BOW_D, shell(1, { sc: [1, 1.1, .8], d: 1, rough: .35 }));
+        }
       }
     };
     if (HASH.stack !== '1') { // #stack=1 keeps the old sprite-stack versions for comparison
@@ -5240,6 +5499,7 @@
       { id: 'paths', name: '길·담' },
       { id: 'living', name: '생활 소품' },
       { id: 'nature', name: '자연 소품' },
+      { id: 'animal', name: '동물' },
       { id: 'terrain', name: '지형' }
     ];
     // terrain tools live in the 'terrain' slot but are not items (no model, no ghost): they
@@ -7585,6 +7845,13 @@
             shapePebbles(instMesh.customDepthMaterial, 'depth');
             shapePebbles(ghostMat, 'preview', ghostMesh.userData.pebbleLook);
           }
+          if (def.cat) { // coat per spot (aVariant, filled like tree looks), head pose per frame (aLook, CAT LIFE)
+            asset.geometry.setAttribute('aVariant', new THREE.InstancedBufferAttribute(new Float32Array(MAX_INSTANCES), 1));
+            const look = new THREE.InstancedBufferAttribute(new Float32Array(MAX_INSTANCES * 4), 4);
+            look.setUsage(THREE.DynamicDrawUsage);
+            asset.geometry.setAttribute('aLook', look);
+            shapeCat(soupMat);
+          }
           ghostMesh.visible = false;
           scene.add(ghostMesh);
           ghostMeshesById[def.id] = ghostMesh;
@@ -8188,6 +8455,175 @@
       const smokeStates = new Map(); // cabin key -> { acc, last, seed, puffs: [{ born, ox, oy, oz, s, jx, jz, seed, spin, heat }] }
       const smokeDraw = Array.from({ length: MAX_SMOKE_PUFFS }, () => ({})); // per-frame puff records, reused
       const smokeViewDir = new THREE.Vector3();
+
+      /* ---- CAT LIFE (동물): head pose, blinks, music notes, headphone music ----
+         Each frame (only while a cat is placed): a cat whose ground the pointer is over within CAT_LOOK_R
+         turns its head to it (a spring that overshoots a little, like the wallpaper it comes from);
+         otherwise it bobs to the headphone beat (audio.catBeat: tilts side to side over 4 beats, nods on
+         each one) and a small black note rises from its head every 2 beats (a cream rim at night). The pose
+         goes to the instance attribute aLook (shapeCat), so no extra draw call; the notes are one
+         instanced billboard mesh drawn only while a note is up. The pointer is met with the plane of each
+         cat's ground, no terrain raycast. */
+      const CAT_LOOK_R = 1.5, CAT_NOTES = 48, NOTE_LIFE = 1.9;
+      let catPointer = null, catAudioTimer = 0;
+      const catStates = new Map(); // "x,z" -> { yaw, pitch, vy, vp, w, blinkAt, noteAt, ph }
+      const catNotes = []; // { born, x, y, z, dx, dz, s, glyph, ph }
+      const _catRay = new THREE.Raycaster(), _catNdc = new THREE.Vector2(), _catHit = new THREE.Vector3();
+      const _catPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+      // note sheet: two 32px cells (a quaver, a pair of beamed quavers); red = ink, green = the rim around it
+      const noteTex = (() => {
+        const cv = document.createElement('canvas'); cv.width = 64; cv.height = 32;
+        const g = cv.getContext('2d');
+        const shape = (ox, pair) => {
+          const p = new Path2D();
+          const head = (x, y) => { p.moveTo(x + 5, y); p.ellipse(x, y, 5, 3.6, -0.45, 0, TAU); };
+          if (!pair) {
+            head(ox + 12, 24); p.rect(ox + 15.2, 6, 2.6, 18);
+            p.moveTo(ox + 17.8, 6); p.bezierCurveTo(ox + 19, 10, ox + 25, 11, ox + 24, 18); p.bezierCurveTo(ox + 23, 14, ox + 20, 12.5, ox + 17.8, 12.5); p.closePath();
+          } else {
+            head(ox + 8, 25); head(ox + 22, 22); p.rect(ox + 11.2, 8, 2.4, 17); p.rect(ox + 25.2, 5, 2.4, 17);
+            p.moveTo(ox + 11.2, 8); p.lineTo(ox + 27.6, 5); p.lineTo(ox + 27.6, 9.5); p.lineTo(ox + 11.2, 12.5); p.closePath();
+          }
+          return p;
+        };
+        for (const [ox, pair] of [[0, false], [32, true]]) {
+          const p = shape(ox, pair);
+          g.strokeStyle = 'rgb(0,255,0)'; g.lineWidth = 5; g.lineJoin = 'round'; g.stroke(p); g.fillStyle = 'rgb(0,255,0)'; g.fill(p);
+        }
+        for (const [ox, pair] of [[0, false], [32, true]]) { g.fillStyle = 'rgb(255,0,0)'; g.fill(shape(ox, pair)); }
+        const t = new THREE.CanvasTexture(cv);
+        t.colorSpace = THREE.NoColorSpace; t.generateMipmaps = false; t.minFilter = t.magFilter = THREE.LinearFilter;
+        return t;
+      })();
+      const noteGeo = new THREE.InstancedBufferGeometry();
+      {
+        const pg = new THREE.PlaneGeometry(1, 1);
+        noteGeo.setIndex(pg.index); noteGeo.setAttribute('position', pg.attributes.position); noteGeo.setAttribute('uv', pg.attributes.uv);
+      }
+      const noteA = new THREE.InstancedBufferAttribute(new Float32Array(CAT_NOTES * 4), 4).setUsage(THREE.DynamicDrawUsage); // x, y, z, size
+      const noteB = new THREE.InstancedBufferAttribute(new Float32Array(CAT_NOTES * 2), 2).setUsage(THREE.DynamicDrawUsage); // alpha, glyph
+      noteGeo.setAttribute('aNote', noteA); noteGeo.setAttribute('aNoteB', noteB);
+      noteGeo.instanceCount = 0;
+      const catNoteMesh = new THREE.Mesh(noteGeo, new THREE.ShaderMaterial({
+        uniforms: { uTex: { value: noteTex }, uNight: sharedUniforms.uNightFactor },
+        vertexShader: `
+          attribute vec4 aNote; attribute vec2 aNoteB;
+          varying vec2 vUv; varying float vA;
+          void main() {
+            vUv = vec2((uv.x + aNoteB.y) * 0.5, uv.y); vA = aNoteB.x;
+            vec4 mv = modelViewMatrix * vec4(aNote.xyz, 1.0);
+            mv.xy += position.xy * aNote.w; // faces the camera
+            gl_Position = projectionMatrix * mv;
+          }`,
+        fragmentShader: `
+          uniform sampler2D uTex; uniform float uNight;
+          varying vec2 vUv; varying float vA;
+          void main() {
+            vec4 t = texture2D(uTex, vUv);
+            float ink = t.r * t.a, rim = t.g * t.a * smoothstep(0.6, 0.95, uNight);
+            float a = clamp(ink + rim, 0.0, 1.0) * vA;
+            if (a < 0.01) discard;
+            vec3 col = mix(vec3(0.66, 0.6, 0.48), vec3(0.012, 0.01, 0.012), clamp(ink / max(ink + rim, 0.001), 0.0, 1.0));
+            gl_FragColor = vec4(col, a);
+          }`,
+        transparent: true, depthWrite: false
+      }));
+      catNoteMesh.frustumCulled = false;
+      catNoteMesh.renderOrder = 3;
+      catNoteMesh.visible = false;
+      scene.add(catNoteMesh);
+
+      function updateCats(dt, elapsed) {
+        const mesh = instancedById.cat;
+        const n = mesh && mesh.visible ? mesh.count : 0;
+        let best = null, bestD = Infinity;
+        if (n) {
+          const e = mesh.instanceMatrix.array, attr = mesh.geometry.attributes.aLook, look = attr.array;
+          const sp = mesh.userData.spawnAttr.array, van = mesh.geometry.attributes.aVanish.array;
+          let ray = null;
+          if (catPointer) {
+            const r = renderer.domElement.getBoundingClientRect();
+            _catNdc.set(((catPointer[0] - r.left) / r.width) * 2 - 1, -((catPointer[1] - r.top) / r.height) * 2 + 1);
+            _catRay.setFromCamera(_catNdc, camera);
+            ray = _catRay.ray;
+          }
+          const bps = audio.catBpm / 60, heard = audio.catBeat(), beat = heard ?? elapsed * bps;
+          const seen = new Set();
+          for (let i = 0; i < n; i++) {
+            const o = i * 16, x = e[o + 12], y = e[o + 13], z = e[o + 14];
+            const s = Math.hypot(e[o + 8], e[o + 10]) || 1, sinY = e[o + 8] / s, cosY = e[o + 10] / s;
+            const key = Math.round(x * 256) + ',' + Math.round(z * 256);
+            seen.add(key);
+            let st = catStates.get(key);
+            if (!st) {
+              st = { yaw: 0, pitch: 0, vy: 0, vp: 0, w: 0, blinkAt: elapsed + 0.5 + Math.random() * 3, noteAt: elapsed + 1 + Math.random(), ph: hash2D(Math.round(x * 64), Math.round(z * 64), 619) * TAU };
+              catStates.set(key, st);
+            }
+            const alive = elapsed - sp[i] > 1.0 && van[i] > 1e8;
+            let near = false, ty = 0, tp = 0;
+            if (ray && alive) {
+              _catPlane.constant = -y;
+              if (ray.intersectPlane(_catPlane, _catHit)) {
+                const dx = _catHit.x - x, dz = _catHit.z - z, d = Math.hypot(dx, dz);
+                if (d < CAT_LOOK_R) {
+                  near = true;
+                  const lx = dx * cosY - dz * sinY, lz = dx * sinY + dz * cosY;
+                  ty = THREE.MathUtils.clamp(Math.atan2(lx, lz), -1.15, 1.15);
+                  tp = THREE.MathUtils.clamp(Math.atan2(0.1 * s, Math.max(d, 0.02)), 0, 0.55); // looks down at it
+                }
+              }
+            }
+            st.w += ((near ? 1 : 0) - st.w) * Math.min(1, dt * (near ? 6 : 2.5));
+            const K = 70, D = 2 * 0.5 * Math.sqrt(K); // under-damped: turns, overshoots a little, settles
+            st.vy += ((ty - st.yaw) * K - st.vy * D) * dt; st.yaw += st.vy * dt;
+            st.vp += ((tp - st.pitch) * K - st.vp * D) * dt; st.pitch += st.vp * dt;
+            const lw = 1 - st.w, nod = Math.pow(Math.max(0, Math.cos(beat * TAU)), 3);
+            look[i * 4] = st.yaw * st.w + lw * 0.16 * Math.sin(beat * Math.PI / 4 + st.ph);
+            look[i * 4 + 1] = st.pitch * st.w + lw * (0.03 + 0.17 * nod);
+            look[i * 4 + 2] = lw * 0.24 * Math.sin(beat * Math.PI / 2 + st.ph) + st.w * st.yaw * 0.22;
+            if (elapsed > st.blinkAt + 0.18) st.blinkAt = elapsed + (Math.random() < 0.2 ? 0.3 : 2.2 + Math.random() * 4.5);
+            const bt = (elapsed - st.blinkAt) / 0.16;
+            look[i * 4 + 3] = alive && bt > 0 && bt < 1 ? Math.sin(bt * Math.PI) : 0;
+            if (!alive) { look[i * 4] = look[i * 4 + 1] = look[i * 4 + 2] = 0; st.noteAt = Math.max(st.noteAt, elapsed + 0.8); }
+            else if (lw > 0.6 && elapsed >= st.noteAt) { // a note rises from the head every 2 beats or so
+              st.noteAt = elapsed + (2 / bps) * (0.85 + Math.random() * 0.3);
+              if (catNotes.length < CAT_NOTES) {
+                const a = st.ph + Math.random() * 2 - 1;
+                catNotes.push({ born: elapsed, x: x - sinY * 0.01 * s, y: y + 0.17 * s, z: z - cosY * 0.01 * s, dx: Math.cos(a), dz: Math.sin(a), s, glyph: Math.random() < 0.35 ? 1 : 0, ph: Math.random() * TAU });
+              }
+            }
+            const dv = Math.hypot(x - camPan.x, z - camPan.y);
+            if (alive && dv < bestD) { bestD = dv; best = { x, y, z }; }
+          }
+          attr.needsUpdate = true;
+          if (catStates.size > seen.size) for (const k of catStates.keys()) if (!seen.has(k)) catStates.delete(k);
+        } else if (catStates.size) catStates.clear();
+        // notes: rise and drift, grow in quickly, fade out
+        let m = 0;
+        for (let i = catNotes.length - 1; i >= 0; i--) if (elapsed - catNotes[i].born > NOTE_LIFE || elapsed < catNotes[i].born) catNotes.splice(i, 1);
+        for (const nt of catNotes) {
+          const t = (elapsed - nt.born) / NOTE_LIFE, rise = 1 - (1 - t) * (1 - t), wob = Math.sin(t * TAU * 1.1 + nt.ph) * 0.012 * nt.s;
+          noteA.array[m * 4] = nt.x + nt.dx * (rise * 0.05 * nt.s) + wob * nt.dz;
+          noteA.array[m * 4 + 1] = nt.y + rise * 0.15 * nt.s;
+          noteA.array[m * 4 + 2] = nt.z + nt.dz * (rise * 0.05 * nt.s) - wob * nt.dx;
+          noteA.array[m * 4 + 3] = 0.042 * nt.s * Math.min(1, t * 6) * (1 + 0.15 * Math.sin(t * 9));
+          noteB.array[m * 2] = Math.min(1, t * 8) * (1 - THREE.MathUtils.smoothstep(t, 0.55, 1));
+          noteB.array[m * 2 + 1] = nt.glyph;
+          m++;
+        }
+        noteGeo.instanceCount = m;
+        catNoteMesh.visible = m > 0;
+        if (m) { noteA.needsUpdate = true; noteB.needsUpdate = true; }
+        // headphone music from the cat nearest the view centre: heard when zoomed in close
+        catAudioTimer -= dt;
+        if (catAudioTimer <= 0 && audio.ctx) {
+          catAudioTimer = 0.25;
+          const zoomK = THREE.MathUtils.clamp((52 - camDist) / 32, 0, 1);
+          const level = best ? THREE.MathUtils.clamp(1.2 - bestD / 5, 0, 1) * Math.pow(zoomK, 1.5) : 0;
+          audio.setCatMusic(level, best ? screenPan(best.x, best.y, best.z) : 0);
+        }
+        audio.updateCatMusic();
+      }
 
       /* =======================================================================
          12. DIORAMA STATE (GRID ITEMS + FREE-PLACED DECOR + AUTO-TILING)
@@ -10742,6 +11178,7 @@
         const key = TIME_ORDER[timeIndex];
         targetAtmo = ATMOSPHERES[key];
         audio.isNight = key === 'night';
+        audio.setCatCalm(key !== 'day'); // headphone music: bouncy by day, a music box at sunset and night
         document.getElementById('time-icon').innerHTML = makeToken('time-' + key, { round: true });
         // bottom shade follows the sky so the dock reads without a box
         document.documentElement.style.setProperty('--scrim', { day: 'rgba(28, 52, 84, 0.38)', golden: 'rgba(52, 24, 40, 0.45)', night: 'rgba(3, 6, 16, 0.72)' }[key]);
@@ -11224,6 +11661,7 @@
       });
 
       window.addEventListener('pointermove', (e) => {
+        catPointer = e.target === renderer.domElement ? [e.clientX, e.clientY] : null; // cats look at it (CAT LIFE)
         if (intro.phase !== 'done') return; // no ghost or grid while the island assembles
         if (isOrbiting) {
           const dx = e.clientX - lastDragX;
@@ -11259,6 +11697,7 @@
       });
 
       renderer.domElement.addEventListener('pointerleave', () => {
+        catPointer = null;
         hoveredHit = null;
         erasePointer = null;
         refreshEraseTarget();
@@ -11396,7 +11835,7 @@
       const islandRoot = new THREE.Group();
       scene.add(islandRoot);
       for (const o of [chunkTopSurface, chunkSubsoil, chunkBedrock, cabinGroupContainer, glowGroup,
-        smokeInst, flameInst, emberPoints, ...Object.values(instancedById)]) islandRoot.add(o);
+        smokeInst, flameInst, emberPoints, catNoteMesh, ...Object.values(instancedById)]) islandRoot.add(o);
 
       // draw the shared cabin part materials once now, off screen (a cabin's separate parts are only
       // drawn while it drops in, so otherwise the first placement builds their shaders mid-drop).
@@ -11669,6 +12108,7 @@
           audio.setFalls(level, best ? screenPan(best.x, best.y, best.z) : 0);
         }
         audio.updateFalls(dt);
+        updateCats(dt, elapsed);
         if (fallFeet.length || waterMat.uniforms.uRipN.value) {
           ripSort.length = 0;
           for (const f of fallLines) { // nearest point of each foot line to the screen centre
@@ -12355,6 +12795,8 @@
             for (let k = 3; k < d.length; k += 4) { const a = d[k] / 255; if (a > 0.6 && a < 0.92) sway++; else if (a >= 0.92) solid++; }
             return { sway, solid };
           },
+          cats: () => { const m = instancedById.cat, a = m.geometry.attributes.aLook.array; return { n: m.visible ? m.count : 0, looks: Array.from(a.slice(0, (m.visible ? m.count : 0) * 4)), notes: catNotes.length, noteMesh: catNoteMesh.visible ? noteGeo.instanceCount : 0, level: audio.catLevel, bpm: audio.catBpm, beat: audio.catBeat(), scheduled: audio.catNext }; },
+          catPointer: (x, y) => { catPointer = x === null ? null : [x, y]; },
           variantsOf: (id) => { const m = instancedById[id], a = m && m.geometry.attributes.aVariant; return a ? Array.from(a.array.slice(0, m.count)) : null; },
           // fences and walls (LINES): the lines as saved, and as drawn (bays and posts standing, path gaps,
           // instances still floating away), the placing rule for one bay, triangles of the two models

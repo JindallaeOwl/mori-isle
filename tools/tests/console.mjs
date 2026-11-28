@@ -10,7 +10,7 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
   await wait(3000);
   const J = (e) => evaluate(`JSON.stringify(${e})`).then(JSON.parse);
   const count = async () => { const s = await J('window.__mori.state()'); return s.placed + s.free + (s.snap || 0); };
-  for (const id of ['windmill', 'well', 'woodshed', 'flowerpot', 'pine']) {
+  for (const id of ['windmill', 'well', 'woodshed', 'flowerpot', 'pine', 'cat']) {
     await evaluate(`document.querySelector('#hud-dock [data-tool="${id}"]').click()`); await wait(300);
     for (const [wx, wz] of [[3.5, -2.5], [-3.5, 3.5], [1.5, -3.5], [4.5, -4.5], [-1.5, 4.5], [4.5, -1.5]]) {
       const before = await count();
