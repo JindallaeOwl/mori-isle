@@ -6668,7 +6668,9 @@
       const CAM_BACK = 120;
       let orbitAngle = Math.PI / 4;
       let targetOrbitAngle = Math.PI / 4;
-      const START_DIST = HASH.zoom ? THREE.MathUtils.clamp(+HASH.zoom || 42.5, 16, 62) : 42.5; // #zoom=18 starts zoomed in
+      // zoom range (camera distance): smaller is closer. 10 is about 4.3x the default view (user trial 2026-11-28, was 16)
+      const ZOOM_MIN = 10, ZOOM_MAX = 62;
+      const START_DIST = HASH.zoom ? THREE.MathUtils.clamp(+HASH.zoom || 42.5, ZOOM_MIN, ZOOM_MAX) : 42.5; // #zoom=18 starts zoomed in
       let camDist = START_DIST;
       let targetCamDist = START_DIST;
       let camLookY = 0.05;
@@ -6703,7 +6705,7 @@
       }
       // zoom keeping the ground point under the cursor fixed
       function zoomAt(factor, clientX, clientY) {
-        const d0 = targetCamDist, d1 = THREE.MathUtils.clamp(d0 * factor, 16.0, 62.0);
+        const d0 = targetCamDist, d1 = THREE.MathUtils.clamp(d0 * factor, ZOOM_MIN, ZOOM_MAX);
         if (d1 === d0) return;
         const k = 1 - d1 / d0;
         const upp = viewHeightAt(d0) / Math.max(window.innerHeight, 1);
@@ -10947,7 +10949,7 @@
           const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
           const midX = (t0.clientX + t1.clientX) * 0.5;
           const midY = (t0.clientY + t1.clientY) * 0.5;
-          targetCamDist = THREE.MathUtils.clamp(targetCamDist - (dist - prevPinchDist) * 0.08, 16.0, 62.0);
+          targetCamDist = THREE.MathUtils.clamp(targetCamDist - (dist - prevPinchDist) * 0.08, ZOOM_MIN, ZOOM_MAX);
           targetOrbitAngle -= (midX - prevTwoFingerX) * 0.01;
           setTargetElev(targetCamElev + (midY - prevTwoFingerY) * 0.008);
           prevPinchDist = dist;
