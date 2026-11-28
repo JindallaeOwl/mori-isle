@@ -2411,6 +2411,7 @@
         const part = new Float32Array(S.verts);
         S.parts.forEach(([start, end], i) => part.fill(i, start, end));
         geometry.setAttribute('aPebblePart', new THREE.BufferAttribute(part, 1));
+        geometry.userData.pebbleFootprints = buildPebbleFootprints(S);
       }
       if (S.arms) { // joining walls: which arm each vertex belongs to (0 = the middle, always shown)
         const A = new Float32Array(S.verts);
@@ -2461,6 +2462,59 @@
     // The free prop's random scale is already saved at full precision. Its low
     // digits give a repeatable choice independent of position or later turns.
     const pebbleLook = scale => Math.floor(scale * 65536) % 4;
+    // Project the actual faceted stones onto the ground once, keeping the empty
+    // gaps between parts. Use the same offsets and scales as the vertex shader.
+    function buildPebbleFootprints(soup) {
+      const hulls = soup.parts.map(([start, end]) => {
+        const points = [];
+        for (let i = start; i < end; i++) points.push(new THREE.Vector2(soup.P[i * 3], soup.P[i * 3 + 2]));
+        points.sort((a, b) => a.x - b.x || a.y - b.y);
+        function halfHull(ordered) {
+          const chain = [];
+          for (const p of ordered) {
+            while (chain.length >= 2) {
+              const a = chain[chain.length - 2], b = chain[chain.length - 1];
+              if ((b.x - a.x) * (p.y - a.y) > (b.y - a.y) * (p.x - a.x)) break;
+              chain.pop();
+            }
+            chain.push(p);
+          }
+          chain.pop(); // endpoint belongs to the other half
+          return chain;
+        }
+        return halfHull(points).concat(halfHull(points.reverse()));
+      });
+      const layouts = [];
+      for (let offset = 0; offset < pebbleLayouts.length; offset += hulls.length) {
+        const stones = [];
+        let radius = 0;
+        hulls.forEach((hull, i) => {
+          const shape = pebbleLayouts[offset + i];
+          if (shape.z === 0) return;
+          stones.push(hull.map(p => {
+            const v = new THREE.Vector2(p.x * shape.z + shape.x, p.y * shape.z + shape.y);
+            radius = Math.max(radius, v.length());
+            return v;
+          }));
+        });
+        layouts.push({ stones, radius });
+      }
+      return layouts;
+    }
+    function worldPebbleStones(layout, x, z, rotation, scale) {
+      const angle = rotation * Math.PI / 2;
+      const c = Math.cos(angle) * scale, s = Math.sin(angle) * scale;
+      return layout.stones.map(hull => hull.map(p =>
+        new THREE.Vector2(x + c * p.x + s * p.y, z - s * p.x + c * p.y)));
+    }
+    // Convex outlines run counterclockwise: if the other stone is entirely
+    // outside one edge, the two stones are separate (touching is fine).
+    function hasSeparatingEdge(hull, other) {
+      return hull.some((a, i) => {
+        const b = hull[(i + 1) % hull.length];
+        return other.every(p => (b.x - a.x) * (p.y - a.y) <= (b.y - a.y) * (p.x - a.x));
+      });
+    }
     function shapePebbles(mat, pass, preview) {
       const base = mat.onBeforeCompile;
       mat.onBeforeCompile = (sh, renderer) => {
@@ -8436,7 +8490,22 @@
         return best;
       }
 
-      function isBlockedForPoint(wx, wz, selfRadius = 0.10, checkSmallFreeProps = true) {
+      function overlapsPebbles(wx, wz, rotation, scale, ignore = null) {
+        const layouts = assetsById.pebbles.geometry.userData.pebbleFootprints;
+        const layout = layouts[pebbleLook(scale)];
+        let proposed;
+        for (const fp of freeProps) {
+          if (fp.id !== 'pebbles' || fp === ignore) continue;
+          const otherScale = fp.scale || 1, other = layouts[pebbleLook(otherScale)];
+          const reach = layout.radius * scale + other.radius * otherScale;
+          if (dist2(wx, wz, fp.wx, fp.wz) >= reach * reach) continue;
+          proposed ??= worldPebbleStones(layout, wx, wz, rotation, scale);
+          const existing = worldPebbleStones(other, fp.wx, fp.wz, fp.rotation, otherScale);
+          if (proposed.some(a => existing.some(b => !hasSeparatingEdge(a, b) && !hasSeparatingEdge(b, a)))) return true;
+        }
+        return false;
+      }
+      function isBlockedForPoint(wx, wz, selfRadius = 0.10, checkSmallFreeProps = true, placingPebbles = false) {
         // 1. Water / Pond exclusion
         if (isPondWorld(wx, wz, 0.06 + selfRadius * 0.3)) return true;
 
@@ -8472,6 +8541,7 @@
 
         // 4. Solid free-placed rocks & closely overlapping small props
         for (const fp of freeProps) {
+          if (placingPebbles && fp.id === 'pebbles') continue; // checked by individual stone outlines below
           const dist = Math.hypot(wx - fp.wx, wz - fp.wz);
           const solidFree = fp.id === 'rocks' ? 0.34 : assetsById[fp.id]?.def.solidRadius;
           if (solidFree) {
@@ -8480,7 +8550,7 @@
             if (dist < 0.16 + selfRadius * 0.5) return true;
           }
         }
-        return false;
+        return placingPebbles && overlapsPebbles(wx, wz, currentRotation, nextPebbleScale);
       }
 
       /* ---- STEP STONES (def.onWater): free props that stand in the water ---- */
@@ -8529,7 +8599,7 @@
         if (def.snapPlace) return snapPlacement(def, hit).valid;
         if (def.freePlace) {
           const r = PROP_SELF_RADIUS[toolId] || 0.12;
-          return !isBlockedForPoint(hit.wx, hit.wz, r, true);
+          return !isBlockedForPoint(hit.wx, hit.wz, r, true, toolId === 'pebbles');
         } else {
           // Grid-snapped object: block pond tiles and already-occupied tiles
           if (isPondTile(hit.gx, hit.gz)) return false;
@@ -9856,6 +9926,7 @@
         return null;
       }
       function turnFits(t, rot) {
+        if (t.id === 'pebbles') return !overlapsPebbles(t.ref.wx, t.ref.wz, rot, t.ref.scale || 1, t.ref);
         const r = turnRect(t, rot);
         if (!r) return true; // round footprints: any heading
         if (t.kind === 'snap') return !snapRectBlocked(r, snapProps.indexOf(t.ref));
