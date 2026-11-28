@@ -3571,6 +3571,57 @@
         }
       },
       {
+        id: 'fern',
+        name: '고사리',
+        category: 'nature',
+        type: 'stack',
+        freePlace: true,
+        size: 32,
+        layers: 16,
+        scale: .72,
+        layerStep: .021,
+        roughness: .92,
+        metalness: 0,
+        windStrength: .09,
+        explodeSliceFactor: .30,
+        contactRadius: .15,
+        drawSlice(ctx, emCtx, layer, total, size) {
+          const centre = (size - 1) / 2;
+          const dot = (x, h, z, colour) => {
+            if (Math.round(h) === layer) px(ctx, centre + x, centre + z, colour);
+          };
+          // Seven arching fronds. Each leaflet sweeps forward and narrows to one pixel.
+          const fronds = [[.16, 14, 9], [1.02, 12, 11], [1.93, 14, 8], [2.75, 11, 12],
+            [3.78, 14, 10], [4.56, 10, 13], [5.57, 13, 9]];
+          for (const [angle, length, height] of fronds) {
+            const c = Math.cos(angle), s = Math.sin(angle);
+            const lift = t => height * Math.sin(t * 2.40);
+            const mark = (r, side, h, colour) => dot(c * r - s * side, h, s * r + c * side, colour);
+            for (let i = 0; i <= 32; i++) {
+              const t = i / 32;
+              mark(length * t, 0, lift(t), t < .23 ? '#52723a' : '#96ad55');
+            }
+            for (let pair = 0; pair < 5; pair++) for (const side of [-1, 1]) {
+              const t = .22 + pair * .15 + side * .014;
+              const reach = 3.3 * Math.sin(Math.PI * t) * (1.35 - .55 * t);
+              const top = side > 0 ? '#63964f' : '#76a754';
+              for (let i = 0; i <= 8; i++) {
+                const u = i / 8, r = length * t + 2.5 * u, w = side * reach * u;
+                const h = lift(t) + Math.sin(Math.PI * u) * .6 - .65 * u;
+                mark(r, w, h, top);
+                if (i > 1 && i < 7) mark(r - 1, w, h, '#4c8547');
+              }
+            }
+          }
+          // An upright fiddlehead curls in a vertical plane above the open fronds.
+          for (let h = 0; h <= 13; h++) dot(-1.8, h, -1, '#769746');
+          for (let i = 0; i <= 30; i++) {
+            const a = i / 30 * 1.75 * Math.PI, r = 1.8 - 1.1 * i / 30;
+            dot(-r * Math.cos(a), 13 + r * Math.sin(a), -1, '#a3b965');
+          }
+        }
+      },
+      {
         // 들꽃 씨앗 (not the 들꽃 clump above): scattered by the handful, each one a single little
         // flower that grows out of the ground. The white petals take each flower's own colour
         // (per-instance aTint, SEED_TINTS); kept in seedFlowers, not freeProps.
@@ -7619,6 +7670,12 @@
       // (same look as in the scene, instead of hand-drawn 2D icons).
       {
         const iconOf = (id, obj) => { if (assetsById[id]) assetsById[id].iconCanvas = renderObjectIcon(renderer, obj); };
+        const fern = assetsById.fern;
+        const fernIconMat = new THREE.MeshStandardMaterial({
+          map: fern.colorTex, alphaTest: .5, vertexColors: true, roughness: fern.def.roughness, side: THREE.DoubleSide
+        });
+        iconOf('fern', new THREE.Mesh(fern.geometry, fernIconMat));
+        fernIconMat.dispose();
         // cabin: the merged prefab itself
         const cabin = buildStorybookCabinPrefab();
         mergeCabinPrefab(cabin);
