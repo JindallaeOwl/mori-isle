@@ -85,7 +85,7 @@ export default async ({ wait, evaluate, mouse, key, log }) => {
   };
 
   // 2) every tool places
-  for (const d of items) ok(`places ${d.id} (${d.category})`, d.id === 'dock' ? await placeShore(d.id) : (d.id === 'steppingstone' ? await placeWater(d.id) : await placeSomewhere(d.id)));
+  for (const d of items) ok(`places ${d.id} (${d.category})`, d.id === 'dock' ? await placeShore(d.id) : (d.onWater ? await placeWater(d.id) : await placeSomewhere(d.id)));
   // a cherry tree sheds petals once it has landed (extra instances on the petal mesh, no new draw call)
   await wait(2500);
   ok('cherry petals drift down', (await J('window.__mori.petals()')) > 26, String(await J('window.__mori.petals()')));

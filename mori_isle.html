@@ -5028,6 +5028,52 @@
           }
         }
       },
+      lilypad: {
+        name: '연잎', category: 'nature', type: 'soup', seed: 317,
+        freePlace: true, onWater: true, solidRadius: .26, contactRadius: 0,
+        dropGroups: 3, explodeTier: 0, explodeSliceFactor: .2, ao: [0, .12, .86],
+        build(S, rng) {
+          const pad = (x, z, radius, turn, green, lift) => {
+            const leaf = new Soup(), hub = [x, .015, z], rim = [];
+            const n = 18, vein = mixC(green, C('#b4c575'), .44);
+            // Leave a deep V open; its two cut edges meet at the sunken leaf centre.
+            for (let i = 0; i <= n; i++) {
+              const a = turn + .19 + (TAU - .38) * i / n, r = radius * rng.range(.95, 1.04);
+              rim.push([x + r * Math.cos(a), .022 + .006 * Math.cos(3 * a), z + .88 * r * Math.sin(a)]);
+            }
+            for (let i = 0; i < n; i++) {
+              const a = rim[i], b = rim[i + 1];
+              leaf.tri(hub, b, a, mulC(green, rng.range(.91, 1.07)), L_PLAIN, .59);
+              leaf.quad(a, b, [b[0], .007, b[2]], [a[0], .007, a[2]], mulC(green, .68), L_PLAIN, .78);
+              if (i % 3 === 1) {
+                const vx = a[0] - x, vz = a[2] - z, t = .80;
+                leaf.tri([x - vz * .025, .019, z + vx * .025],
+                  [x + vx * t, lerp(hub[1], a[1], t) + .003, z + vz * t],
+                  [x + vz * .025, .019, z - vx * .025], vein, L_PLAIN, .68);
+              }
+            }
+            S.merge(leaf, { p: [0, lift, 0] });
+          };
+          pad(-.045, -.025, .19, .85, C('#579a57'), 0);
+          pad(.151, .084, .082, -1.6, C('#88ac60'), .012);
+          // Two staggered whorls of cupped petals around a warm yellow centre.
+          const flower = new Soup(), x = -.078, z = -.043;
+          for (let row = 0; row < 2; row++) {
+            const n = row ? 6 : 8, len = row ? .052 : .078, width = row ? .016 : .023;
+            for (let i = 0; i < n; i++) {
+              const a = (i + row * .5) * TAU / n, c = Math.cos(a), s = Math.sin(a);
+              const p = (r, w, y) => [x + c * r - s * w, y, z + s * r + c * w];
+              const root = p(.004, 0, .03), mid = p(len * .58, 0, .042 + row * .012);
+              const tip = p(len, 0, row ? .10 : .071), l = p(len * .57, width, mid[1] + .014), r = p(len * .57, -width, mid[1] + .014);
+              const pink = row ? C('#ffc8d4') : C('#dc87aa');
+              flower.quad(l, tip, mid, root, pink, L_PLAIN, .7);
+              flower.quad(r, root, mid, tip, mixC(pink, C('#ffe4df'), .52), L_PLAIN, .65);
+            }
+          }
+          flower.ico(.019, x, .069, z, C('#f1c462'), { sc: [1, .65, 1], d: 0 });
+          S.merge(flower);
+        }
+      },
       fallenlog: {
         name: '쓰러진 통나무',
         category: 'nature',
@@ -6004,7 +6050,7 @@
       embedStones.instanceMatrix.needsUpdate = true;
       chunkSubsoil.add(embedStones);
 
-      // --- 8D. Smooth Organic Curved Water Surface (SDF-Masked Shader) + Lily Pads ---
+      // --- 8D. Smooth Organic Curved Water Surface (SDF-Masked Shader) ---
       const sdfSize = 128;
       const sdfCanvas = document.createElement('canvas');
       sdfCanvas.width = sdfSize;
@@ -6147,35 +6193,6 @@
       const waterMesh = new THREE.Mesh(waterGeo, waterMat);
       waterMesh.position.y = -0.09;
       chunkTopSurface.add(waterMesh);
-
-      // Floating Lily Pads inside the rounded pond (lilyParts: pad + blossom, popped in by the startup assembly)
-      const lilyParts = [];
-      const lilyMat = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ color: '#4c9c48', roughness: 0.55 }));
-      const blossomMat = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ color: '#ffa3c7', roughness: 0.65 }));
-      [
-        { x: 1.9, z: 2.0, flower: true },
-        { x: 3.1, z: 2.3, flower: false },
-        { x: 2.3, z: 3.0, flower: true }
-      ].forEach((lp) => { // starter pond only: hidden when the water there is gone (placeLilies)
-        const pad = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.025, 10, 1, false, 0.2, Math.PI * 1.85), lilyMat);
-        pad.position.set(lp.x, -0.075, lp.z);
-        pad.rotation.y = lp.x * 1.7;
-        chunkTopSurface.add(pad);
-        const part = [pad];
-        if (lp.flower) {
-          const fl = new THREE.Mesh(new THREE.DodecahedronGeometry(0.068, 0), blossomMat);
-          fl.position.set(lp.x, -0.03, lp.z);
-          chunkTopSurface.add(fl);
-          part.push(fl);
-        }
-        lilyParts.push({ meshes: part, x: lp.x, z: lp.z, y: part.map((m) => m.position.y) });
-      });
-      const placeLilies = () => lilyParts.forEach((lp) => {
-        const on = getPondSDF(lp.x, lp.z) < -0.24;
-        const y = getTileElevation(Math.floor(lp.x + HALF_GRID), Math.floor(lp.z + HALF_GRID));
-        lp.meshes.forEach((m, i) => { m.visible = on; m.position.y = lp.y[i] + y; });
-      });
-      placeLilies();
 
       // Low-lying valley mist drifting over the water: thickest over open water, thinning past the shore
       const mistMat = new THREE.ShaderMaterial({
@@ -6559,7 +6576,6 @@
         pondMist.geometry.dispose(); pondMist.geometry = buildPondSheet(0.32);
         fallMesh.geometry.dispose(); fallMesh.geometry = buildFallGeometry(); fallMesh.visible = falls.length > 0;
         sprayPoints.geometry.dispose(); sprayPoints.geometry = buildSprayGeometry(); sprayPoints.visible = falls.length > 0;
-        placeLilies();
       }
       // ground paint: only the turf colours change (same vertices)
       function repaintSurface() {
@@ -6567,7 +6583,7 @@
         topMesh.geometry = buildTurfGeometry(false);
       }
 
-      return { chunkTopSurface, chunkSubsoil, chunkBedrock, pondMist, mistMat, gridMat, waterMesh, waterMat, fallMesh, fallMat, fallFeet, fallLines, sprayPoints, lilyParts, rebuildSurface, repaintSurface };
+      return { chunkTopSurface, chunkSubsoil, chunkBedrock, pondMist, mistMat, gridMat, waterMesh, waterMat, fallMesh, fallMat, fallFeet, fallLines, sprayPoints, rebuildSurface, repaintSurface };
     }
 
     /* =========================================================================
@@ -7187,7 +7203,7 @@
       /* =======================================================================
          10. ISLAND, AUTO-TILING PATH/FENCE, SPRITE STACKS & CONTACT SHADOWS
          ======================================================================= */
-      const { chunkTopSurface, chunkSubsoil, chunkBedrock, pondMist, mistMat, gridMat, waterMesh, waterMat, fallMesh, fallMat, fallFeet, fallLines, sprayPoints, lilyParts, rebuildSurface: rebuildTerrainSurface, repaintSurface: repaintTerrainSurface } = buildMiniatureIsland(scene);
+      const { chunkTopSurface, chunkSubsoil, chunkBedrock, pondMist, mistMat, gridMat, waterMesh, waterMat, fallMesh, fallMat, fallFeet, fallLines, sprayPoints, rebuildSurface: rebuildTerrainSurface, repaintSurface: repaintTerrainSurface } = buildMiniatureIsland(scene);
 
       // Height-Proportional Contact Shadow InstancedMesh (shifts & fades as layers float!)
       const csCanvas = document.createElement('canvas');
@@ -8707,7 +8723,7 @@
         return placingPebbles && overlapsPebbles(wx, wz, currentRotation, nextPebbleScale);
       }
 
-      /* ---- STEP STONES (def.onWater): free props that stand in the water ---- */
+      /* ---- WATER PROPS: free placement at the water surface ---- */
       const WATER_SURF = -0.09;     // the water surface below its step's height (same as the pond sheets)
       const STONE_GAP = 0.34;    // stride between stones laid by a drag
       const STONE_CLEAR = 0.27;  // nearest another stone's centre may be (at scale 1)
@@ -8724,22 +8740,25 @@
         }
         return { wx: x, wz: z, wy: getHillHeight(x, z) + WATER_SURF };
       }
-      // can a step stone stand here? in open, flat water (not on a falls' lip or its splash), clear of
-      // the other stones and of a dock's deck
-      function stoneSpotOk(wx, wz, scale = 1, skip = null) {
+      // Pads need water under the whole leaf. Stones can sit closer to the bank.
+      function waterSpotOk(def, wx, wz, scale = 1) {
+        const lily = def.id === 'lilypad', radius = lily ? def.solidRadius * scale : STONE_CLEAR * scale / 2;
         const lim = HALF_GRID - 0.3;
         if (Math.abs(wx) > lim || Math.abs(wz) > lim) return false;
-        if (getPondSDF(wx, wz) > -0.1) return false;
+        if (getPondSDF(wx, wz) > -(lily ? radius : .1)) return false;
         const h = getHillHeight(wx, wz);
         for (const [ox, oz] of [[0.18, 0], [-0.18, 0], [0, 0.18], [0, -0.18]]) if (Math.abs(getHillHeight(wx + ox, wz + oz) - h) > 0.01) return false;
         for (const f of fallFeet) if (Math.hypot(wx - f.x, wz - f.z) < 0.38) return false;
         for (const fp of freeProps) {
-          if (fp === skip || !assetsById[fp.id]?.def.onWater) continue;
-          if (Math.hypot(wx - fp.wx, wz - fp.wz) < STONE_CLEAR * ((scale + (fp.scale || 1)) / 2)) return false;
+          const other = assetsById[fp.id].def;
+          if (!other.onWater) continue;
+          const otherRadius = other.id === 'lilypad' ? other.solidRadius : STONE_CLEAR / 2;
+          if (Math.hypot(wx - fp.wx, wz - fp.wz) < radius + otherRadius * (fp.scale || 1)) return false;
         }
         for (const o of snapProps) {
-          const def = assetsById[o.id].def;
-          if (rectHitsCircle(def.shore ? localRect(def.shore.water, o.wx, o.wz, o.rotation) : footprintRect(def, o.wx, o.wz, o.rotation), wx, wz, 0.14)) return false;
+          const prop = assetsById[o.id].def;
+          const rect = prop.shore ? localRect(prop.shore.water, o.wx, o.wz, o.rotation) : footprintRect(prop, o.wx, o.wz, o.rotation);
+          if (rectHitsCircle(rect, wx, wz, lily ? radius : .14)) return false;
         }
         return true;
       }
@@ -8749,7 +8768,7 @@
         const def = assetsById[toolId]?.def;
         if (!def) return false;
 
-        if (def.onWater) { const p = waterPoint(hit); return stoneSpotOk(p.wx, p.wz); }
+        if (def.onWater) { const p = waterPoint(hit); return waterSpotOk(def, p.wx, p.wz); }
         if (def.snapPlace) return snapPlacement(def, hit).valid;
         if (def.freePlace) {
           const r = PROP_SELF_RADIUS[toolId] || 0.12;
@@ -9097,7 +9116,7 @@
         });
         pickPointLights(true);
 
-        // 2a. Step stones whose water went away (a plunge pool leaves with its falls) float off with it
+        // Water props float away with a plunge pool when its waterfall disappears.
         for (let i = freeProps.length - 1; i >= 0; i--) {
           const fp = freeProps[i];
           if (!assetsById[fp.id]?.def.onWater || getPondSDF(fp.wx, fp.wz) < -0.04) continue;
@@ -9391,7 +9410,7 @@
       let stoneStroke = null;
       function setStone(wx, wz) {
         const scale = 0.88 + Math.random() * 0.24;
-        if (!stoneSpotOk(wx, wz, scale)) return false;
+        if (!waterSpotOk(assetsById.steppingstone.def, wx, wz, scale)) return false;
         const now = performance.now() * 0.001, def = assetsById[selectedTool].def;
         freeProps.push({ id: selectedTool, wx, wz, rotation: Math.floor(Math.random() * 4), scale, spawnT: now });
         rebuildInstances();
@@ -9431,6 +9450,7 @@
       const b64ToBytes = (b) => { try { const t = atob(b); const u8 = new Uint8Array(t.length); for (let i = 0; i < t.length; i++) u8[i] = t.charCodeAt(i); return u8; } catch (e) { return null; } };
       function serializeIsland() {
         return {
+          editableLilies: true,
           level: bytesToB64(new Uint8Array(terrain.level.buffer)),
           mat: bytesToB64(terrain.mat),
           placed: [...placedItems.values()].map((e) => [e.id, e.gx, e.gz, e.rotation]),
@@ -9474,7 +9494,7 @@
           if (seeds.length >= maxSeeds) break;
           if (onIsland(wx, wz) && num(rot) && num(scale) && scale > 0.1 && scale < 4 && Number.isInteger(tint) && tint >= 0 && tint < SEED_TINTS.length) seeds.push({ wx, wz, rot, scale, tint });
         }
-        return { level, mat: mt, placed, snap, free, seeds };
+        return { level, mat: mt, placed, snap, free, seeds, editableLilies: isl.editableLilies === true };
       }
       // same shape as populateStarterIsland: terrain first (derived counts, water field, surface), then the lists
       function applyIsland(isl, rebuild = true) {
@@ -9490,6 +9510,7 @@
         for (const e of isl.placed) placedItems.set(`${e.gx},${e.gz}`, { ...e });
         for (const o of isl.snap) snapProps.push({ ...o });
         for (const fp of isl.free) freeProps.push({ ...fp });
+        if (!isl.editableLilies) addStarterLilies(); // old saves stored the pads in the scenery
         for (const f of isl.seeds) seedFlowers.push({ ...f, spawnT: -100 });
         if (rebuild) rebuildInstances();
       }
@@ -9604,6 +9625,12 @@
       const writePrefs = (p) => storeSet(SAVE_KEY_PREFS, JSON.stringify({ ...readPrefs(), ...p }));
 
       /* ---- STORYTELLING CLUSTERED STARTER DIORAMA ---- */
+      function addStarterLilies() {
+        const def = assetsById.lilypad.def;
+        for (const [wx, wz, rotation, scale] of [[1.9, 2, 0, 1], [3.1, 2.3, 1.5, .80], [2.3, 3, 2.5, .94]]) {
+          if (waterSpotOk(def, wx, wz, scale)) freeProps.push({ id: def.id, wx, wz, rotation, scale });
+        }
+      }
       function populateStarterIsland(rebuild = true) {
         if (!terrainIsDefault()) { resetTerrainData(); rebuildTerrainSurface(); markShadowsDirty(1.0); }
         placedItems.clear();
@@ -9675,6 +9702,7 @@
           { id: 'mushrooms', wx: -2.85, wz: 0.55, rotation: 1, scale: 0.85 }
         ];
         starterFree.forEach((fp) => freeProps.push(fp));
+        addStarterLilies();
 
         if (rebuild) rebuildInstances();
       }
@@ -9915,7 +9943,7 @@
         if (assetsById[selectedTool]?.def.seedScatter) { beginSeedStroke(hit); return; }
         const tt = terrainToolById(selectedTool);
         if (tt) { if (tt.paint !== undefined) beginPaintStroke(hit, tt.paint); else editTerrainAt(hit.gx, hit.gz, tt.dir); return; }
-        if (assetsById[selectedTool]?.def.onWater) { beginStoneStroke(hit); return; }
+        if (selectedTool === 'steppingstone') { beginStoneStroke(hit); return; }
         const def = assetsById[selectedTool].def;
         const placement = def.snapPlace ? snapPlacement(def, hit) : null;
         if (!(placement ? placement.valid : canPlaceAtHit(selectedTool, hit))) return;
@@ -9925,17 +9953,22 @@
           rebuildInstances();
           triggerPlaceJuice(def, p.wx, p.wy, p.wz);
         } else if (def.freePlace) {
+          const p = def.onWater ? waterPoint(hit) : hit;
           freeProps.push({
             id: selectedTool,
-            wx: hit.wx,
-            wz: hit.wz,
+            wx: p.wx,
+            wz: p.wz,
             rotation: currentRotation,
-            scale: selectedTool === 'pebbles' ? nextPebbleScale : randomFreeScale(),
+            scale: def.onWater ? 1 : (selectedTool === 'pebbles' ? nextPebbleScale : randomFreeScale()),
             spawnT: performance.now() * 0.001
           });
           if (selectedTool === 'pebbles') nextPebbleScale = randomFreeScale();
           rebuildInstances();
-          triggerPlaceJuice(def, hit.wx, getContinuousTerrainHeight(hit.wx, hit.wz), hit.wz);
+          if (def.onWater) {
+            const land = dropTotalTime(def.layers), pan = screenPan(p.wx, p.wy, p.wz);
+            spawnRing(performance.now() * .001 + land, p.wx, p.wy + .012, p.wz, { r0: .13, r1: .38, w: .02, a: .32, exp: 2, dur: .6 });
+            scheduleFx(land, () => audio.introPlop(pan, 1.24));
+          } else triggerPlaceJuice(def, p.wx, getContinuousTerrainHeight(p.wx, p.wz), p.wz);
         } else {
           const key = `${hit.gx},${hit.gz}`;
           // stairs face up the bank by themselves; paths, fences and walls stay on quarter turns
@@ -10237,10 +10270,11 @@
           freeCursorRing.scale.set(SEED_R / 0.27, 1, SEED_R / 0.27);
           freeCursorRing.position.set(wx, wy + 0.03, wz);
           ringMat.color.set(seedSpotFree(wx, wz, 0.03) ? '#ffe29c' : '#ff5252');
-        } else if (def.onWater) { // step stone: ring and ghost on the water surface above the hit
-          const p = waterPoint(hoveredHit), ok = stoneSpotOk(p.wx, p.wz);
+        } else if (def.onWater) { // ring and ghost on the water surface above the hit
+          const p = waterPoint(hoveredHit), ok = valid;
           freeCursorRing.visible = true;
-          freeCursorRing.scale.set(0.2 / 0.27, 1, 0.2 / 0.27);
+          const radius = def.id === 'lilypad' ? def.solidRadius : .2;
+          freeCursorRing.scale.set(radius / .27, 1, radius / .27);
           freeCursorRing.position.set(p.wx, p.wy + 0.02, p.wz);
           ringMat.color.set(ok ? '#ffe29c' : '#ff5252');
           if (ghost) {
@@ -11671,10 +11705,6 @@
         waterMesh.visible = w > 0;
         waterMesh.position.y = THREE.MathUtils.lerp(WATER_FROM, WATER_Y, popScale(w));
         fallMat.uniforms.uK.value = THREE.MathUtils.clamp((u - IT.water - 0.3) / 0.6, 0, 1); // falls start running once it is full
-        lilyParts.forEach((lp, i) => {
-          const s = popScale((u - IT.water - 0.22 - i * 0.09) / 0.28);
-          for (const m of lp.meshes) m.scale.setScalar(s);
-        });
         // paths appear, the fence drops in as one piece
         const pathOn = u >= IT.path;
         for (const im of [pathMesh]) im.visible = pathOn && im.count > 0;
@@ -11728,6 +11758,12 @@
         });
         freeProps.forEach((fp) => {
           const def = assetsById[fp.id].def;
+          if (fp.id === 'lilypad') {
+            fp.spawnT = t0 + IT.water + .22 + .24 * introDiag(fp.wx, fp.wz);
+            const pan = screenPan(fp.wx, freePropY(def, fp.wx, fp.wz), fp.wz);
+            introFx(fp.spawnT + dropTotalTime(def.layers), () => audio.introPlop(pan, 1.2));
+            return;
+          }
           fp.spawnT = spawnAt(def, fp.wx, fp.wz);
           landing(def, fp.wx, freePropY(def, fp.wx, fp.wz), fp.wz, fp.spawnT);
         });
@@ -11752,7 +11788,6 @@
         });
         // pond
         introFx(t0 + IT.water + 0.05, () => audio.introPlop(screenPan(2.4, 0, 2.4), 0.85));
-        lilyParts.filter((lp) => lp.meshes[0].visible).forEach((lp, i) => introFx(t0 + IT.water + 0.3 + i * 0.09, () => audio.introPlop(screenPan(lp.x, 0, lp.z), 1.15 + i * 0.12)));
         // objects: dust when the first slice lands, one "tok" when the top lands; the pitch climbs
         // through the whole sequence instead of restarting per object. Cabins also get a ring.
         events.sort((a, b) => a.top - b.top);
@@ -11795,7 +11830,6 @@
         for (const ch of introLayers) { ch.visible = true; ch.scale.set(1, 1, 1); }
         chunkTopSurface.position.y = 0;
         waterMesh.visible = true; waterMesh.position.y = WATER_Y; fallMat.uniforms.uK.value = 1;
-        lilyParts.forEach((lp) => lp.meshes.forEach((m) => m.scale.setScalar(1)));
         fenceGroup.visible = true; petalInst.visible = true;
         for (const im of [pathMesh, crateClutterInst]) im.visible = im.count > 0;
         markShadowsDirty(1.0);
@@ -11898,7 +11932,7 @@
           },
           // hold the animation clock at `sec` seconds into the current assembly / crumble (null = run)
           introClock: (sec) => { debugClock = sec === null ? null : intro.t0 + sec; markShadowsDirty(3); },
-          items: () => ITEM_DEFS.map((d) => ({ id: d.id, name: d.name, category: d.category, type: d.type, freePlace: d.freePlace, snapPlace: d.snapPlace, autoConnect: d.autoConnect })),
+          items: () => ITEM_DEFS.map((d) => ({ id: d.id, name: d.name, category: d.category, type: d.type, freePlace: d.freePlace, snapPlace: d.snapPlace, onWater: d.onWater, autoConnect: d.autoConnect })),
           snaps: () => snapProps.map((o) => ({ id: o.id, wx: o.wx, wz: o.wz, rotation: o.rotation, rect: footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation) })),
           cabins: () => cabinRects(),
           pond: (x, z) => getPondSDF(x, z),
@@ -11922,7 +11956,7 @@
           fallSheet: () => ({ visible: fallMesh.visible, verts: fallMesh.geometry.attributes.position.count, spray: sprayPoints.visible ? sprayPoints.geometry.attributes.position.count : 0, feet: fallFeet.length, lines: fallLines.length, ripples: waterMat.uniforms.uRipN.value, k: fallMat.uniforms.uK.value, sound: audio.fallLevel || 0 }),
           lipInfo: (qx, qz) => lipInfo(qx, qz),
           fallVerts: () => Array.from(fallMesh.geometry.attributes.position.array, (v) => Math.round(v * 1000) / 1000),
-          waterSheet: () => ({ water: waterMesh.geometry.index.count / 6, mist: pondMist.geometry.index.count / 6, lilies: lilyParts.map((lp) => lp.meshes[0].visible) }),
+          waterSheet: () => ({ water: waterMesh.geometry.index.count / 6, mist: pondMist.geometry.index.count / 6, lilies: freeProps.filter(fp => fp.id === 'lilypad').length }),
           instanceCount: (id) => instancedById[id].count,
           instanceVisible: (id) => instancedById[id].visible,
           // eraser + undo (tools/tests/eraser.mjs)
@@ -11958,7 +11992,7 @@
           // step stones as drawn (instance positions, still standing ones) and the rules they follow
           stones: () => { const m = instancedById.steppingstone, e = m.instanceMatrix.array, v = m.geometry.attributes.aVanish.array, out = []; for (let i = 0; i < m.count; i++) if (v[i] > 1e8) out.push([e[i * 16 + 12], e[i * 16 + 13], e[i * 16 + 14]]); return out; },
           waterY: (x, z) => getHillHeight(x, z) + WATER_SURF,
-          stoneOk: (x, z) => stoneSpotOk(x, z),
+          stoneOk: (x, z) => waterSpotOk(assetsById.steppingstone.def, x, z),
           // the path mesh: triangles, how far any vertex stands above the smooth ground (no turf relief), and
           // with stairs (centre, climb direction) how far along the flight path vertices reach at the foot and top
           pathStats: (sx, sz, dx, dz) => {

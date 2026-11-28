@@ -55,7 +55,7 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
   ok('terrain slot ends with the 물 tool', tools === 'raise,lower,paint_grass,paint_sand,paint_dirt,paint_stone,paint_water', tools);
   const w0 = await water(), sheet0 = await J(`${M}.waterSheet()`);
   ok('the starter pond is water cells', w0 > 150 && (await J(`${M}.pond(2.35, 2.35)`)) < -1, w0);
-  ok('starter water sheet, mist and lilies are there', sheet0.water > 0 && sheet0.mist >= sheet0.water && sheet0.lilies.every(Boolean), JSON.stringify(sheet0));
+  ok('starter water sheet, mist and three editable lilies are there', sheet0.water > 0 && sheet0.mist >= sheet0.water && sheet0.lilies === 3, JSON.stringify(sheet0));
   const d0 = await J(`${M}.islandDigest()`);
   const h0 = (await J(`${M}.terrainDump(0.05, 1)`)).hash;
 
