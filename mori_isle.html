@@ -2677,8 +2677,9 @@
     // (CAT_FACES) projected onto the flattened front of the head, its layer picked by the coat.
     // Instance aLook = (yaw, pitch, roll, yawn) from CAT LIFE each frame, aVariant = the coat.
     const CAT = {
-      neck: [0, .08, 0], tail: [0, .012, -.044], yawnCoat: 1,
-      face: { w: .1, y0: .0574, h: .088 }, // the photo's square on the head front (local x across, y up)
+      neck: [0, .08, 0], tail: [.008, .013, -.046], yawnCoat: 1,
+      face: { w: .064, y0: .07, h: .056 }, // the photo's square on the head front (local x across, y up): a small face
+      // low on a big round head, like the picture; beyond it the head keeps the photo's rim (= the coat)
       fur: [ // base (= the photo rim), stripes, cream
         ['#6b5948', '#3a2e24', '#e2d6c6'], // brown tabby
         ['#c99a68', '#a0703f', '#f3e3cc'], // ginger (also yawns)
@@ -5444,24 +5445,32 @@
           const fur = (part, role, o = {}) => Object.assign({ l: L_PLAIN, rough: .95, jit: .04, sway: t(part, role) }, o);
           const facet = (o) => Object.assign({ smooth: false, w: 9, h: 7 }, o);
           const shell = (part, o = {}) => Object.assign({ sway: t(part, 0), jit: 0 }, o);
-          // body: a pear-shaped sit, haunches, a cream chest, front legs and paws, stripes down the back
-          S.sph(.04, 0, .043, -.006, BASE, facet(fur(0, 1, { sc: [1, 1.12, 1.08] })));
-          for (let k = 0; k < 3; k++) S.ico(.012, 0, .068 - k * .016, -.043 + k * .002, STRIPE, fur(0, 2, { sc: [2.4, .5, .55], d: 0, r: [.35, 0, 0] }));
-          S.sph(.024, 0, .052, .022, LIGHT, facet(fur(0, 3, { sc: [1, 1.35, .75], w: 8, h: 6 })));
-          S.cyl(.024, .02, 0, .074, 0, BASE, fur(0, 1, { n: 8 }));
-          S.sph(.018, 0, .072, .017, LIGHT, facet(fur(0, 3, { w: 7, h: 5 })));
-          for (const s of [-1, 1]) {
-            S.sph(.025, s * .028, .024, -.012, BASE, facet(fur(0, 1, { sc: [.85, 1, 1.15], w: 8, h: 6 })));
-            S.ico(.007, s * .046, .03, -.012, STRIPE, fur(0, 2, { sc: [.4, 1.8, 1.2], d: 0, r: [0, 0, s * .3] }));
-            S.sph(.011, s * .03, .006, .014, LIGHT, facet(fur(0, 3, { sc: [1, .6, 1.4], w: 7, h: 5 })));
-            S.seg([s * .014, .05, .02], [s * .015, .008, .028], .0095, .009, BASE, fur(0, 1, { n: 6 }));
-            S.cyl(.0099, .004, s * .0146, .03, .0245, STRIPE, fur(0, 2, { n: 6 }));
-            S.sph(.0105, s * .015, .006, .033, LIGHT, facet(fur(0, 3, { sc: [1, .65, 1.25], w: 7, h: 5 })));
+          // body: one chubby faceted piece, a bean that sits wide and flat at the bottom; the forward faces
+          // are a cream bib and belly, bands of stripes go round the back. Short stubby front legs, little
+          // hind feet peeping out at the sides
+          const b0 = S.verts;
+          S.sph(.043, 0, .043, -.004, BASE, facet(fur(0, 1, { sc: [1.08, 1.12, 1.06], w: 10, h: 8, deform: (v) => {
+            const k = clamp(v.y / .048, -1, 1);
+            v.x *= 1 - k * .15; v.z *= 1 - k * .08;
+            if (v.y < -.041) v.y = -.041;
+          } })));
+          for (let v = b0; v + 2 < S.verts; v += 3) {
+            const nz = S.N[v * 3 + 2], cy = (S.P[v * 3 + 1] + S.P[v * 3 + 4] + S.P[v * 3 + 7]) / 3;
+            const role = nz > .45 && cy > .01 ? 3 : (nz < -.3 && cy > .028 && Math.floor(cy / .013) % 2 === 0 ? 2 : 0);
+            if (!role) continue;
+            const col = role === 3 ? LIGHT : STRIPE, k = 1 + (rng() - .5) * .06;
+            for (let j = v; j < v + 3; j++) { S.K[j * 3] = col[0] * k; S.K[j * 3 + 1] = col[1] * k; S.K[j * 3 + 2] = col[2] * k; S.S[j * 4 + 2] = t(0, role); }
           }
-          // tail curled round the right side to the front, ringed
-          const tp = [CAT.tail, [.03, .01, -.047], [.052, .009, -.025], [.056, .008, 0], [.045, .009, .022]];
-          for (let k = 0; k < 4; k++) S.seg(tp[k], tp[k + 1], .0088 - k * .0005, .0085 - k * .0005, k % 2 ? STRIPE : BASE, fur(3, k % 2 ? 2 : 1, { n: 6 }));
-          S.sph(.0075, tp[4][0], tp[4][1], tp[4][2], STRIPE, facet(fur(3, 2, { w: 6, h: 5 })));
+          S.cyl(.024, .02, 0, .074, 0, BASE, fur(0, 1, { n: 8 }));
+          for (const s of [-1, 1]) {
+            S.cyl(.0115, .026, s * .017, .013, .036, BASE, fur(0, 1, { n: 6 }));
+            S.sph(.012, s * .017, .004, .042, LIGHT, facet(fur(0, 3, { sc: [1, .5, 1.2], w: 7, h: 5 })));
+            S.sph(.012, s * .036, .005, .024, LIGHT, facet(fur(0, 3, { sc: [1, .5, 1.35], w: 7, h: 5 })));
+          }
+          // tail: up the right side behind, curling over at the tip, ringed
+          const tp = [CAT.tail, [.032, .013, -.05], [.05, .03, -.046], [.056, .057, -.038], [.05, .079, -.03], [.039, .089, -.024]];
+          for (let k = 0; k < 5; k++) S.seg(tp[k], tp[k + 1], .0092 - k * .0006, .0088 - k * .0006, k % 2 ? STRIPE : BASE, fur(3, k % 2 ? 2 : 1, { n: 6 }));
+          S.sph(.0064, tp[5][0], tp[5][1], tp[5][2], STRIPE, facet(fur(3, 2, { w: 6, h: 5 })));
           // head: big and round with the front pressed flat; the faces turned forward carry the photo face
           // (L_CATFACE, projected straight on, white vertex colour so the photo shows as it is)
           const h0 = S.verts;
@@ -5493,12 +5502,17 @@
             S.cyl(.014, .004, s * .065, .1, -.008, CAP, shell(1, { n: 10, r: [0, 0, Math.PI / 2], rough: .3 }));
             S.seg([s * .055, .113, -.012], [s * .056, .104, -.009], .0045, .0045, PHONE, shell(1, { n: 6, rough: .35 }));
           }
-          // pink bow on top, in front of the band
-          for (const s of [-1, 1]) {
-            S.ico(.013, s * .0135, .146, .027, BOW, shell(1, { sc: [1.25, .8, .5], d: 1, rough: .3, r: [-.5, 0, s * .35] }));
-            S.ico(.006, s * .007, .136, .032, BOW_D, shell(1, { sc: [.6, 1.6, .4], d: 0, rough: .35, r: [-.4, 0, s * .5] }));
+          // angular pink bow on the right of the brow, tilted: two flat triangular wings, a square knot, two
+          // little tails
+          {
+            const B = new Soup(), flat = (v) => { v.z *= .45; };
+            for (const s of [-1, 1]) {
+              B.cone(.0125, .021, s * .0115, 0, 0, BOW, shell(1, { n: 3, rough: .35, r: [0, 0, s * Math.PI / 2], deform: flat }));
+              B.cone(.004, .012, s * .0045, -.0085, .001, BOW_D, shell(1, { n: 3, rough: .4, r: [0, 0, Math.PI + s * .45], deform: flat }));
+            }
+            B.box(.0075, .0085, .0065, 0, 0, .0015, BOW_D, shell(1, { rough: .4 }));
+            S.merge(B, { p: [.02, .137, .03], r: [-.45, .12, -.32] });
           }
-          S.ico(.006, 0, .145, .031, BOW_D, shell(1, { sc: [1, 1.1, .8], d: 1, rough: .35 }));
         }
       }
     };
