@@ -6,7 +6,10 @@ export default async ({ wait, evaluate, mouse, key, log }) => {
   await wait(2500);
   const ok = (name, cond, extra = '') => log((cond ? 'PASS ' : 'FAIL ') + name + (extra ? '  ' + extra : ''));
   const J = (expr) => evaluate(`JSON.stringify(${expr})`).then(JSON.parse);
-  const total = async () => { const s = await J('window.__mori.state()'); return s.placed + s.free + (s.snap || 0) + (s.seeds || 0); };
+  const total = async () => {
+    const s = await J('window.__mori.state()'), bays = await J('window.__mori.lines().reduce((n, l) => n + l.bays, 0)'); // fences and walls: drawn lines
+    return s.placed + s.free + (s.snap || 0) + (s.seeds || 0) + bays;
+  };
   // shaders of items missing from the starter island only compile once placed: watch the console from here
   await evaluate(`window.__errs = []; for (const k of ['error', 'warn']) { const o = console[k].bind(console); console[k] = (...a) => { window.__errs.push(k + ': ' + a.map(String).join(' ').slice(0, 300)); o(...a); }; } 0`);
 

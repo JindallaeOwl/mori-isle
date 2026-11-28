@@ -2413,42 +2413,57 @@
         geometry.setAttribute('aPebblePart', new THREE.BufferAttribute(part, 1));
         geometry.userData.pebbleFootprints = buildPebbleFootprints(S);
       }
-      if (S.arms) { // joining walls: which arm each vertex belongs to (0 = the middle, always shown)
-        const A = new Float32Array(S.verts);
-        for (const [a, b, k] of S.arms) A.fill(k, a, b);
-        geometry.setAttribute('aArm', new THREE.BufferAttribute(A, 1));
+      if (S.arms || S.tags) { // line models, one float per vertex (attribute slots are few): look * 512 + tag + 128
+        const A = new Float32Array(S.verts), T = new Float32Array(S.verts);
+        for (const [a, b, k] of S.arms || []) A.fill(k, a, b); // look (0 = every look)
+        for (const [a, b, v] of S.tags || []) T.fill(v, a, b); // -1 a picket, n brick n
+        for (let v = 0; v < S.verts; v++) T[v] = A[v] * 512 + T[v] + 128;
+        geometry.setAttribute('aTag', new THREE.BufferAttribute(T, 1));
       }
       return { def, geometry };
     }
 
-    // WALL JOINS: arm k (aArm 1..4) shows only when bit k-1 of the mask is set; a folded arm collapses
-    // to one point under the ground (no triangles left to draw). `mask` is an instance attribute
-    // (aConn) for the placed walls or a uniform (uConn) for the ghost. Runs before sway and drop.
-    function foldArms(mat, mask, key) {
-      const base = mat.onBeforeCompile, uConn = { value: 15 };
-      mat.userData.conn = uConn;
+    // LINE MODELS (fence bays, wall lengths, their posts), before sway and drop:
+    // Instance aLine = (len, looks mask), vertex aTag = look * 512 + tag + 128 (packed: 16 attribute slots at most).
+    // - stretch: local |x| beyond `keep` grows by len - 1 (the chord this bay spans / the model length)
+    // - looks: a vertex of look k (1..3) shows only when bit k-1 of the looks mask is set, else it folds
+    //   to one point under the ground (no triangles left to draw)
+    // - aBrick -1 (a picket): a little taller or shorter and leaning, each its own; colour pass: pickets
+    //   and bricks (aBrick n) each take their own shade, from the instance position, so a long wall
+    //   doesn't repeat one pattern
+    function lineShader(mat, keep, colour, key) {
+      const base = mat.onBeforeCompile;
       mat.onBeforeCompile = (sh, r) => {
         if (base) base(sh, r);
-        if (mask === 'uConn') sh.uniforms.uConn = uConn;
         sh.vertexShader = sh.vertexShader
-          .replace('#include <common>', `#include <common>\nattribute float aArm;\n${mask === 'uConn' ? 'uniform' : 'attribute'} float ${mask};`)
+          .replace('#include <common>', `#include <common>
+          attribute vec2 aLine;
+          attribute float aTag;
+          float lnHash(float a) {
+            float s = 0.0;
+            #ifdef USE_INSTANCING
+              s = instanceMatrix[3][0] * 7.13 + instanceMatrix[3][2] * 3.71;
+            #endif
+            return fract(sin(a * 12.9898 + s) * 43758.5453);
+          }`)
           .replace('#include <begin_vertex>', `#include <begin_vertex>
-          if (aArm > 0.5 && mod(floor(${mask} / exp2(aArm - 1.0) + 0.01), 2.0) < 0.5) transformed = vec3(0.0, -0.4, 0.0);`);
+          float aArm = floor(aTag / 512.0 + 0.001), aBrick = aTag - aArm * 512.0 - 128.0;
+          transformed.x += sign(transformed.x) * max(abs(transformed.x) - ${keep.toFixed(3)}, 0.0) * (aLine.x - 1.0);
+          if (aBrick < -0.5) {
+            float hj = lnHash(1.7), up = max(transformed.y, 0.0);
+            transformed.y += up * (hj - 0.5) * 0.14;
+            transformed.x += up * (fract(hj * 7.31) - 0.5) * 0.1;
+          }
+          if (aArm > 0.5 && mod(floor(aLine.y / exp2(aArm - 1.0) + 0.01), 2.0) < 0.5) transformed = vec3(0.0, -0.4, 0.0);`);
+        if (colour) sh.vertexShader = sh.vertexShader.replace('#include <color_vertex>', `#include <color_vertex>
+          float lnTag = aTag - floor(aTag / 512.0 + 0.001) * 512.0 - 128.0;
+          if (abs(lnTag) > 0.5) {
+            float bh = lnHash(abs(lnTag) + 0.37);
+            vColor.rgb *= (0.88 + 0.24 * bh) * mix(vec3(1.0), vec3(1.05, 1.0, 0.92), fract(bh * 5.7));
+          }`);
       };
       mat.customProgramCacheKey = () => key;
       return mat;
-    }
-    // a copy of a soup geometry keeping only the given arms (the palette icon: a straight run)
-    function keepArms(geo, keep) {
-      const arm = geo.attributes.aArm.array, idx = [], out = new THREE.BufferGeometry();
-      for (let v = 0; v < arm.length; v += 3) if (keep.includes(arm[v])) idx.push(v, v + 1, v + 2);
-      for (const name in geo.attributes) {
-        const a = geo.attributes[name], n = a.itemSize, dst = new Float32Array(idx.length * n);
-        idx.forEach((v, i) => { for (let k = 0; k < n; k++) dst[i * n + k] = a.array[v * n + k]; });
-        out.setAttribute(name, new THREE.BufferAttribute(dst, n));
-      }
-      out.computeBoundingSphere(); out.computeBoundingBox();
-      return out;
     }
 
     // Each row rearranges the same four stones. Entries give x/z displacement,
@@ -3367,16 +3382,6 @@
         contactRadius: 0
       },
       {
-        id: 'fence',
-        name: '나무 울타리',
-        category: 'paths',
-        type: 'auto_fence',
-        autoConnect: true,
-        freePlace: false,
-        glow: null,
-        contactRadius: 0.22
-      },
-      {
         id: 'campfire',
         name: '모닥불',
         category: 'living',
@@ -3824,6 +3829,124 @@
     // hanging things (laundry, tags): pinned at `top`, swinging more toward the bottom (`len` below it)
     function soupSwayBelow(S, start, top, len, amp) {
       for (let v = start; v < S.verts; v++) S.S[v * 4 + 2] = amp * clamp((top - S.P[v * 3 + 1]) / len, 0, 1);
+    }
+
+    /* ---- LINES: fences and walls drawn as free curves (models; placing: section 10, LINES) ----
+       A line is cut into short modules (one fence bay, one length of brick wall), each an instance of
+       one model; posts (fence posts, brick piers) stand at its ends, at path gaps and (fences) every few
+       bays. A model's local x runs along the line, centred, one def.line.step long; the shader stretches
+       it to the real chord (aLen), keeping |x| < keep as it is (a picket keeps its width).
+       S.tags (aBrick): -1 = a picket (a little taller or shorter, leaning, its own shade), n > 0 = brick n
+       (its own shade per instance). S.arms groups 1..3 are looks: each instance shows one of them
+       (aConn = 1 << look), so moss and grass don't repeat along a line. */
+    const FENCE_STEP = 0.125, WALL_STEP = 0.24, WALL_COURSE = 0.06; // a course: STEP_HEIGHT 0.48 is 8 of them
+    function lineLook(S, only, k, fn) {
+      if (only === null) { const a = S.verts; fn(); (S.arms || (S.arms = [])).push([a, S.verts, k]); }
+      else if (only === k) fn();
+    }
+    const lineTag = (S, start, v) => (S.tags || (S.tags = [])).push([start, S.verts, v]);
+    const PICKET = C('#c29a6b'), PICKET_D = C('#9c7650'), RAIL = C('#86603e'), NAIL = C('#3e3a36');
+    const BRICKS = [C('#7d8188'), C('#9a9ea4'), C('#8a857c'), C('#6c7077'), C('#a7a8a6'), C('#878b90')];
+    const MORTAR = C('#a39f94');
+    function lineTuft(S, rng, x, z, h = 0.08) { // a few blades at the foot, swaying toward the tips
+      const st = S.verts;
+      for (let k = 0; k < 3; k++) {
+        const a = rng() * TAU, hgt = h * rng.range(.65, 1.1);
+        S.seg([x, -.005, z], [x + Math.cos(a) * .022, hgt, z + Math.sin(a) * .022], .0065, .002, mixC(C('#5f8a36'), C('#8fb653'), rng()), { n: 3, rough: .9, l: L_PLAIN });
+      }
+      for (let v = st; v < S.verts; v++) S.S[v * 4 + 2] = .45 * clamp(S.P[v * 3 + 1] / h, 0, 1);
+    }
+    // one fence bay: a pointed picket nailed onto two rails behind it
+    function fenceBay(S, rng, ox = 0, only = null) {
+      const w = .062, d = .02, zf = .012, t = .27, apex = .312;
+      const col = mixC(PICKET_D, PICKET, rng.range(.45, .9)), top = mulC(col, 1.06);
+      const st = S.verts;
+      S.box(w, .33, d, ox, .105, zf, col, { l: L_WOOD, rough: .86, uvs: 1.2, grad: [-.04, .12, .72] }); // -0.06 .. 0.27
+      const x0 = ox - w / 2, x1 = ox + w / 2, a = zf + d / 2, b = zf - d / 2;
+      S.tri([x0, t, a], [x1, t, a], [ox, apex, a], col, L_WOOD, .86);
+      S.tri([x1, t, b], [x0, t, b], [ox, apex, b], col, L_WOOD, .86);
+      S.quad([x0, t, a], [ox, apex, a], [ox, apex, b], [x0, t, b], top, L_WOOD, .86);
+      S.quad([ox, apex, a], [x1, t, a], [x1, t, b], [ox, apex, b], top, L_WOOD, .86);
+      for (const y of [.077, .202]) S.box(.008, .008, .005, ox + rng.range(-.006, .006), y, a + .002, NAIL, { rough: .4, jit: .02 });
+      lineTag(S, st, -1);
+      for (const y of [.075, .2]) S.box(FENCE_STEP + .004, .034, .022, ox, y, -.01, mixC(RAIL, C('#6e4c30'), rng() * .5), { l: L_WOOD, rough: .9, uvs: 1.4 });
+      lineLook(S, only, 1, () => { lineTuft(S, rng, ox + .03, .05); lineTuft(S, rng, ox - .02, -.05, .06); });
+      lineLook(S, only, 2, () => { S.ico(.022, ox - .018, 0, .03, MOSS_D, { sc: [1.3, .55, .9], d: 0, rough: 1, l: L_MOSS }); lineTuft(S, rng, ox + .04, -.045, .07); });
+      lineLook(S, only, 3, () => { S.ico(.012, ox + .028, .212, -.02, mixC(MOSS_D, MCOL.moss, .5), { sc: [1.6, .5, .8], d: 0, rough: 1, l: L_MOSS }); });
+    }
+    // a heavier post with a pyramid cap (line ends, every few bays, either side of a path)
+    function fencePost(S, rng, ox = 0, only = null) {
+      const col = mixC(C('#76523a'), C('#94683f'), rng());
+      S.box(.062, .44, .062, ox, .14, 0, col, { l: L_WOOD, rough: .9, uvs: 1.2, grad: [-.06, .14, .7] }); // -0.08 .. 0.36
+      S.add(gCyl(4, 0), { s: [.05, .045, .05], r: [0, Math.PI / 4, 0], p: [ox, .3825, 0], c: mulC(col, .88), l: L_WOOD, rough: .9 });
+      lineLook(S, only, 1, () => { S.ico(.03, ox + .02, .005, .028, MOSS_D, { sc: [1.4, .5, 1.1], d: 0, rough: 1, l: L_MOSS }); lineTuft(S, rng, ox - .035, .03, .09); });
+      lineLook(S, only, 2, () => { lineTuft(S, rng, ox + .04, -.03, .1); lineTuft(S, rng, ox - .03, -.035, .07); });
+      lineLook(S, only, 3, () => { S.ico(.02, ox, .405, 0, mixC(MOSS_D, MCOL.moss, .4), { sc: [1.2, .4, 1.2], d: 0, rough: 1, l: L_MOSS }); });
+    }
+    // one length of brick wall: staggered grey bricks proud of a mortar core, three courses below the
+    // ground (on a slope a module stands on the high side, its foot shows down to the low side), two
+    // coping slabs on top, a little moss
+    function wallBay(S, rng, ox = 0, only = null) {
+      const H = WALL_STEP / 2, T = .14, G = .008, BL = WALL_STEP / 2, CY = 6 * WALL_COURSE;
+      S.box(WALL_STEP, CY + .18, T - .012, ox, (CY - .18) / 2, 0, MORTAR, { l: L_PLASTER, rough: 1, uvs: 1.5 });
+      let id = 1;
+      for (let c = -3; c < 6; c++) {
+        const y0 = c * WALL_COURSE, off = (c & 1) ? BL / 2 : 0;
+        for (let s = -H - off; s < H - 1e-6; s += BL) {
+          // joints at the bricks' own ends; a brick crossing the module end is cut there with no joint,
+          // so it carries on in the next module
+          const lo = s < -H - 1e-6 ? -H : s + G / 2, hi = s + BL > H + 1e-6 ? H : s + BL - G / 2;
+          if (hi - lo < .01) continue;
+          const st = S.verts;
+          S.box(hi - lo, WALL_COURSE - G, T + rng.range(-.006, .004), ox + (lo + hi) / 2, y0 + WALL_COURSE / 2, rng.range(-.003, .003),
+            mulC(BRICKS[Math.floor(rng() * BRICKS.length)], rng.range(.93, 1.05)), { l: L_ROCK, rough: rng.range(.72, .86), uvs: 1.6, jit: .03 });
+          lineTag(S, st, id++);
+        }
+      }
+      for (const [a, b] of [[-H, -.003], [.003, H]]) {
+        const st = S.verts;
+        S.box(b - a, .046, .184, ox + (a + b) / 2, CY + .023, rng.range(-.004, .004), mixC(C('#9b9fa2'), C('#b9bbb8'), rng()),
+          { l: L_ROCK, rough: .76, uvs: 1.4, r: [rng.range(-.02, .02), 0, rng.range(-.012, .012)] });
+        lineTag(S, st, 60 + id++);
+      }
+      const moss = () => mixC(MOSS_D, MCOL.moss, rng() * .6);
+      lineLook(S, only, 1, () => { // a moss cushion on the cap with a drip over the edge, a tuft at the foot
+        S.ico(.05, ox - .06, CY + .046, .01, moss(), { sc: [1.5, .28, 1.3], d: 0, rough: 1, l: L_MOSS });
+        S.ico(.018, ox - .1, CY + .02, .094, moss(), { sc: [1.2, 1.4, .5], d: 0, rough: 1, l: L_MOSS });
+        lineTuft(S, rng, ox + .05, .09, .09);
+      });
+      lineLook(S, only, 2, () => { // moss creeping up from the ground on both faces
+        for (const sz of [1, -1]) S.ico(.045, ox + rng.range(-.06, .06), .02, sz * .072, moss(), { sc: [1.6, .9, .35], d: 0, rough: 1, l: L_MOSS });
+        lineTuft(S, rng, ox - .06, -.09, .08);
+      });
+      lineLook(S, only, 3, () => { // moss in a joint and on the other slab
+        S.ico(.03, ox + .07, CY + .046, -.03, moss(), { sc: [1.4, .25, 1.1], d: 0, rough: 1, l: L_MOSS });
+        S.ico(.014, ox - .03, .17, .074, moss(), { sc: [1.6, .6, .4], d: 0, rough: 1, l: L_MOSS });
+      });
+    }
+    // a brick pier (wall ends, either side of a path): courses laid crosswise in turn, a stepped stone cap
+    function wallPier(S, rng, ox = 0, only = null) {
+      const W = .22, G = .008, TOP = 8 * WALL_COURSE;
+      S.box(W - .012, TOP + .18, W - .012, ox, (TOP - .18) / 2, 0, MORTAR, { l: L_PLASTER, rough: 1, uvs: 1.5 });
+      let id = 1;
+      for (let c = -3; c < 8; c++) {
+        const y = c * WALL_COURSE + WALL_COURSE / 2, along = !(c & 1);
+        for (const s of [-1, 1]) {
+          const col = mulC(BRICKS[Math.floor(rng() * BRICKS.length)], rng.range(.93, 1.05)), st = S.verts;
+          const len = W + rng.range(-.004, .004), dep = W / 2 - G / 2, o = { l: L_ROCK, rough: rng.range(.72, .86), uvs: 1.6, jit: .03 };
+          if (along) S.box(len, WALL_COURSE - G, dep, ox, y, s * W / 4, col, o);
+          else S.box(dep, WALL_COURSE - G, len, ox + s * W / 4, y, 0, col, o);
+          lineTag(S, st, id++);
+        }
+      }
+      const st = S.verts;
+      S.box(.27, .05, .27, ox, TOP + .025, 0, C('#a5a8aa'), { l: L_ROCK, rough: .76, uvs: 1.4 });
+      S.box(.19, .03, .19, ox, TOP + .065, 0, C('#b3b5b3'), { l: L_ROCK, rough: .76, uvs: 1.4, r: [0, rng.range(-.04, .04), 0] });
+      lineTag(S, st, 90);
+      const moss = () => mixC(MOSS_D, MCOL.moss, rng() * .6);
+      lineLook(S, only, 1, () => { S.ico(.045, ox + .05, TOP + .08, -.03, moss(), { sc: [1.4, .3, 1.2], d: 0, rough: 1, l: L_MOSS }); S.ico(.02, ox + .13, TOP + .03, .06, moss(), { sc: [.5, 1.4, 1.2], d: 0, rough: 1, l: L_MOSS }); });
+      lineLook(S, only, 2, () => { S.ico(.05, ox - .06, .02, .11, moss(), { sc: [1.5, 1, .35], d: 0, rough: 1, l: L_MOSS }); lineTuft(S, rng, ox + .13, .08, .1); });
+      lineLook(S, only, 3, () => { S.ico(.03, ox - .07, TOP + .055, .08, moss(), { sc: [1.3, .3, 1.1], d: 0, rough: 1, l: L_MOSS }); lineTuft(S, rng, ox - .13, -.07, .08); });
     }
     const SOUP_ITEMS = {
       lantern: {
@@ -4840,95 +4963,39 @@
         }
       },
       // ---- paths & walls ----
-      // A knee-high dry-stone wall that joins the same wall on the neighbouring tiles (like the fence).
-      // One model holds a middle stack plus an arm toward each side (S.arms marks their vertices, aArm
-      // 1..4 = local +x, +z, -x, -z); each instance's aConn mask unfolds only the arms that meet a
-      // neighbour, the rest fold to a point in the shader (WALL JOINS). Three courses of flat-bottomed
-      // stones, staggered, smaller toward the top, moss over the top faces, grass at the foot.
-      stonewall: {
-        name: '돌담',
+      // Lines (LINES, section 10): drawn by dragging, cut into bays with posts; def.line holds how.
+      // step: bay length, half: half thickness (placing rules), height: for the eraser, cut: bays one
+      // eraser click takes, keep: |x| the stretch leaves alone, post: the post model, postEvery: a post
+      // every n bays (0 = ends and path gaps only), stepped: bays stand level and step down a slope
+      // (bricks) instead of shearing along it (pickets stay upright either way).
+      fence: {
+        name: '나무 울타리',
         category: 'paths',
         type: 'soup',
-        seed: 241,
-        connect: true,
+        seed: 233,
         autoConnect: true,
         windStrength: 0.0,
         explodeSliceFactor: 0.40,
         explodeTier: 0,
         glow: null,
-        contactRadius: 0.2,
-        solidRadius: 0.16,
-        build(S, rng) {
-          const COURSES = [ // centre height, stone height, wall thickness, stone length range
-            { y: .048, h: .1, w: .22, len: [.1, .15] },
-            { y: .128, h: .085, w: .19, len: [.085, .13] },
-            { y: .2, h: .07, w: .16, len: [.07, .11] }
-          ];
-          const stoneCol = () => {
-            const c = mixC(MCOL.stoneD, MCOL.stoneL, rng.range(.15, .85));
-            return rng() < .35 ? mixC(c, C('#a39a86'), .45) : c; // some warmer, sun-bleached ones
-          };
-          const mossCol = () => mixC(MOSS_D, MCOL.moss, rng() * .7);
-          // one faceted stone: an icosahedron stretched to (len, h, w), lumpy, flat underneath, turned by yaw
-          const stone = (x, y, z, len, h, w, yaw, col, flatBottom) => {
-            const sd = rng() * 100, f = 9;
-            const start = S.verts;
-            S.add(gIco(0), {
-              s: [len / 2, h / 2, w / 2], p: [x, y, z], r: [rng.range(-.06, .06), yaw, rng.range(-.06, .06)], c: col,
-              l: L_ROCK, rough: rng.range(.6, .8), uvs: 1.0,
-              deform: (v) => {
-                v.multiplyScalar(.84 + .32 * vnoise(v.x * f + sd, v.z * f + v.y * f * .7 + sd, 7));
-                if (flatBottom && v.y < -h * .32) v.y = -h * .32 - (v.y + h * .32) * .15;
-              }
-            });
-            return start;
-          };
-          // lay one course along direction (dx, dz) from s0 to s1 (s: distance from the tile centre)
-          const course = (c, ci, dx, dz, s0, s1) => {
-            const yaw = -Math.atan2(dz, dx);
-            let s = s0;
-            while (s < s1 - .035) {
-              let L = rng.range(c.len[0], c.len[1]);
-              if (s + L > s1) L = s1 - s;
-              const mid = s + L / 2, side = rng.range(-.012, .012), h = c.h * rng.range(.85, 1.1);
-              const x = dx * mid - dz * side, z = dz * mid + dx * side;
-              const st = stone(x, c.y + rng.range(-.006, .006), z, L * 1.08, h, c.w * rng.range(.9, 1.05), yaw + rng.range(-.08, .08), stoneCol(), ci === 0);
-              if (ci === 2 && rng() < .6) S.cover(st, mossCol(), .62, L_MOSS, Math.floor(rng() * 999));
-              s += L;
-            }
-          };
-          // a tuft of blades at the foot of the wall, swaying more toward the tips
-          const tuft = (x, z) => {
-            const st = S.verts;
-            for (let k = 0; k < 3; k++) {
-              const a = rng() * TAU, hgt = rng.range(.05, .09);
-              S.seg([x, -.005, z], [x + Math.cos(a) * .025, hgt, z + Math.sin(a) * .025], .007, .002,
-                mixC(C('#5f8a36'), C('#8fb653'), rng()), { n: 3, rough: .9, l: L_PLAIN });
-            }
-            for (let v = st; v < S.verts; v++) S.S[v * 4 + 2] = .45 * clamp(S.P[v * 3 + 1] / .09, 0, 1);
-          };
-          // the middle stack (always there; alone it reads as a little cairn of stones)
-          const CORE = .12;
-          COURSES.forEach((c, ci) => {
-            const yaw = rng() * TAU, st = stone(rng.range(-.01, .01), c.y, rng.range(-.01, .01), CORE * 2.1, c.h, c.w * 1.12, yaw, stoneCol(), ci === 0);
-            if (ci === 2) S.cover(st, mossCol(), .58, L_MOSS, 41);
-          });
-          S.ico(.035, .02, .245, -.03, mossCol(), { sc: [1.5, .45, 1.2], d: 0, rough: 1, l: L_MOSS });
-          // the four arms, each reaching a little past the tile edge so neighbours' stones overlap
-          S.arms = [];
-          [[1, 0], [0, 1], [-1, 0], [0, -1]].forEach(([dx, dz], i) => {
-            const a0 = S.verts;
-            COURSES.forEach((c, ci) => course(c, ci, dx, dz, CORE * (ci === 1 ? .55 : .85), .515));
-            // moss pads on top and in the joints, grass at the foot on either side
-            for (let k = 0; k < 2; k++) {
-              const s = rng.range(.2, .45), side = rng.range(-.04, .04);
-              S.ico(rng.range(.025, .04), dx * s - dz * side, .238, dz * s + dx * side, mossCol(), { sc: [1.5, .4, 1.1], d: 0, rough: 1, l: L_MOSS });
-            }
-            if (rng() < .7) { const s = rng.range(.18, .4), sd = rng() < .5 ? -1 : 1; S.ico(.022, dx * s - dz * sd * .1, .1, dz * s + dx * sd * .1, mossCol(), { sc: [1, .7, .6], d: 0, rough: 1, l: L_MOSS }); }
-            for (const sd of [-1, 1]) if (rng() < .75) { const s = rng.range(.16, .44); tuft(dx * s - dz * sd * .13, dz * s + dx * sd * .13); }
-            S.arms.push([a0, S.verts, i + 1]);
-          });
-        }
+        contactRadius: 0,
+        line: { step: FENCE_STEP, half: .045, height: .32, cut: 4, keep: .036, bay: fenceBay, post: fencePost, postHalf: .045, postEvery: 4, stepped: false, maxMods: 1400, maxPosts: 480, iconBays: 6 },
+        build(S, rng) { fenceBay(S, rng); }
+      },
+      // the old knee-high dry-stone wall became a waist-high grey brick wall with a coping (same id: saves)
+      stonewall: {
+        name: '벽돌담',
+        category: 'paths',
+        type: 'soup',
+        seed: 241,
+        autoConnect: true,
+        windStrength: 0.0,
+        explodeSliceFactor: 0.40,
+        explodeTier: 0,
+        glow: null,
+        contactRadius: 0,
+        line: { step: WALL_STEP, half: .095, height: .42, cut: 2, keep: 0, bay: wallBay, post: wallPier, postHalf: .14, postEvery: 0, stepped: true, maxMods: 720, maxPosts: 240, iconBays: 4 },
+        build(S, rng) { wallBay(S, rng); }
       },
       // Stepping stones: free placement on the water only (def.onWater), y = 0 is the water surface.
       // A flat stone with a dry top a few cm proud of the surface, a wet dark body going down into the
@@ -5190,7 +5257,7 @@
     const TERRAIN_MAX = 3; // steps above the meadow (water digs its own basin, no steps below 0)
     const terrainToolById = (id) => TERRAIN_TOOLS.find((t) => t.id === id);
     // Shared fields every item has, whatever it is built with:
-    //   id, name, category, type ('stack' | 'soup' | '3d_cabin' | 'auto_path' | 'auto_fence'),
+    //   id, name, category, type ('stack' | 'soup' | '3d_cabin' | 'auto_path'), line (drawn as a curve: LINES),
     //   freePlace (no grid, may overlap), autoConnect (joins neighbours), contactRadius,
     //   glow (light source or null), explodeTier (0 ground props, 1 mid, 2 cabin)
     ITEM_DEFS.forEach((def) => {
@@ -5379,13 +5446,6 @@
         ctx.beginPath(); ctx.arc(25, 19, 3.8, 0, Math.PI * 2); ctx.fill();
         ctx.fillStyle = '#b8b0a0';
         ctx.beginPath(); ctx.arc(20, 24, 2.8, 0, Math.PI * 2); ctx.fill();
-      } else if (kind === 'fence') {
-        ctx.fillStyle = '#7d502d';
-        ctx.fillRect(6, 16, 28, 3);
-        ctx.fillRect(6, 24, 28, 3);
-        ctx.fillStyle = '#a86e40';
-        ctx.fillRect(9, 10, 5, 22);
-        ctx.fillRect(26, 10, 5, 22);
       }
       return c;
     }
@@ -7387,23 +7447,6 @@
         return S.build({ groups: 1, ao: null });
       }
 
-      // Auto-Tiling Wooden Fence Posts & Connecting Rails (InstancedMesh, lifts with Ground Props Tier)
-      const fenceGroup = new THREE.Group();
-      scene.add(fenceGroup);
-      const fencePostGeo = createBeveledBoxGeometry(0.11, 0.36, 0.11, 0.015);
-      const fenceWoodMat = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ color: '#9c683d', roughness: 0.82 }));
-      const fencePostInst = new THREE.InstancedMesh(fencePostGeo, fenceWoodMat, 144);
-      fencePostInst.castShadow = true;
-      fencePostInst.receiveShadow = true;
-      fenceGroup.add(fencePostInst);
-
-      const fenceRailGeo = createBeveledBoxGeometry(0.055, 0.055, 0.56, 0.01);
-      const fenceRailMat = enhanceStandardMaterial(new THREE.MeshStandardMaterial({ color: '#b57b4a', roughness: 0.80 }));
-      const fenceRailInst = new THREE.InstancedMesh(fenceRailGeo, fenceRailMat, 360);
-      fenceRailInst.castShadow = true;
-      fenceRailInst.receiveShadow = true;
-      fenceGroup.add(fenceRailInst);
-
       // Sprite-Stacked Assets, 3D Cabins & Ghosts
       const assetsById = {};
       const instancedById = {};
@@ -7437,18 +7480,70 @@
       pathGhost.visible = false;
       scene.add(pathGhost);
 
-      const fenceGhost = new THREE.Mesh(
-        createBeveledBoxGeometry(0.12, 0.36, 0.12, 0.015),
-        new THREE.MeshBasicMaterial({ color: '#ffe0a8', transparent: true, opacity: 0.55, depthWrite: false })
-      );
-      fenceGhost.visible = false;
-      scene.add(fenceGhost);
-
       // per-instance eraser attributes of the dropping item meshes: aVanish (when it started floating
       // away, 1e9 = never) and aHot (1 = the eraser's target, flushed red)
       function addEraseAttrs(geo, n) {
         geo.setAttribute('aVanish', new THREE.InstancedBufferAttribute(new Float32Array(n).fill(1e9), 1));
         geo.setAttribute('aHot', new THREE.InstancedBufferAttribute(new Float32Array(n), 1));
+      }
+      // an instanced soup mesh with shadows that follow the drop (and vanish) shader
+      function makeSoupInstMesh(def, geometry, mat, maxN) {
+        const m = new THREE.InstancedMesh(geometry, mat, maxN);
+        m.count = 0;
+        m.castShadow = true;
+        m.receiveShadow = true;
+        m.frustumCulled = false;
+        m.customDepthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+        m.customDepthMaterial.onBeforeCompile = (shader) => {
+          shader.uniforms.uTime = sharedUniforms.uTime;
+          shader.uniforms.uDropLayers = { value: def.layers };
+          shader.uniforms.uDropGroup = { value: dropGroupFor(def.layers) };
+          shader.vertexShader = shader.vertexShader
+            .replace('#include <common>', '#include <common>\nuniform float uTime;\nattribute float aLayerH;' + DROP_DECL)
+            .replace('#include <begin_vertex>', '#include <begin_vertex>' + dropVertexGLSL(false));
+        };
+        m.userData.def = def;
+        m.userData.maxN = maxN;
+        scene.add(m);
+        return m;
+      }
+      // a line def (fence, brick wall): one mesh of bays (instancedById[id]) and one of posts
+      // (instancedById[id + ':post'], its def in def.line.postDef); the hover ghost is a post
+      function makeLineMesh(def, geo, maxN, keep) {
+        const spawnAttr = new THREE.InstancedBufferAttribute(new Float32Array(maxN).fill(-100), 1);
+        geo.setAttribute('aSpawn', spawnAttr);
+        addEraseAttrs(geo, maxN);
+        geo.setAttribute('aLine', new THREE.InstancedBufferAttribute(new Float32Array(maxN * 2).fill(1), 2)); // (len, looks)
+        if (!geo.attributes.aTag) geo.setAttribute('aTag', new THREE.BufferAttribute(new Float32Array(geo.attributes.position.count).fill(128), 1));
+        const key = 'mori-line-' + def.id.replace(':', '-');
+        const m = makeSoupInstMesh(def, geo, lineShader(makeSoupMaterial(def), keep, true, key), maxN);
+        lineShader(m.customDepthMaterial, keep, false, key + '-depth');
+        m.userData.spawnAttr = spawnAttr;
+        return m;
+      }
+      function buildLineAssets(def) {
+        const L = def.line;
+        const asset = buildSoupAsset(def);
+        assetsById[def.id] = asset;
+        // icon: a short straight run with a post at each end (one look, no stretch)
+        soupRng = makeRng(def.seed + 7);
+        const I = new Soup(), irng = makeRng(def.seed + 8), n = L.iconBays;
+        for (let k = 0; k < n; k++) L.bay(I, irng, (k - (n - 1) / 2) * L.step, 1 + (k % 3));
+        for (const s of [-1, 1]) L.post(I, irng, s * n / 2 * L.step, 1);
+        const ig = I.build({ groups: 1 });
+        asset.iconCanvas = renderSoupIcon(renderer, ig);
+        ig.dispose();
+        instancedById[def.id] = makeLineMesh(def, asset.geometry, L.maxMods, L.keep);
+        const pdef = L.postDef = {
+          id: def.id + ':post', type: 'soup', seed: def.seed + 50, dropGroups: 12, windStrength: 0, explodeSliceFactor: def.explodeSliceFactor,
+          explodeTier: 0, glow: null, contactRadius: 0, build: (S, rng) => L.post(S, rng)
+        };
+        const post = buildSoupAsset(pdef);
+        instancedById[pdef.id] = makeLineMesh(pdef, post.geometry, L.maxPosts, 9);
+        const ghost = new THREE.Mesh(post.geometry, new THREE.MeshBasicMaterial({ color: '#a8ffbe', transparent: true, opacity: 0.55, depthWrite: false }));
+        ghost.visible = false;
+        scene.add(ghost);
+        ghostMeshesById[def.id] = ghost;
       }
       ITEM_DEFS.forEach((def) => {
         if (def.type === '3d_cabin') {
@@ -7461,46 +7556,20 @@
           ghostMeshesById[def.id] = pathGhost;
           return;
         }
-        if (def.type === 'auto_fence') {
-          assetsById[def.id] = { def, iconCanvas: buildCustomIcon('fence') };
-          ghostMeshesById[def.id] = fenceGhost;
-          return;
-        }
+        if (def.type === 'soup' && def.line) { buildLineAssets(def); return; }
 
         if (def.type === 'soup') {
           const asset = buildSoupAsset(def);
-          if (def.connect) { // icon: a straight run of wall (the middle plus the two x arms)
-            const g = keepArms(asset.geometry, [0, 1, 3]);
-            asset.iconCanvas = renderSoupIcon(renderer, g);
-            g.dispose();
-          } else asset.iconCanvas = renderSoupIcon(renderer, asset.geometry);
+          asset.iconCanvas = renderSoupIcon(renderer, asset.geometry);
           assetsById[def.id] = asset;
           const spawnAttr = new THREE.InstancedBufferAttribute(new Float32Array(MAX_INSTANCES).fill(-100), 1);
           asset.geometry.setAttribute('aSpawn', spawnAttr);
           addEraseAttrs(asset.geometry, MAX_INSTANCES);
-          if (def.connect) asset.geometry.setAttribute('aConn', new THREE.InstancedBufferAttribute(new Float32Array(MAX_INSTANCES).fill(15), 1));
           const soupMat = makeSoupMaterial(def);
-          if (def.connect) foldArms(soupMat, 'aConn', 'mori-soup-arms');
-          const instMesh = new THREE.InstancedMesh(asset.geometry, soupMat, MAX_INSTANCES);
-          instMesh.count = 0;
-          instMesh.castShadow = true;
-          instMesh.receiveShadow = true;
-          instMesh.frustumCulled = false;
-          instMesh.customDepthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
-          instMesh.customDepthMaterial.onBeforeCompile = (shader) => {
-            shader.uniforms.uTime = sharedUniforms.uTime;
-            shader.uniforms.uDropLayers = { value: def.layers };
-            shader.uniforms.uDropGroup = { value: dropGroupFor(def.layers) };
-            shader.vertexShader = shader.vertexShader
-              .replace('#include <common>', '#include <common>\nuniform float uTime;\nattribute float aLayerH;' + DROP_DECL)
-              .replace('#include <begin_vertex>', '#include <begin_vertex>' + dropVertexGLSL(false));
-          };
-          if (def.connect) foldArms(instMesh.customDepthMaterial, 'aConn', 'mori-soup-arms-depth'); // shadows lose the folded arms too
+          const instMesh = makeSoupInstMesh(def, asset.geometry, soupMat, MAX_INSTANCES);
           instMesh.userData.spawnAttr = spawnAttr;
-          scene.add(instMesh);
           instancedById[def.id] = instMesh;
           const ghostMat = new THREE.MeshBasicMaterial({ color: '#a8ffbe', transparent: true, opacity: 0.55, depthWrite: false });
-          if (def.connect) foldArms(ghostMat, 'uConn', 'mori-soup-arms-ghost'); // the ghost shows the joins it would make
           const ghostMesh = new THREE.Mesh(asset.geometry, ghostMat);
           if (def.id === 'pebbles') {
             asset.geometry.setAttribute('aVariant', new THREE.InstancedBufferAttribute(new Float32Array(MAX_INSTANCES), 1));
@@ -7509,7 +7578,6 @@
             shapePebbles(instMesh.customDepthMaterial, 'depth');
             shapePebbles(ghostMat, 'preview', ghostMesh.userData.pebbleLook);
           }
-          if (def.connect) ghostMesh.userData.conn = ghostMat.userData.conn;
           ghostMesh.visible = false;
           scene.add(ghostMesh);
           ghostMeshesById[def.id] = ghostMesh;
@@ -7708,13 +7776,6 @@
         path.add(run);
         iconOf('path', path);
         run.geometry.dispose(); runMat.dispose();
-        // fence: three posts joined by rails
-        const fence = new THREE.Group();
-        for (const x of [-0.56, 0, 0.56]) { const p = new THREE.Mesh(fencePostGeo, fenceWoodMat); p.position.set(x, 0.18, 0); fence.add(p); }
-        for (const x of [-0.28, 0.28]) for (const y of [0.13, 0.27]) {
-          const r = new THREE.Mesh(fenceRailGeo, fenceRailMat); r.position.set(x, y, 0); r.rotation.y = Math.PI / 2; fence.add(r);
-        }
-        iconOf('fence', fence);
         // campfire: the stacked fire ring plus a little flame (in the scene the flame is a shader billboard)
         const cf = assetsById.campfire;
         if (cf && cf.geometry) { // fire ring model (soup, or the old stack with #stack=1) + a little flame
@@ -8137,7 +8198,7 @@
       let nextPebbleScale = randomFreeScale();
       const TURN_STEPS = 24;
       const turnStep = (r, dir) => (((Math.round(r * 6) + dir) % TURN_STEPS) + TURN_STEPS) % TURN_STEPS / 6;
-      const fixedTurn = (def) => !def || def.type === 'auto_path' || def.type === 'auto_fence' || !!def.connect || !!def.stairs || !!def.shore;
+      const fixedTurn = (def) => !def || def.type === 'auto_path' || !!def.line || !!def.stairs || !!def.shore;
       const quarterOf = (r) => ((Math.round(r) % 4) + 4) % 4;
       let hoveredHit = null; // { gx, gz, wx, wz, wy }
       let isPhotoMode = false;
@@ -8469,49 +8530,137 @@
       }
       function gridSolidR(id) {
         if (assetsById[id]?.def.tree) return 0.24;
-        if (id === 'fence') return 0.16;
         return assetsById[id]?.def.solidRadius || 0.24;
       }
-      // fence rails as thin rectangles between neighbouring posts
-      function fenceRailRects() {
-        const out = [];
+      /* ---- LINES: fences and walls drawn as free curves (models: LINES, section 4B) ----
+         fenceLines: { id, pts: [x0, z0, x1, z1, ...] } in island space. Neighbouring points are one bay
+         (one instance) apart, about a step long; posts stand at the ends, every postEvery bays, and
+         either side of a path crossing the line (those bays are left out while the path is there).
+         Every bay and post has a key from where it stands: a key that appears drops in (lineBorn holds
+         when), one that goes floats away, so drawing, erasing a piece, undo and a path laid across all
+         animate through the same rebuild (computeLines). */
+      let fenceLines = [];
+      let lineMods = [], linePosts = [], lineRectList = [], pathSegs = [];
+      let lineBorn = new Map();     // key -> { spawnT, rec } of every bay and post standing
+      let lineSpawnFn = () => -100; // when a key not seen before drops in (boot: already standing; null: now)
+      const lineDef = (id) => { const d = assetsById[id]?.def; return d && d.line ? d : null; };
+      const lineRects = () => lineRectList; // every bay and post standing, as rectangles with .id
+      // a rotated rectangle around the segment (x0, z0) -> (x1, z1): `half` to either side, `ext` past the ends
+      function segRect(x0, z0, x1, z1, half, ext = 0) {
+        const dx = x1 - x0, dz = z1 - z0, len = Math.hypot(dx, dz);
+        return localRect([-len / 2 - ext, len / 2 + ext, -half, half], (x0 + x1) / 2, (z0 + z1) / 2, len > 1e-9 ? Math.atan2(-dz, dx) / (Math.PI / 2) : 0);
+      }
+      // the ground a line stands on (smooth terrain, down the island's rim slope like the path)
+      function lineGround(x, z) {
+        let g = getContinuousTerrainHeight(x, z);
+        const bd = Math.min(HALF_GRID - Math.abs(x), HALF_GRID - Math.abs(z));
+        if (bd < 0.18) g -= (0.18 - bd) * 0.45;
+        return g;
+      }
+      // can a bay of `def` stand on this segment? Not on water or off the island, clear of cabins, stairs,
+      // trees and other one-tile things, props, rocks and the other kind of line. A path is fine: a gap opens.
+      function lineBayBlocked(def, x0, z0, x1, z1) {
+        const L = def.line, lim = HALF_GRID - 0.14;
+        if (Math.abs(x0) > lim || Math.abs(z0) > lim || Math.abs(x1) > lim || Math.abs(z1) > lim) return true;
+        for (let k = 0; k <= 4; k++) if (getPondSDF(x0 + (x1 - x0) * k / 4, z0 + (z1 - z0) * k / 4) < L.half + 0.06) return true;
+        const r = segRect(x0, z0, x1, z1, L.half);
+        for (const c of cabinRects()) if (rectsOverlap(r, c)) return true;
         for (const e of placedItems.values()) {
-          if (e.id !== 'fence') continue;
-          const cx = e.gx - HALF_GRID + 0.5, cz = e.gz - HALF_GRID + 0.5;
-          if (placedItems.get(`${e.gx + 1},${e.gz}`)?.id === 'fence') out.push({ x0: cx, x1: cx + 1, z0: cz - 0.05, z1: cz + 0.05 });
-          if (placedItems.get(`${e.gx},${e.gz + 1}`)?.id === 'fence') out.push({ x0: cx - 0.05, x1: cx + 0.05, z0: cz, z1: cz + 1 });
+          if (e.id === 'cabin' || e.id === 'path') continue;
+          if (isStairs(e)) { const fr = stairsFootRect(e); if (rectsOverlap(r, stairsRect(e)) || (fr && rectsOverlap(r, fr))) return true; continue; }
+          if (rectHitsCircle(r, e.gx - HALF_GRID + 0.5, e.gz - HALF_GRID + 0.5, gridSolidR(e.id))) return true;
         }
-        return out;
-      }
-      // ---- joining walls (def.connect: the stone wall) ----
-      // a wall joins the same wall on a side neighbour standing at the same height
-      const WALL_DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]]; // arm order of the model: +x, +z, -x, -z
-      const WALL_HW = 0.12; // half thickness of a wall run, for the placing rules
-      function wallJoins(id, gx, gz, dx, dz) {
-        const nb = placedItems.get(`${gx + dx},${gz + dz}`);
-        return !!nb && nb.id === id && Math.abs(getTileElevation(gx + dx, gz + dz) - getTileElevation(gx, gz)) < 0.05;
-      }
-      // how a wall tile is drawn: a quarter turn picked from the tile (so a run doesn't repeat the same
-      // stones) and the mask of arms to unfold, in the model's own axes (same turn as the instance matrix)
-      function wallLook(id, gx, gz) {
-        const rot = Math.floor(hash2D(gx + 401, gz + 409, 77) * 4) % 4;
-        const c = Math.round(Math.cos(rot * Math.PI / 2)), s = Math.round(Math.sin(rot * Math.PI / 2));
-        let conn = 0;
-        WALL_DIRS.forEach(([lx, lz], i) => { if (wallJoins(id, gx, gz, lx * c + lz * s, -lx * s + lz * c)) conn |= 1 << i; });
-        return { rot, conn };
-      }
-      // wall runs between joined neighbours as rectangles (each pair once)
-      function wallRunRects() {
-        const out = [];
-        for (const e of placedItems.values()) {
-          if (!assetsById[e.id]?.def.connect) continue;
-          const cx = e.gx - HALF_GRID + 0.5, cz = e.gz - HALF_GRID + 0.5;
-          if (wallJoins(e.id, e.gx, e.gz, 1, 0)) out.push({ x0: cx, x1: cx + 1, z0: cz - WALL_HW, z1: cz + WALL_HW });
-          if (wallJoins(e.id, e.gx, e.gz, 0, 1)) out.push({ x0: cx - WALL_HW, x1: cx + WALL_HW, z0: cz, z1: cz + 1 });
+        for (const o of snapProps) if (rectsOverlap(r, footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation))) return true;
+        for (const fp of freeProps) {
+          const d = assetsById[fp.id]?.def;
+          if (!d || d.onWater) continue;
+          const solid = fp.id === 'rocks' ? 0.3 : d.solidRadius;
+          if (rectHitsCircle(r, fp.wx, fp.wz, solid ? solid * (fp.scale || 1) : 0.05)) return true;
         }
-        return out;
+        for (const lr of lineRectList) if (lr.id !== def.id && rectsOverlap(r, lr)) return true;
+        return false;
       }
-      const railRects = () => fenceRailRects().concat(wallRunRects());
+      function pathNear(x, z, r) { // a path centre line within r? (pathSegs: from the last rebuild)
+        for (const s of pathSegs) {
+          const dx = s[2] - s[0], dz = s[3] - s[1], l2 = dx * dx + dz * dz;
+          const t = l2 > 1e-9 ? clamp(((x - s[0]) * dx + (z - s[1]) * dz) / l2, 0, 1) : 0;
+          if (Math.hypot(x - s[0] - dx * t, z - s[1] - dz * t) < r) return true;
+        }
+        return false;
+      }
+      const lineKey = (...v) => v.map((n) => (typeof n === 'number' ? n.toFixed(4) : n)).join('|');
+      const lineLookAt = (x, z, salt) => 1 << Math.floor(hash2D(Math.round(x * 64) + 701, Math.round(z * 64) + 709, salt) * 3);
+      // all bays and posts from fenceLines: instance records into buckets, the placing rectangles, the
+      // pick list; keys that appeared drop in, keys that went float away
+      function computeLines(buckets) {
+        const now = performance.now() * 0.001, born = new Map(), postSeen = new Set();
+        lineMods = []; linePosts = []; lineRectList = [];
+        ITEM_DEFS.forEach((d) => { if (d.line) { buckets[d.id] = []; buckets[d.id + ':post'] = []; } });
+        const spawnOf = (key, def, x, z) => { const o = lineBorn.get(key); return o ? o.spawnT : (lineSpawnFn ? lineSpawnFn(def, x, z) : now); };
+        const keep = (rec, def) => { rec.spawnT = spawnOf(rec.key, def, rec.x, rec.z); born.set(rec.key, { spawnT: rec.spawnT, rec }); buckets[rec.meshKey].push(rec); };
+        for (const ln of fenceLines) {
+          const def = lineDef(ln.id);
+          if (!def) continue;
+          const L = def.line, P = ln.pts, n = P.length / 2 - 1;
+          if (n < 1) continue;
+          const gap = [], base = [];
+          for (let i = 0; i < n; i++) {
+            const x0 = P[i * 2], z0 = P[i * 2 + 1], x1 = P[i * 2 + 2], z1 = P[i * 2 + 3];
+            const dx = x1 - x0, dz = z1 - z0, len = Math.hypot(dx, dz) || 1e-6, ux = dx / len, uz = dz / len;
+            const mx = (x0 + x1) / 2, mz = (z0 + z1) / 2;
+            gap.push(pathNear(mx, mz, PATH_W + 0.06 + L.half));
+            // bricks stand level on the high side of the bay, in whole courses (a slope steps down);
+            // pickets shear along the slope and stay upright
+            let y, k = 0;
+            if (L.stepped) {
+              let h = -1e9;
+              for (const t of [0, 0.5, 1]) h = Math.max(h, lineGround(x0 + dx * t, z0 + dz * t));
+              y = Math.floor(h / WALL_COURSE + 1e-4) * WALL_COURSE;
+            } else {
+              const y0 = lineGround(x0, z0), y1 = lineGround(x1, z1);
+              y = (y0 + y1) / 2; k = (y1 - y0) / len;
+            }
+            base.push(y);
+            if (gap[i]) continue;
+            const rec = {
+              kind: 'line', line: ln, i, id: ln.id, meshKey: ln.id, x: mx, y, z: mz, len: len / L.step, conn: lineLookAt(mx, mz, 613),
+              matrix: new THREE.Matrix4().set(ux, 0, -uz, mx, k, 1, 0, y, uz, 0, ux, mz, 0, 0, 0, 1), key: lineKey('b', ln.id, x0, z0, x1, z1)
+            };
+            keep(rec, def);
+            lineMods.push(rec);
+            const r = segRect(x0, z0, x1, z1, L.half); r.id = ln.id; lineRectList.push(r);
+          }
+          for (let b = 0; b <= n; b++) {
+            const before = b > 0 && !gap[b - 1], after = b < n && !gap[b];
+            if (!before && !after) continue;
+            if (b !== 0 && b !== n && before === after && !(L.postEvery && b % L.postEvery === 0)) continue;
+            const x = P[b * 2], z = P[b * 2 + 1], key = lineKey('p', ln.id, x, z);
+            if (postSeen.has(key)) continue; // two lines meeting end to end share one post
+            postSeen.add(key);
+            const ia = Math.max(0, b - 1), ib = Math.min(n - 1, b);
+            let dx = P[ib * 2 + 2] - P[ia * 2], dz = P[ib * 2 + 3] - P[ia * 2 + 1];
+            const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
+            const y = L.stepped ? Math.max(b > 0 ? base[b - 1] : -1e9, b < n ? base[b] : -1e9) : lineGround(x, z);
+            const rec = {
+              kind: 'line', post: true, line: ln, b, id: ln.id, meshKey: ln.id + ':post', x, y, z, len: 1, conn: lineLookAt(x, z, 617),
+              matrix: new THREE.Matrix4().set(dx, 0, -dz, x, 0, 1, 0, y, dz, 0, dx, z, 0, 0, 0, 1), key
+            };
+            keep(rec, L.postDef);
+            linePosts.push(rec);
+            const r = segRect(x - dx * 1e-3, z - dz * 1e-3, x + dx * 1e-3, z + dz * 1e-3, L.postHalf, L.postHalf); r.id = ln.id; lineRectList.push(r);
+          }
+        }
+        let dust = 0;
+        lineBorn.forEach((o, key) => { if (!born.has(key)) vanishLinePiece(o.rec, now, dust++ < 24); });
+        lineBorn = born;
+      }
+      // lines only (a stroke in progress): bays, posts, rules, picking, shadows; the rest follows on release
+      function refreshLines() {
+        computeLines(itemBuckets);
+        fillItemMeshes();
+        pickBoundsVersion = -1;
+        markShadowsDirty(1.0);
+      }
       // ---- stairs (def.stairs): on the lower tile, climbing toward a side neighbour one step up ----
       const STAIR_RECT = [-0.28, 0.28, 0.1, 0.88]; // local footprint (+z = up the stairs), into the bank
       const rotDir = (rot) => [Math.round(Math.sin(rot * Math.PI / 2)), Math.round(Math.cos(rot * Math.PI / 2))]; // local +z in world
@@ -8577,7 +8726,7 @@
           } else if (isStairs(e)) { const fr = stairsFootRect(e); if (rectsOverlap(r, stairsRect(e)) || (fr && rectsOverlap(r, fr))) return true; }
           else if (rectHitsCircle(r, ex, ez, gridSolidR(e.id))) return true;
         }
-        for (const rail of railRects()) if (rectsOverlap(r, rail)) return true;
+        for (const rail of lineRects()) if (rectsOverlap(r, rail)) return true;
         for (const fp of freeProps) {
           const solid = fp.id === 'rocks' ? 0.3 : assetsById[fp.id]?.def.solidRadius;
           if (rectHitsCircle(r, fp.wx, fp.wz, solid ? solid * (fp.scale || 1) : 0.05)) return true;
@@ -8704,12 +8853,11 @@
           else if (entry.id === 'bench') solidR = 0.34;
           else if (assetsById[entry.id]?.def.tree) solidR = 0.24;
           else if (entry.id === 'lantern') solidR = 0.18;
-          else if (entry.id === 'fence') solidR = 0.16;
           else if (assetsById[entry.id]?.def.solidRadius) solidR = assetsById[entry.id].def.solidRadius;
           if (Math.hypot(wx - ex, wz - ez) < solidR + selfRadius) return true;
         }
-        // 3b. Stone wall runs between joined tiles (fence rails stay open: flowers grow under them)
-        for (const run of wallRunRects()) if (rectHitsCircle(run, wx, wz, selfRadius)) return true;
+        // 3b. Fences and walls (every bay and post)
+        for (const run of lineRects()) if (rectHitsCircle(run, wx, wz, selfRadius)) return true;
 
         // 4. Solid free-placed rocks & closely overlapping small props
         for (const fp of freeProps) {
@@ -8770,6 +8918,7 @@
         const def = assetsById[toolId]?.def;
         if (!def) return false;
 
+        if (def.line) { const p = lineStartAt(def, hit); return !lineBayBlocked(def, p.x - 0.02, p.z, p.x + 0.02, p.z); }
         if (def.onWater) { const p = waterPoint(hit); return waterSpotOk(def, p.wx, p.wz); }
         if (def.snapPlace) return snapPlacement(def, hit).valid;
         if (def.freePlace) {
@@ -8796,7 +8945,7 @@
               const solid = fp.id === 'rocks' ? 0.3 : assetsById[fp.id]?.def.solidRadius;
               if (rectHitsCircle(r, fp.wx, fp.wz, solid ? solid * (fp.scale || 1) : 0.05)) return false;
             }
-            for (const run of railRects()) if (rectsOverlap(r, run)) return false;
+            for (const run of lineRects()) if (rectsOverlap(r, run)) return false;
             for (const c of cabinRects()) if (rectsOverlap(r, c)) return false;
             return true;
           }
@@ -8819,32 +8968,11 @@
               if (rectsOverlap(r, cabinRect(wx, wz, currentRotation))) return false;
             } else if (def.type === 'auto_path') {
               if (rectsOverlap(r, { x0: wx - 0.3, x1: wx + 0.3, z0: wz - 0.3, z1: wz + 0.3 })) return false;
-            } else if (def.type === 'auto_fence') {
-              if (rectHitsCircle(r, wx, wz, 0.16)) return false;
-              for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { // rails it would grow toward fence neighbours
-                if (placedItems.get(`${hit.gx + dx},${hit.gz + dz}`)?.id !== 'fence') continue;
-                const rail = dx ? { x0: Math.min(wx, wx + dx), x1: Math.max(wx, wx + dx), z0: wz - 0.05, z1: wz + 0.05 }
-                  : { x0: wx - 0.05, x1: wx + 0.05, z0: Math.min(wz, wz + dz), z1: Math.max(wz, wz + dz) };
-                if (rectsOverlap(r, rail)) return false;
-              }
             } else if (rectHitsCircle(r, wx, wz, gridSolidR(def.id))) return false;
           }
-          if (def.connect) { // the runs it would grow toward joining neighbours: kept clear of props
-            const runs = [];
-            for (const [dx, dz] of WALL_DIRS) {
-              const nb = placedItems.get(`${hit.gx + dx},${hit.gz + dz}`);
-              if (!nb || nb.id !== def.id || Math.abs(getTileElevation(hit.gx + dx, hit.gz + dz) - getTileElevation(hit.gx, hit.gz)) >= 0.05) continue;
-              runs.push(dx ? { x0: Math.min(wx, wx + dx), x1: Math.max(wx, wx + dx), z0: wz - WALL_HW, z1: wz + WALL_HW }
-                : { x0: wx - WALL_HW, x1: wx + WALL_HW, z0: Math.min(wz, wz + dz), z1: Math.max(wz, wz + dz) });
-            }
-            for (const run of runs) {
-              for (const o of snapProps) if (rectsOverlap(run, footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation))) return false;
-              for (const fp of freeProps) {
-                const solid = fp.id === 'rocks' ? 0.3 : assetsById[fp.id]?.def.solidRadius;
-                if (solid && rectHitsCircle(run, fp.wx, fp.wz, solid * (fp.scale || 1))) return false;
-              }
-            }
-          }
+          // ...or onto a fence or wall (a path may cross one: it opens a gap)
+          if (def.type === '3d_cabin') { const cr = cabinRect(wx, wz, currentRotation); for (const run of lineRects()) if (rectsOverlap(cr, run)) return false; }
+          else if (def.type !== 'auto_path') for (const run of lineRects()) if (rectHitsCircle(run, wx, wz, gridSolidR(def.id))) return false;
           const checkR = def.id === 'cabin' ? 0.46 : (def.id === 'campfire' ? 0.38 : 0.22);
           for (const fp of freeProps) {
             if (fp.id === 'rocks' && Math.hypot(wx - fp.wx, wz - fp.wz) < checkR + 0.26 * (fp.scale || 1.0)) {
@@ -8882,35 +9010,39 @@
       const variantAt = (def, wx, wz) => Math.min(def.variants - 1, Math.floor(hash2D(Math.round(wx * 4) + 211, Math.round(wz * 4) + 223, 401) * def.variants));
       function fillItemMeshes() {
         const now = performance.now() * 0.001;
-        ITEM_DEFS.forEach((def) => {
-          if (!isInstancedDef(def) || def.seedScatter) return;
-          const mesh = instancedById[def.id], geo = mesh.geometry;
+        for (const key in instancedById) {
+          const mesh = instancedById[key], def = mesh.userData.def || assetsById[key].def;
+          if (!isInstancedDef(def) || def.seedScatter) continue;
+          const geo = mesh.geometry, maxN = mesh.userData.maxN || MAX_INSTANCES;
           const van = geo.attributes.aVanish.array, hot = geo.attributes.aHot.array, sp = mesh.userData.spawnAttr.array;
           const vari = geo.attributes.aVariant ? geo.attributes.aVariant.array : null;
-          const conn = geo.attributes.aConn ? geo.attributes.aConn.array : null;
+          const lineA = geo.attributes.aLine ? geo.attributes.aLine.array : null;
           const refs = (mesh.userData.refs = []);
           let n = 0;
           const put = (item) => {
-            if (n >= MAX_INSTANCES) return;
+            if (n >= maxN) return;
             if (vari) vari[n] = def.id === 'pebbles' ? pebbleLook(item.scale) : variantAt(def, item.wx, item.wz);
-            if (conn) conn[n] = item.conn ?? 0;
-            dummyObj.position.set(item.wx, item.wy, item.wz);
-            dummyObj.rotation.set(0, item.rotation * (Math.PI / 2), 0);
-            if (def.tree) { // trees differ a little in size and height (±8%, ±5%), from where they stand
-              const ka = Math.round(item.wx * 4) + 307, kb = Math.round(item.wz * 4) + 311;
-              const s = item.scale * (1 + (hash2D(ka, kb, 501) - 0.5) * 0.16);
-              dummyObj.scale.set(s, s * (1 + (hash2D(ka, kb, 503) - 0.5) * 0.1), s);
-            } else dummyObj.scale.setScalar(item.scale);
-            dummyObj.updateMatrix();
-            mesh.setMatrixAt(n, dummyObj.matrix);
+            if (lineA) { lineA[n * 2] = item.len ?? 1; lineA[n * 2 + 1] = item.conn ?? 1; }
+            if (item.matrix) mesh.setMatrixAt(n, item.matrix); // line bays and posts: placed (and sheared) already
+            else {
+              dummyObj.position.set(item.wx, item.wy, item.wz);
+              dummyObj.rotation.set(0, item.rotation * (Math.PI / 2), 0);
+              if (def.tree) { // trees differ a little in size and height (±8%, ±5%), from where they stand
+                const ka = Math.round(item.wx * 4) + 307, kb = Math.round(item.wz * 4) + 311;
+                const s = item.scale * (1 + (hash2D(ka, kb, 501) - 0.5) * 0.16);
+                dummyObj.scale.set(s, s * (1 + (hash2D(ka, kb, 503) - 0.5) * 0.1), s);
+              } else dummyObj.scale.setScalar(item.scale);
+              dummyObj.updateMatrix();
+              mesh.setMatrixAt(n, dummyObj.matrix);
+            }
             sp[n] = item.spawnT;
             van[n] = item.goneAt ?? 1e9;
             hot[n] = 0;
-            refs.push(item.ref || null);
+            refs.push(item.ref || (item.kind === 'line' ? item : null));
             n++;
           };
-          (itemBuckets[def.id] || []).forEach(put);
-          for (const v of vanishing) if (v.kind === 'inst' && v.id === def.id && now - v.goneAt <= VANISH_T) put(v);
+          (itemBuckets[key] || []).forEach(put);
+          for (const v of vanishing) if (v.kind === 'inst' && v.id === key && now - v.goneAt <= VANISH_T) put(v);
           mesh.count = n;
           mesh.visible = n > 0; // an empty InstancedMesh still costs a draw call (x2 with shadows)
           mesh.instanceMatrix.needsUpdate = true;
@@ -8918,8 +9050,8 @@
           geo.attributes.aVanish.needsUpdate = true;
           geo.attributes.aHot.needsUpdate = true;
           if (vari) geo.attributes.aVariant.needsUpdate = true;
-          if (conn) geo.attributes.aConn.needsUpdate = true;
-        });
+          if (lineA) geo.attributes.aLine.needsUpdate = true;
+        }
         hotMarks.length = 0;
         applyEraseHot();
       }
@@ -8933,13 +9065,18 @@
         else if (kind === 'snap') wy = snapGroundY(def, o.wx, o.wz, o.rotation);
         else { wy = freePropY(def, o.wx, o.wz); scale = o.scale || 1; }
         const cabin = def.type === '3d_cabin';
-        if (def.connect && kind === 'placed') { // as it was drawn: joined to the neighbours still standing
-          const L = wallLook(o.id, o.gx, o.gz);
-          vanishing.push({ kind: 'inst', id: o.id, wx, wy, wz, rotation: L.rot, conn: L.conn, scale, spawnT: -100, goneAt: now });
-        } else if (isInstancedDef(def)) vanishing.push({ kind: 'inst', id: o.id, wx, wy, wz, rotation: o.rotation, scale, spawnT: -100, goneAt: now });
+        if (isInstancedDef(def)) vanishing.push({ kind: 'inst', id: o.id, wx, wy, wz, rotation: o.rotation, scale, spawnT: -100, goneAt: now });
         else if (cabin) vanishing.push({ kind: 'cabin', wx, wy, wz, rotY: o.rotation * (Math.PI / 2), goneAt: now });
         const big = cabin || def.category === 'flora' || def.category === 'build';
         if (vanishing.length < 40) burstDust(wx, wy, wz, cabin ? 14 : (big ? 7 : (isInstancedDef(def) ? 3 : 6)), cabin ? 0.6 : (big ? 0.32 : 0.2)); // a whole island going: dust for the first few
+        markShadowsDirty(VANISH_T + 0.1);
+        if (vanishTimer) clearTimeout(vanishTimer);
+        vanishTimer = setTimeout(expireVanish, VANISH_T * 1000 + 40);
+      }
+      // a fence bay or post whose key went (erased, cut through, undone, a path laid over it)
+      function vanishLinePiece(rec, now, dust) {
+        vanishing.push({ kind: 'inst', id: rec.meshKey, matrix: rec.matrix, len: rec.len, conn: rec.conn, spawnT: -100, goneAt: now });
+        if (dust) burstDust(rec.x, rec.y, rec.z, 2, 0.14);
         markShadowsDirty(VANISH_T + 0.1);
         if (vanishTimer) clearTimeout(vanishTimer);
         vanishTimer = setTimeout(expireVanish, VANISH_T * 1000 + 40);
@@ -8968,7 +9105,7 @@
       function rebuildInstances() {
         pickBoundsVersion = -1;
         const buckets = {};
-        ITEM_DEFS.forEach((d) => { if (isInstancedDef(d)) buckets[d.id] = []; });
+        for (const k in instancedById) buckets[k] = [];
 
         while (cabinGroupContainer.children.length > 0) {
           const old = cabinGroupContainer.children[0];
@@ -8987,7 +9124,6 @@
         pointLightPool.forEach((pl) => { pl.userData = { active: false }; pl.intensity = 0; });
 
         const pathTiles = [];
-        let fencePostIdx = 0, fenceRailIdx = 0;
         let crateIdx = 0;
 
         markShadowsDirty(1.0); // covers the stacked drop + cabin drop & squash
@@ -9044,10 +9180,7 @@
           const wy = getTileElevation(entry.gx, entry.gz);
           const rotY = entry.rotation * (Math.PI / 2);
 
-          if (def.connect) {
-            const L = wallLook(entry.id, entry.gx, entry.gz);
-            buckets[entry.id].push({ wx, wy, wz, rotation: L.rot, conn: L.conn, scale: 1.0, spawnT: entry.spawnT ?? -100, ref: entry });
-          } else if (isInstancedDef(def)) {
+          if (isInstancedDef(def)) {
             buckets[entry.id].push({ wx, wy, wz, rotation: entry.rotation, scale: 1.0, spawnT: entry.spawnT ?? -100, ref: entry });
           } else if (def.type === '3d_cabin') {
             const cabin = buildStorybookCabinPrefab();
@@ -9081,29 +9214,6 @@
               }
             }
             pathTiles.push({ gx: entry.gx, gz: entry.gz, wx, wy, wz, conns });
-          } else if (def.type === 'auto_fence') {
-            // Auto-tiling wooden fence post + horizontal rails to adjacent fence posts!
-            dummyObj.position.set(wx, wy + 0.18, wz);
-            dummyObj.rotation.set(0, 0, 0);
-            dummyObj.scale.set(1, 1, 1);
-            dummyObj.updateMatrix();
-            fencePostInst.setMatrixAt(fencePostIdx++, dummyObj.matrix);
-
-            const dirs = [[0, -1, 0], [0, 1, 0], [1, 0, Math.PI / 2], [-1, 0, Math.PI / 2]];
-            dirs.forEach(([dx, dz, ang]) => {
-              const nb = placedItems.get(`${entry.gx + dx},${entry.gz + dz}`);
-              if (nb && nb.id === 'fence' && Math.abs(getTileElevation(entry.gx + dx, entry.gz + dz) - wy) < 0.05) {
-                for (let railH of [0.13, 0.27]) {
-                  if (fenceRailIdx < 360) {
-                    dummyObj.position.set(wx + dx * 0.28, wy + railH, wz + dz * 0.28);
-                    dummyObj.rotation.set(0, ang, 0);
-                    dummyObj.scale.set(1, 1, 1);
-                    dummyObj.updateMatrix();
-                    fenceRailInst.setMatrixAt(fenceRailIdx++, dummyObj.matrix);
-                  }
-                }
-              }
-            });
           }
 
           addItemExtras(entry.id, def, wx, wy, wz, rotY, entry.gx, entry.gz);
@@ -9139,6 +9249,14 @@
           }
         });
 
+        // 2b. Fences and walls: bays and posts (gaps where a path crosses)
+        pathSegs = [];
+        for (const t of pathTiles) {
+          if (!t.conns.length) pathSegs.push([t.wx, t.wz, t.wx, t.wz]);
+          for (const [dx, dz, reach] of t.conns) pathSegs.push([t.wx, t.wz, t.wx + dx * reach, t.wz + dz * reach]);
+        }
+        computeLines(buckets);
+
         // Apply InstancedMeshes (+ the erased ones still floating away)
         itemBuckets = buckets;
         fillItemMeshes();
@@ -9157,10 +9275,8 @@
         const pathStairs = [];
         placedItems.forEach((e) => { if (isStairs(e)) { const [dx, dz] = rotDir(e.rotation); pathStairs.push({ wx: e.gx - HALF_GRID + 0.5, wz: e.gz - HALF_GRID + 0.5, dx, dz }); } });
         pathMesh.geometry.dispose(); pathMesh.geometry = buildPathGeometry(pathTiles, { stairs: pathStairs }); pathMesh.count = pathTiles.length;
-        fencePostInst.count = fencePostIdx; fencePostInst.instanceMatrix.needsUpdate = true;
-        fenceRailInst.count = fenceRailIdx; fenceRailInst.instanceMatrix.needsUpdate = true;
         crateClutterInst.count = crateIdx; crateClutterInst.instanceMatrix.needsUpdate = true;
-        for (const im of [pathMesh, fencePostInst, fenceRailInst, crateClutterInst]) im.visible = im.count > 0;
+        for (const im of [pathMesh, crateClutterInst]) im.visible = im.count > 0;
 
         // 3. Clustered Ghibli-Style Grass Tufts (Large + 2~3 Med/Small Clumps with Tile Edge Padding!)
         let grassIdx = 0;
@@ -9235,16 +9351,19 @@
             [[-0.64, -0.58], [0.64, -0.58], [-0.66, 0.56], [0.64, 0.54]].forEach(([ox, oz]) => {
               spawnGrassCluster(wx + ox, wz + oz);
             });
-          } else if (entry.id === 'fence' || entry.id === 'bench') {
+          } else if (entry.id === 'bench') {
             const a = hash2D(entry.gx, entry.gz, 7) * Math.PI * 2;
             spawnGrassCluster(wx + Math.cos(a) * 0.28, wz + Math.sin(a) * 0.28);
-          } else if (assetsById[entry.id]?.def.connect) { // stone wall: a clump against each face (runs block the rest)
-            for (let k = 0; k < 2; k++) {
-              const a = (hash2D(entry.gx, entry.gz, k + 11) + k * 0.5) * Math.PI * 2;
-              spawnGrassCluster(wx + Math.cos(a) * 0.27, wz + Math.sin(a) * 0.27);
-            }
           }
         });
+        // (A1) Fences and walls: now and then a clump against one face or the other
+        for (const m of lineMods) {
+          const h = hash2D(Math.round(m.x * 64) + 811, Math.round(m.z * 64) + 813, 7);
+          if (h > 0.2) continue;
+          const def = lineDef(m.id), off = def.line.half + 0.12, ux = m.matrix.elements[0], uz = m.matrix.elements[2];
+          const s = h < 0.1 ? 1 : -1; // local +z is (-uz, ux)
+          spawnGrassCluster(m.x - uz * off * s, m.z + ux * off * s);
+        }
 
         // (A2) A tuft at one outer corner of each snap prop
         snapProps.forEach((o) => {
@@ -9439,6 +9558,148 @@
       }
       function endStoneStroke() { stoneStroke = null; }
 
+      // fences and walls (LINES): press, drag and let go draws one; one stroke = one undo step.
+      // The pointer pulls a lazy brush on a short string (LINE_LAZY), which smooths the hand's wobble into
+      // curves; each step of brush path laid down adds one bay, dropping in as it goes. A bay that can't
+      // stand there ends the line and the stroke starts a new one past the obstacle. Starting or ending
+      // within LINE_SNAP of an end of the same kind meets it exactly (one shared post); ending near the
+      // stroke's own start closes a loop; ending against the side of a line makes a T. A click without a
+      // drag sets a short piece across the screen.
+      const LINE_SNAP = 0.3, LINE_LAZY = 0.18;
+      let lineStroke = null;
+      // the nearest end of a line of this kind within LINE_SNAP (or, closer than 0.16, a point on its side)
+      function lineSnapTarget(id, x, z, skip = null) {
+        let best = null, bd = LINE_SNAP;
+        for (const ln of fenceLines) {
+          if (ln.id !== id) continue;
+          const P = ln.pts, n = P.length / 2;
+          for (const j of [0, n - 1]) {
+            if (ln === skip && j === n - 1) continue; // the end being drawn
+            const d = Math.hypot(P[j * 2] - x, P[j * 2 + 1] - z);
+            if (d < bd) { bd = d; best = { x: P[j * 2], z: P[j * 2 + 1], end: true, line: ln, first: j === 0 }; }
+          }
+        }
+        if (best) return best;
+        bd = 0.16;
+        for (const ln of fenceLines) {
+          if (ln.id !== id || ln === skip) continue;
+          const P = ln.pts;
+          for (let i = 0; i + 3 < P.length; i += 2) {
+            const ax = P[i], az = P[i + 1], dx = P[i + 2] - ax, dz = P[i + 3] - az, l2 = dx * dx + dz * dz;
+            const t = l2 > 1e-9 ? clamp(((x - ax) * dx + (z - az) * dz) / l2, 0, 1) : 0;
+            const d = Math.hypot(ax + dx * t - x, az + dz * t - z);
+            if (d < bd) { bd = d; best = { x: ax + dx * t, z: az + dz * t, end: false, line: ln }; }
+          }
+        }
+        return best;
+      }
+      function lineStartAt(def, hit) { const t = lineSnapTarget(def.id, hit.wx, hit.wz); return t ? { x: t.x, z: t.z, snap: true } : { x: hit.wx, z: hit.wz, snap: false }; }
+      function beginLineStroke(hit) {
+        const def = assetsById[selectedTool].def, p = lineStartAt(def, hit);
+        let count = 0;
+        for (const ln of fenceLines) if (ln.id === def.id) count += ln.pts.length / 2 - 1;
+        lineStroke = { def, path: [p.x, p.z], arc: [0], bx: p.x, bz: p.z, cx: hit.wx, cz: hit.wz, s: 0, cur: null, made: [], count, blocked: false, knockAt: 0, fxAt: 0 };
+      }
+      function strokeAt(st, s) { // the point at arc length s along the brush path
+        const A = st.arc, P = st.path;
+        let i = A.length - 2;
+        while (i > 0 && A[i] > s) i--;
+        if (i < 0) return [P[0], P[1]];
+        const t = clamp((s - A[i]) / ((A[i + 1] - A[i]) || 1), 0, 1);
+        return [P[i * 2] + (P[i * 2 + 2] - P[i * 2]) * t, P[i * 2 + 1] + (P[i * 2 + 3] - P[i * 2 + 1]) * t];
+      }
+      function strokePush(st, x, z) {
+        const n = st.path.length, d = Math.hypot(x - st.path[n - 2], z - st.path[n - 1]);
+        if (d < 0.005) return;
+        st.path.push(x, z);
+        st.arc.push(st.arc[st.arc.length - 1] + d);
+      }
+      function strokeBay(st, a, b) { // one more bay from a to b, or the line ends here
+        const L = st.def.line;
+        if (st.count >= L.maxMods - 1 || lineBayBlocked(st.def, a[0], a[1], b[0], b[1])) {
+          st.cur = null;
+          const now = performance.now();
+          if (!st.blocked && now - st.knockAt > 400) { st.knockAt = now; audio.playTerrainBlocked(screenPan(b[0], lineGround(b[0], b[1]), b[1])); }
+          st.blocked = true;
+          return false;
+        }
+        st.blocked = false;
+        if (!st.cur) { st.cur = { id: st.def.id, pts: [a[0], a[1]] }; fenceLines.push(st.cur); st.made.push(st.cur); }
+        st.cur.pts.push(b[0], b[1]);
+        st.count++;
+        return true;
+      }
+      function strokeAdvance(st) { // lay a bay for every whole step of brush path not laid yet
+        const step = st.def.line.step, total = st.arc[st.arc.length - 1];
+        let laid = 0;
+        while (total >= st.s + step - 1e-9) {
+          if (strokeBay(st, strokeAt(st, st.s), strokeAt(st, st.s + step))) laid++;
+          st.s += step;
+        }
+        return laid;
+      }
+      function lineLaid(st, laid) { // new bays: show them (lines only, the grass waits for the release), a tok
+        if (!laid) return;
+        refreshLines();
+        const now = performance.now();
+        if (now - st.fxAt < 70 || !st.cur) return;
+        st.fxAt = now;
+        const P = st.cur.pts, x = P[P.length - 2], z = P[P.length - 1], y = lineGround(x, z);
+        audio.playStackClicks([DROP_FALL + 0.05], screenPan(x, y, z));
+        burstDust(x, y, z, 2, 0.12);
+      }
+      function lineStrokeTo(hit) {
+        const st = lineStroke;
+        st.cx = hit.wx; st.cz = hit.wz;
+        const dx = hit.wx - st.bx, dz = hit.wz - st.bz, d = Math.hypot(dx, dz);
+        if (d <= LINE_LAZY) return;
+        st.bx += dx * (d - LINE_LAZY) / d; st.bz += dz * (d - LINE_LAZY) / d;
+        strokePush(st, st.bx, st.bz);
+        lineLaid(st, strokeAdvance(st));
+      }
+      const _lineRight = new THREE.Vector3();
+      function endLineStroke() {
+        const st = lineStroke;
+        if (!st) return;
+        lineStroke = null;
+        const def = st.def, step = def.line.step;
+        strokePush(st, st.cx, st.cz); // the brush catches up with the pointer
+        let laid = strokeAdvance(st);
+        const tip = strokeAt(st, st.arc[st.arc.length - 1]);
+        if (st.cur) {
+          // the end: onto a line end, the stroke's own start (a loop, 4 bays or more) or a line's side; else the leftover
+          let goal = lineSnapTarget(def.id, st.cx, st.cz, st.cur);
+          if (goal && goal.line === st.cur && st.cur.pts.length / 2 - 1 < 4) goal = null;
+          const P = st.cur.pts, ex = P[P.length - 2], ez = P[P.length - 1];
+          const gx = goal ? goal.x : tip[0], gz = goal ? goal.z : tip[1], d = Math.hypot(gx - ex, gz - ez);
+          if (d >= 0.3 * step && d < (goal ? 2.4 : 1.6) * step) {
+            const two = d > 1.35 * step, mx = (ex + gx) / 2, mz = (ez + gz) / 2;
+            const ok = two ? !lineBayBlocked(def, ex, ez, mx, mz) && !lineBayBlocked(def, mx, mz, gx, gz) : !lineBayBlocked(def, ex, ez, gx, gz);
+            if (ok) { if (two) P.push(mx, mz); P.push(gx, gz); laid++; }
+          } else if (goal && d > 1e-6 && d < 0.3 * step && P.length >= 6) { // stretch the last bay onto it
+            if (!lineBayBlocked(def, P[P.length - 4], P[P.length - 3], gx, gz)) { P[P.length - 2] = gx; P[P.length - 1] = gz; laid++; }
+          }
+        } else if (!st.made.length && st.arc[st.arc.length - 1] < step) {
+          // a click: a short piece across the screen (from a line end it carries on, either way)
+          _lineRight.setFromMatrixColumn(camera.matrixWorld, 0);
+          let rx = _lineRight.x, rz = _lineRight.z;
+          const rl = Math.hypot(rx, rz) || 1; rx /= rl; rz /= rl;
+          const nb = def.line.post === fencePost ? 2 : 1, x = st.path[0], z = st.path[1], snapped = !!lineSnapTarget(def.id, x, z);
+          for (const s of [1, -1]) {
+            const from = snapped ? 0 : -nb / 2, pts = [];
+            for (let k = 0; k <= nb; k++) pts.push(x + rx * s * (from + k) * step, z + rz * s * (from + k) * step);
+            let ok = true;
+            for (let k = 0; k < nb && ok; k++) if (lineBayBlocked(def, pts[k * 2], pts[k * 2 + 1], pts[k * 2 + 2], pts[k * 2 + 3])) ok = false;
+            if (ok) { fenceLines.push({ id: def.id, pts }); laid++; st.made.push(1); break; }
+          }
+          if (!laid) audio.playTerrainBlocked(screenPan(x, lineGround(x, z), z));
+        }
+        if (st.made.length || laid) {
+          rebuildInstances(); // grass, rules and the rest catch up once
+          if (laid) audio.playStackClicks([DROP_FALL + 0.05], screenPan(tip[0], lineGround(tip[0], tip[1]), tip[1]));
+        }
+      }
+
       /* ---- SAVE (step 5): the island lives on in this browser ---- */
       // The current island is written to a hidden auto slot one second after the last edit (a few
       // KB, only on edits, never per frame) and comes back, assembling, on the next visit. The time
@@ -9458,8 +9719,29 @@
           placed: [...placedItems.values()].map((e) => [e.id, e.gx, e.gz, e.rotation]),
           snap: snapProps.map((o) => [o.id, o.wx, o.wz, o.rotation]),
           free: freeProps.map((fp) => [fp.id, fp.wx, fp.wz, fp.rotation, fp.scale]),
-          seeds: seedFlowers.filter((f) => !f.erased).map((f) => [f.wx, f.wz, f.rot, f.scale, f.tint])
+          seeds: seedFlowers.filter((f) => !f.erased).map((f) => [f.wx, f.wz, f.rot, f.scale, f.tint]),
+          lines: fenceLines.map((ln) => [ln.id, ln.pts.slice()])
         };
+      }
+      // saves from before fences and walls were drawn as lines kept them as tiles: each straight run of
+      // neighbouring tiles (either way) becomes a line through the tile centres, a lone tile a short piece
+      function linesFromTiles(id, tiles) {
+        const def = assetsById[id].def, step = def.line.step, out = [], used = new Set();
+        const has = (gx, gz) => tiles.has(`${gx},${gz}`), c = (g) => g - HALF_GRID + 0.5;
+        const run = (x0, z0, x1, z1) => {
+          const n = Math.max(1, Math.round(Math.hypot(x1 - x0, z1 - z0) / step)), pts = [];
+          for (let k = 0; k <= n; k++) pts.push(x0 + (x1 - x0) * k / n, z0 + (z1 - z0) * k / n);
+          out.push({ id, pts });
+        };
+        for (const [dx, dz] of [[1, 0], [0, 1]]) for (const key of tiles) {
+          const [gx, gz] = key.split(',').map(Number);
+          if (has(gx - dx, gz - dz) || !has(gx + dx, gz + dz)) continue; // not the start of a run
+          let n = 1; while (has(gx + dx * n, gz + dz * n)) { used.add(`${gx + dx * n},${gz + dz * n}`); n++; }
+          used.add(key);
+          run(c(gx), c(gz), c(gx + dx * (n - 1)), c(gz + dz * (n - 1)));
+        }
+        for (const key of tiles) if (!used.has(key)) { const [gx, gz] = key.split(',').map(Number); run(c(gx) - step, c(gz), c(gx) + step, c(gz)); }
+        return out;
       }
       // A broken terrain throws the whole save away (the starter island instead); objects that don't
       // fit (unknown id, wrong placement kind, off the island, not a number) are dropped one by one.
@@ -9474,9 +9756,10 @@
         const onIsland = (x, z) => num(x) && num(z) && Math.abs(x) < HALF_GRID && Math.abs(z) < HALF_GRID;
         const defOf = (id) => (typeof id === 'string' && assetsById[id] ? assetsById[id].def : null);
         const list = (a) => (Array.isArray(a) ? a.filter(Array.isArray) : []);
-        const placed = [], seen = new Set();
+        const placed = [], seen = new Set(), oldLines = {};
         for (const [id, gx, gz, rotation] of list(isl.placed)) {
           const def = defOf(id);
+          if (def && def.line && Number.isInteger(gx) && Number.isInteger(gz)) { (oldLines[id] ||= new Set()).add(`${gx},${gz}`); continue; }
           if (!def || def.freePlace || def.snapPlace || def.seedScatter || !Number.isInteger(gx) || !Number.isInteger(gz) || !num(rotation)) continue;
           if (gx < 0 || gz < 0 || gx >= GRID_SIZE || gz >= GRID_SIZE || seen.has(`${gx},${gz}`)) continue;
           seen.add(`${gx},${gz}`); placed.push({ id, gx, gz, rotation });
@@ -9496,7 +9779,16 @@
           if (seeds.length >= maxSeeds) break;
           if (onIsland(wx, wz) && num(rot) && num(scale) && scale > 0.1 && scale < 4 && Number.isInteger(tint) && tint >= 0 && tint < SEED_TINTS.length) seeds.push({ wx, wz, rot, scale, tint });
         }
-        return { level, mat: mt, placed, snap, free, seeds, editableLilies: isl.editableLilies === true };
+        const lines = [];
+        for (const [id, pts] of list(isl.lines)) {
+          const def = defOf(id);
+          if (!def || !def.line || !Array.isArray(pts) || pts.length < 4 || pts.length % 2 || pts.length > 20000) continue;
+          let good = true;
+          for (let k = 0; k < pts.length && good; k += 2) if (!onIsland(pts[k], pts[k + 1])) good = false;
+          if (good) lines.push({ id, pts: pts.slice() });
+        }
+        for (const id in oldLines) lines.push(...linesFromTiles(id, oldLines[id]));
+        return { level, mat: mt, placed, snap, free, seeds, lines, editableLilies: isl.editableLilies === true };
       }
       // same shape as populateStarterIsland: terrain first (derived counts, water field, surface), then the lists
       function applyIsland(isl, rebuild = true) {
@@ -9514,6 +9806,7 @@
         for (const fp of isl.free) freeProps.push({ ...fp });
         if (!isl.editableLilies) addStarterLilies(); // old saves stored the pads in the scenery
         for (const f of isl.seeds) seedFlowers.push({ ...f, spawnT: -100 });
+        fenceLines = isl.lines.map((ln) => ({ id: ln.id, pts: ln.pts.slice() }));
         if (rebuild) rebuildInstances();
       }
       /* ---- UNDO / REDO (eraser step 3): Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y ---- */
@@ -9547,7 +9840,7 @@
         document.getElementById('btn-redo')?.classList.toggle('off', !redoStack.length);
       }
       function undoRedo(dir) { // -1 undo, +1 redo
-        if (intro.phase !== 'done' || isPhotoMode || paintStroke || seedStroke || stoneStroke || eraseStroke) return false;
+        if (intro.phase !== 'done' || isPhotoMode || paintStroke || seedStroke || stoneStroke || lineStroke || eraseStroke) return false;
         commitEdit();
         const from = dir < 0 ? undoStack : redoStack, to = dir < 0 ? redoStack : undoStack;
         const isl = from.length ? parseIsland(from[from.length - 1]) : null;
@@ -9598,6 +9891,7 @@
         snapProps.length = 0; snapProps.push(...snap);
         freeProps.length = 0; freeProps.push(...free);
         seedFlowers.length = 0; seedFlowers.push(...seeds);
+        fenceLines = isl.lines.map((ln) => ({ id: ln.id, pts: ln.pts.slice() })); // bays that differ drop in or float away (computeLines)
         rebuildInstances();
       }
       function readSave(key) {
@@ -9657,11 +9951,6 @@
           // 2. Cozy Storybook Cabin nestled right in front of the back hill shelter
           { gx: 4, gz: 4, id: 'cabin', rotation: 0 },
 
-          // 3. Auto-tiling Wooden Fence hugging the left side of the cabin yard
-          { gx: 3, gz: 4, id: 'fence', rotation: 0 },
-          { gx: 3, gz: 5, id: 'fence', rotation: 0 },
-          { gx: 3, gz: 6, id: 'fence', rotation: 0 },
-
           // 4. Storytelling Path connecting Cabin Door -> Campfire/Bench -> Pond Shoreline!
           { gx: 4, gz: 5, id: 'path', rotation: 0 },
           { gx: 4, gz: 6, id: 'path', rotation: 0 },
@@ -9705,6 +9994,8 @@
         ];
         starterFree.forEach((fp) => freeProps.push(fp));
         addStarterLilies();
+        // 3. a picket fence hugging the left side of the cabin yard (where three fence tiles stood)
+        fenceLines = linesFromTiles('fence', new Set(['3,4', '3,5', '3,6']));
 
         if (rebuild) rebuildInstances();
       }
@@ -9748,6 +10039,9 @@
           if ((e.gx === gx && e.gz === gz) || (tx === gx && tz === gz)) return false;
         }
         const cx = gx - HALF_GRID + 0.5, cz = gz - HALF_GRID + 0.5;
+        // a fence or wall crossing this tile (its slopes into the neighbours are fine: lines follow the ground)
+        const tile = { x0: cx - 0.48, x1: cx + 0.48, z0: cz - 0.48, z1: cz + 0.48 };
+        for (const r of lineRects()) if (rectsOverlap(r, tile)) return false;
         for (let i = -4; i <= 4; i++) for (let j = -4; j <= 4; j++) {
           if (getPondSDF(cx + i * TERRAIN_REACH / 4, cz + j * TERRAIN_REACH / 4) < 0.1) return false;
         }
@@ -9817,7 +10111,7 @@
           else if (isStairs(e)) { const fr = stairsFootRect(e); if (rectHitsCircle(stairsRect(e), cx, cz, R) || (fr && rectHitsCircle(fr, cx, cz, R))) return true; }
           else if (Math.hypot(cx - ex, cz - ez) < Math.max(0.18, gridSolidR(e.id)) + R) return true; // stays off isPondTile
         }
-        for (const rail of railRects()) if (rectHitsCircle(rail, cx, cz, R)) return true;
+        for (const rail of lineRects()) if (rectHitsCircle(rail, cx, cz, R)) return true;
         for (const o of snapProps) {
           const def = assetsById[o.id].def;
           if (def.shore) { if (rectHitsCircle(localRect(def.shore.land, o.wx, o.wz, o.rotation), cx, cz, CELL_R + 0.32)) return true; }
@@ -9947,6 +10241,7 @@
         if (tt) { if (tt.paint !== undefined) beginPaintStroke(hit, tt.paint); else editTerrainAt(hit.gx, hit.gz, tt.dir); return; }
         if (selectedTool === 'steppingstone') { beginStoneStroke(hit); return; }
         const def = assetsById[selectedTool].def;
+        if (def.line) { beginLineStroke(hit); return; }
         const placement = def.snapPlace ? snapPlacement(def, hit) : null;
         if (!(placement ? placement.valid : canPlaceAtHit(selectedTool, hit))) return;
         if (placement) {
@@ -9998,7 +10293,7 @@
         let h = 0.3;
         if (def.type === '3d_cabin') h = 1.5;
         else if (def.type === 'auto_path') h = 0.04;
-        else if (def.type === 'auto_fence') h = 0.36;
+        else if (def.line) h = def.line.height;
         else if (a.geometry) { if (!a.geometry.boundingBox) a.geometry.computeBoundingBox(); h = Math.max(0.05, a.geometry.boundingBox.max.y); }
         return (_hCache[id] = h);
       }
@@ -10017,7 +10312,7 @@
             add('placed', e, x + dx * 0.5, y, z + dz * 0.5, STEP_HEIGHT, 0.26);
             return;
           }
-          const r = def.type === '3d_cabin' ? 0.52 : (def.type === 'auto_path' ? 0.42 : (def.type === 'auto_fence' ? 0.12 : Math.max(gridSolidR(e.id), def.contactRadius || 0, 0.12)));
+          const r = def.type === '3d_cabin' ? 0.52 : (def.type === 'auto_path' ? 0.42 : Math.max(gridSolidR(e.id), def.contactRadius || 0, 0.12));
           add('placed', e, x, getTileElevation(e.gx, e.gz), z, itemHeight(e.id), r);
         });
         snapProps.forEach((o) => {
@@ -10030,6 +10325,8 @@
           add('free', fp, fp.wx, freePropY(def, fp.wx, fp.wz), fp.wz,
             itemHeight(fp.id) * sc, (fp.id === 'rocks' ? 0.34 : (def.solidRadius || 0.1)) * sc);
         });
+        for (const m of lineMods) { const L = lineDef(m.id).line; add('line', m, m.x, m.y, m.z, L.height, L.step * 0.55); }
+        for (const p of linePosts) { const L = lineDef(p.id).line; add('line', p, p.x, p.y, p.z, L.height + 0.04, L.postHalf + 0.02); }
         pickBoundsVersion = terrain.version;
       }
       function pickEraseTarget(cx, cy, turnable = false) {
@@ -10069,9 +10366,28 @@
         }
         return best;
       }
+      // the bays one eraser click takes around a picked bay or post of a line: [first, last] bay index
+      function lineCut(rec) {
+        const L = lineDef(rec.id).line, n = rec.line.pts.length / 2 - 1, c = rec.post ? rec.b - 0.5 : rec.i;
+        let a = Math.round(c - (L.cut - 1) / 2);
+        a = clamp(a, 0, Math.max(0, n - L.cut));
+        return [a, Math.min(n - 1, a + L.cut - 1)];
+      }
       function applyEraseHot() {
         for (const [mesh, i] of hotMarks) { mesh.geometry.attributes.aHot.array[i] = 0; mesh.geometry.attributes.aHot.needsUpdate = true; }
         hotMarks.length = 0;
+        if (eraseTarget && eraseTarget.kind === 'line') { // the whole piece it would take: its bays and the posts inside
+          const t = eraseTarget, [a, b] = lineCut(t.ref);
+          for (const key of [t.id, t.id + ':post']) {
+            const mesh = instancedById[key], refs = mesh.userData.refs || [];
+            refs.forEach((r, i) => {
+              if (!r || r.line !== t.ref.line || !(r.post ? r.b > a && r.b <= b : r.i >= a && r.i <= b)) return;
+              mesh.geometry.attributes.aHot.array[i] = 1; hotMarks.push([mesh, i]);
+            });
+            mesh.geometry.attributes.aHot.needsUpdate = true;
+          }
+          return;
+        }
         const t = eraseTarget, mesh = t && instancedById[t.id];
         if (!mesh || !mesh.userData.refs || !mesh.geometry.attributes.aHot) return;
         const i = mesh.userData.refs.indexOf(t.ref);
@@ -10092,7 +10408,7 @@
       // a click with the empty hand picks an object and keeps it picked (the rotate token, touch);
       // clicking empty ground lets go. Otherwise the hand picks whatever is under the pointer.
       let handPick = null;
-      const stillThere = (t) => t && (t.kind === 'placed' ? placedItems.get(`${t.ref.gx},${t.ref.gz}`) === t.ref : (t.kind === 'snap' ? snapProps : freeProps).includes(t.ref));
+      const stillThere = (t) => t && (t.kind === 'line' ? fenceLines.includes(t.ref.line) : t.kind === 'placed' ? placedItems.get(`${t.ref.gx},${t.ref.gz}`) === t.ref : (t.kind === 'snap' ? snapProps : freeProps).includes(t.ref));
       function refreshEraseTarget() {
         if (handPick && (selectedTool || !stillThere(handPick))) handPick = null;
         if (handPick && !isPhotoMode && !isExploded) { setEraseTarget(handPick); return; }
@@ -10119,7 +10435,7 @@
         if (!r) return true; // round footprints: any heading
         if (t.kind === 'snap') return !snapRectBlocked(r, snapProps.indexOf(t.ref));
         for (const o of snapProps) if (rectsOverlap(r, footprintRect(assetsById[o.id].def, o.wx, o.wz, o.rotation))) return false;
-        for (const rail of railRects()) if (rectsOverlap(r, rail)) return false;
+        for (const rail of lineRects()) if (rectsOverlap(r, rail)) return false;
         return true;
       }
       function turnTarget(dir) {
@@ -10153,6 +10469,15 @@
           for (const f of t.seeds) if (!f.erased) { f.erased = true; n++; }
           if (!n) return false;
           rebuildSeedFlowers();
+        } else if (t.kind === 'line') { // cut the piece out: the line splits in two (a loop opens)
+          const ln = t.ref.line, k = fenceLines.indexOf(ln);
+          if (k < 0) return false;
+          const [a, b] = lineCut(t.ref), P = ln.pts, n = P.length / 2 - 1;
+          const head = P.slice(0, (a + 1) * 2), tail = P.slice((b + 1) * 2);
+          const loop = n >= 3 && Math.hypot(P[0] - P[P.length - 2], P[1] - P[P.length - 1]) < 1e-6;
+          const parts = loop ? [tail.concat(head.slice(2))] : [head, tail];
+          fenceLines.splice(k, 1, ...parts.filter((p) => p.length >= 4).map((pts) => ({ id: ln.id, pts })));
+          rebuildInstances();
         } else if (t.kind === 'placed') {
           const key = `${t.ref.gx},${t.ref.gz}`;
           if (placedItems.get(key) !== t.ref) return false;
@@ -10248,6 +10573,15 @@
 
         const def = assetsById[selectedTool].def;
         const ghost = ghostMeshesById[selectedTool];
+        if (def.line) { // a post where the line would start (on a line end when near one), or where the brush is
+          const st = lineStroke, p = st ? { x: st.bx, z: st.bz } : lineStartAt(def, hoveredHit);
+          const ok = st ? !st.blocked : !lineBayBlocked(def, p.x - 0.02, p.z, p.x + 0.02, p.z);
+          ghost.visible = true;
+          ghost.position.set(p.x, lineGround(p.x, p.z) + 0.01, p.z);
+          ghost.rotation.y = -orbitAngle;
+          setGhostValidityColor(ghost, ok);
+          return;
+        }
         const placement = def.snapPlace ? snapPlacement(def, hoveredHit) : null;
         const valid = placement ? placement.valid : canPlaceAtHit(selectedTool, hoveredHit);
         const showTile = def.category !== 'living' && def.category !== 'build';
@@ -10313,11 +10647,6 @@
             ghost.rotation.y = (fixedTurn(def) ? quarterOf(currentRotation) : currentRotation) * (Math.PI / 2);
             if (ghost.userData.varOfs) { const d = assetsById[selectedTool].def; ghost.userData.varOfs.value = variantAt(d, tileX, tileZ) / d.variants; }
             if (def.stairs) { const s = stairsFor(hoveredHit); if (s) ghost.rotation.y = s.rot * (Math.PI / 2); }
-            if (ghost.userData.conn) { // a wall ghost shows the joins it would make, turned like the real one
-              const L = wallLook(selectedTool, gx, gz);
-              ghost.rotation.y = L.rot * (Math.PI / 2);
-              ghost.userData.conn.value = L.conn;
-            }
             setGhostValidityColor(ghost, valid);
           }
         }
@@ -10661,6 +10990,7 @@
         placedItems.clear();
         freeProps.length = 0;
         snapProps.length = 0;
+        fenceLines = []; // every bay and post floats away (computeLines)
         rebuildInstances();
         commitEdit();
         resetPopover.classList.remove('open');
@@ -10871,7 +11201,7 @@
           if (picksOnScreen()) {
             refreshEraseTarget();
             // Only placement, an active brush, or a still-fading grid needs a terrain raycast.
-            if (!paintStroke && !seedStroke && !stoneStroke && gridMat.uniforms.uGridAlpha.value < 0.005) {
+            if (!paintStroke && !seedStroke && !stoneStroke && !lineStroke && gridMat.uniforms.uGridAlpha.value < 0.005) {
               hoveredHit = null;
               return;
             }
@@ -10880,6 +11210,7 @@
           if (paintStroke && hit && (e.buttons & 1)) paintStrokeTo(hit.wx, hit.wz);
           if (seedStroke && hit && (e.buttons & 1)) seedStrokeTo(hit.wx, hit.wz);
           if (stoneStroke && hit && (e.buttons & 1)) stoneStrokeTo(hit);
+          if (lineStroke && hit && (e.buttons & 1)) lineStrokeTo(hit);
           hoveredHit = hit;
           updateHoverVisuals();
         }
@@ -10892,10 +11223,10 @@
         updateHoverVisuals();
       });
 
-      window.addEventListener('pointercancel', () => { endPaintStroke(); endSeedStroke(); endStoneStroke(); endEraseStroke(); commitEdit(); }); // a cancelled touch still finishes the stroke
+      window.addEventListener('pointercancel', () => { endPaintStroke(); endSeedStroke(); endStoneStroke(); endLineStroke(); endEraseStroke(); commitEdit(); }); // a cancelled touch still finishes the stroke
       window.addEventListener('pointerup', (e) => {
         if (paintStroke && e.button === 0) endPaintStroke();
-        if (e.button === 0) { endSeedStroke(); endStoneStroke(); endEraseStroke(); commitEdit(); }
+        if (e.button === 0) { endSeedStroke(); endStoneStroke(); endLineStroke(); endEraseStroke(); commitEdit(); }
         if (isOrbiting && e.button === orbitButton) {
           if (orbitButton === 2 && !isPanning && !hasMovedSignificantly && performance.now() - dragStartTime < 350 && !isPhotoMode && !isExploded) {
             beginEdit(); // a short right click erases the nearest object, with any tool
@@ -11015,13 +11346,14 @@
       setTimeOfDay(0);
       const bootSave = readSave(SAVE_KEY_AUTO);
       if (bootSave) applyIsland(bootSave); else populateStarterIsland();
+      lineSpawnFn = null; // from now on a bay or post that appears drops in
       updateSelectionUI();
 
       // everything that stands on the island hangs off one root, so the reset can drop the whole
       // island at once (dust, petals, cursors and lights stay in the world)
       const islandRoot = new THREE.Group();
       scene.add(islandRoot);
-      for (const o of [chunkTopSurface, chunkSubsoil, chunkBedrock, fenceGroup, cabinGroupContainer, glowGroup,
+      for (const o of [chunkTopSurface, chunkSubsoil, chunkBedrock, cabinGroupContainer, glowGroup,
         smokeInst, flameInst, emberPoints, ...Object.values(instancedById)]) islandRoot.add(o);
 
       // draw the shared cabin part materials once now, off screen (a cabin's separate parts are only
@@ -11131,7 +11463,6 @@
         chunkBedrock.rotation.y = twBedrock;
 
         // 2. Ground Props (Fences, Rocks, Flowers, Reeds, Campfire) & Split Trees (Trunk -> Mid, Canopy -> Top)
-        fenceGroup.position.y = pProps * 0.42;
         sharedUniforms.uExplodePropLift.value = pProps * 0.42;
         sharedUniforms.uExplodeMidLift.value  = pMid * 1.28;
         sharedUniforms.uExplodeTopLift.value  = pTop * 2.62;
@@ -11707,13 +12038,10 @@
         waterMesh.visible = w > 0;
         waterMesh.position.y = THREE.MathUtils.lerp(WATER_FROM, WATER_Y, popScale(w));
         fallMat.uniforms.uK.value = THREE.MathUtils.clamp((u - IT.water - 0.3) / 0.6, 0, 1); // falls start running once it is full
-        // paths appear, the fence drops in as one piece
+        // paths appear (fences and walls drop in bay by bay: their spawn times, startAssembly)
         const pathOn = u >= IT.path;
         for (const im of [pathMesh]) im.visible = pathOn && im.count > 0;
         crateClutterInst.visible = u >= IT.small[0] && crateClutterInst.count > 0;
-        const f = u - IT.fence;
-        fenceGroup.visible = f >= 0;
-        if (f >= 0 && f < 0.16) fenceGroup.position.y += 1.2 * (1 - (f / 0.16) ** 2);
         petalInst.visible = u >= IT.layers[2] + IT.layerFall;
         if (u >= IT.end) finishIntro();
       }
@@ -11750,9 +12078,9 @@
         placedItems.forEach((e) => {
           const def = assetsById[e.id].def;
           const x = e.gx - HALF_GRID + 0.5, z = e.gz - HALF_GRID + 0.5, y = getTileElevation(e.gx, e.gz);
-          if (def.type === 'auto_path' || def.type === 'auto_fence') { // no drop shader: they snap in
+          if (def.type === 'auto_path') { // no drop shader: it snaps in
             e.spawnT = -100;
-            landing(def, x, y, z, t0 + (def.type === 'auto_path' ? IT.path : IT.fence + 0.16) + introDiag(x, z) * 0.12);
+            landing(def, x, y, z, t0 + IT.path + introDiag(x, z) * 0.12);
             return;
           }
           e.spawnT = spawnAt(def, x, z);
@@ -11775,7 +12103,15 @@
           landing(def, o.wx, snapGroundY(def, o.wx, o.wz, o.rotation), o.wz, o.spawnT);
         });
         seedFlowers.forEach((f) => { if (f.erased) return; f.spawnT = t0 + IT.small[0] + 0.25 + introDiag(f.wx, f.wz) * IT.small[1] + Math.random() * 0.15; f.goneAt = null; });
+        // fences and walls: bay after bay along the sweep (posts a touch later, onto the bays)
+        lineBorn.clear();
+        lineSpawnFn = (def, x, z) => t0 + IT.fence + introDiag(x, z) * 0.5 + (def.id.endsWith(':post') ? 0.08 : 0) + Math.random() * 0.02;
         rebuildInstances(); // (refills the seed flowers too)
+        lineSpawnFn = null;
+        for (const ln of fenceLines) { // one tok per line, where its middle lands
+          const m = lineMods.find((r) => r.line === ln && r.i >= ((ln.pts.length / 2 - 1) >> 1));
+          if (m) landing(lineDef(ln.id), m.x, m.y, m.z, m.spawnT);
+        }
         markShadowsDirty(IT.end + lead + 0.4); // casters keep moving the whole time
 
         // island layers: dust off the edges, an impact ring, a thud and a shake
@@ -11832,7 +12168,7 @@
         for (const ch of introLayers) { ch.visible = true; ch.scale.set(1, 1, 1); }
         chunkTopSurface.position.y = 0;
         waterMesh.visible = true; waterMesh.position.y = WATER_Y; fallMat.uniforms.uK.value = 1;
-        fenceGroup.visible = true; petalInst.visible = true;
+        petalInst.visible = true;
         for (const im of [pathMesh, crateClutterInst]) im.visible = im.count > 0;
         markShadowsDirty(1.0);
         if (document.body.classList.contains('booting')) popUI();
@@ -11978,19 +12314,18 @@
             return { sway, solid };
           },
           variantsOf: (id) => { const m = instancedById[id], a = m && m.geometry.attributes.aVariant; return a ? Array.from(a.array.slice(0, m.count)) : null; },
-          // joining walls as drawn: tile, quarter turn, and the unfolded arms turned back to world sides
-          // ('+x', '+z', '-x', '-z'), read from the instance buffers the shader uses (aConn + matrix)
-          walls: (id = 'stonewall') => {
-            const m = instancedById[id], a = m.geometry.attributes.aConn.array, out = [], mat = new THREE.Matrix4();
-            for (let i = 0; i < m.count; i++) {
-              m.getMatrixAt(i, mat); const e = mat.elements;
-              const rot = ((Math.round(Math.atan2(e[8], e[0]) / (Math.PI / 2)) % 4) + 4) % 4; // e[8] = sin, e[0] = cos of the y turn
-              const c = Math.round(Math.cos(rot * Math.PI / 2)), s = Math.round(Math.sin(rot * Math.PI / 2)), sides = [];
-              WALL_DIRS.forEach(([lx, lz], k) => { if ((a[i] >> k) & 1) { const wx = lx * c + lz * s, wz = -lx * s + lz * c; sides.push((wx ? (wx > 0 ? '+x' : '-x') : (wz > 0 ? '+z' : '-z'))); } });
-              out.push({ gx: Math.round(e[12] + HALF_GRID - 0.5), gz: Math.round(e[14] + HALF_GRID - 0.5), rot, conn: a[i], sides: sides.sort(), gone: m.geometry.attributes.aVanish.array[i] < 1e8 });
-            }
-            return out;
+          // fences and walls (LINES): the lines as saved, and as drawn (bays and posts standing, path gaps,
+          // instances still floating away), the placing rule for one bay, triangles of the two models
+          lines: () => fenceLines.map((ln) => ({ id: ln.id, bays: ln.pts.length / 2 - 1, pts: ln.pts.map((v) => Math.round(v * 1e4) / 1e4) })),
+          lineParts: (id) => {
+            const live = (key) => { const m = instancedById[key], v = m.geometry.attributes.aVanish.array; let n = 0; for (let i = 0; i < m.count; i++) if (v[i] > 1e8) n++; return n; };
+            const mods = lineMods.filter((r) => r.id === id);
+            let gaps = 0; for (const ln of fenceLines) if (ln.id === id) gaps += ln.pts.length / 2 - 1; gaps -= mods.length;
+            return { bays: mods.length, posts: linePosts.filter((r) => r.id === id).length, gaps, liveBays: live(id), livePosts: live(id + ':post'),
+              maxY: Math.max(-9, ...mods.map((r) => r.y)), minY: Math.min(9, ...mods.map((r) => r.y)), rects: lineRectList.filter((r) => r.id === id).length };
           },
+          lineBlocked: (id, x0, z0, x1, z1) => lineBayBlocked(assetsById[id].def, x0, z0, x1, z1),
+          lineTris: (id) => [instancedById[id].geometry.attributes.position.count / 3, instancedById[id + ':post'].geometry.attributes.position.count / 3],
           // step stones as drawn (instance positions, still standing ones) and the rules they follow
           stones: () => { const m = instancedById.steppingstone, e = m.instanceMatrix.array, v = m.geometry.attributes.aVanish.array, out = []; for (let i = 0; i < m.count; i++) if (v[i] > 1e8) out.push([e[i * 16 + 12], e[i * 16 + 13], e[i * 16 + 14]]); return out; },
           waterY: (x, z) => getHillHeight(x, z) + WATER_SURF,
@@ -12013,8 +12348,6 @@
             }
             return out;
           },
-          wallTris: (id = 'stonewall') => { const a = instancedById[id].geometry.attributes.aArm.array, n = [0, 0, 0, 0, 0]; for (let v = 0; v < a.length; v += 3) n[a[v]]++; return n; }, // [middle, arm 1..4]
-          wallGhostConn: () => { const g = ghostMeshesById.stonewall; return g.visible ? g.userData.conn.value : null; },
           undo: (dir = -1) => undoRedo(dir),
           islandList: () => JSON.stringify(serializeIsland()),
           grassTufts: () => Array.from({ length: grassClutterInst.count }, (_, i) => Array.from(grassClutterInst.instanceMatrix.array.subarray(i * 16, i * 16 + 16), (v) => Math.round(v * 1e5) / 1e5)),
