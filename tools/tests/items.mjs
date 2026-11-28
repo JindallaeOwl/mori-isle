@@ -15,7 +15,7 @@ export default async ({ wait, evaluate, mouse, key, log }) => {
 
   // 1) categories (the terrain slot holds tools, not items: see terrain-edit.mjs)
   const items = await J('window.__mori.items()');
-  const cats = ['build', 'flora', 'paths', 'living', 'nature'];
+  const cats = ['build', 'flora', 'paths', 'living', 'nature', 'animal'];
   const bad = items.filter((d) => !cats.includes(d.category));
   ok('every item has a category', bad.length === 0, bad.map((d) => d.id).join(','));
   ok('names carry no placement notes', !items.some((d) => /\(|자유배치|자동연결/.test(d.name)), items.map((d) => d.name).join(' / '));

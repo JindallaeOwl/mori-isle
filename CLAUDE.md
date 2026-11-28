@@ -78,6 +78,7 @@ node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/rotate.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/lilies.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/lines.mjs
+node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1" tools/tests/cat.mjs
 node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1&intro=1" tools/tests/intro.mjs
 $env:AUTOPLAY='0'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1&intro=1" tools/tests/sound-unlock.mjs; $env:AUTOPLAY=$null
 $env:SHOT='night'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#debug=1&time=night" tools/tests/screenshot.mjs
@@ -99,6 +100,13 @@ $env:SHOT='night'; node tools/cdp.mjs "file:///D:/Owl/mori-isle/mori_isle.html#d
 - **비교 결과.** GT 710, Chrome, 1600×900, 낮, 자동 해상도 조절을 끈 조건에서 같은 테스트용 저장 섬으로 오른쪽 드래그를 6초씩 재생했다. 세 버전의 실행 순서를 바꿔 각각 6번 측정했다. 25ms를 넘긴 프레임이 한 번이라도 나온 실행은 최적화 전(`24643f0`) 2/6회, 첫 번째만 적용했을 때 2/6회, 두 번째까지 적용했을 때 5/6회였다. 두 번째 변경 중 어느 부분이 원인인지는 확정되지 않았다. 복구 후 사용자 체감과 목표 기기인 Iris Xe에서의 프레임 간격은 아직 미확인이다.
 
 ## 남은 일
+- **헤드셋 고양이 (동물 카테고리, 2026-11-29, 진행 중):** 사용자가 보낸 영상(심즈 모드: 실제 고양이 사진 얼굴을 입힌 로우폴리 고양이를 마우스를 따라보는 움직이는 배경화면)을 바탕으로 만든다. 사용자 결정: 실제 크기(벤치 좌판보다 조금 낮음), 새 카테고리 '동물'(`animal`, 자연 소품과 지형 사이라 숫자 키 6이 동물·7이 지형), 자유 배치, 헤드폰 음악(낮 통통 튀는 곡, 노을·밤 잔잔한 오르골), 노래 들을 때 검은 음표(밤에는 크림색 테두리), 커서가 근처일 때만 쳐다봄, 깜빡임 없음, 원본의 머리 위 초록 크리스탈(심즈 표식)은 넣지 않음.
+  - **1단계 (`c418980` + 다음 커밋):** `SOUP_ITEMS.cat`(`Soup`, 삼각형 약 3,200). 꼭짓점 태그는 `aSurf.z` = `catTag(part, role)`(부품 0 몸·1 머리·3 꼬리, 역할 0 고정색·1 털·2 줄무늬·3 크림). `shapeCat`이 머리를 목(`CAT.neck`) 기준으로 돌리고, 꼬리를 흔들고, 털색을 `CAT.fur`(3가지, 칸 위치로 `aVariant`) 비율로 바꾸고, 얼굴 층을 고른다. 인스턴스 속성 `aLook` = (yaw, pitch, roll, 하품)이라 속성이 15칸이다(한도 16, 더 늘리지 말 것). 얼굴은 사용자가 준 고양이 사진 3장(갈색 줄무늬·치즈·회색 줄무늬) + 치즈 하품 1장을 64×64로 잘라 `CAT_FACES`(base64)로 넣고 Soup 텍스처 묶음 층 `L_CATFACE` 14~17에 둔다. 머리 앞을 납작하게 눌러 앞을 향한 면에 정면 투사(`CAT.face`). 사진 가장자리는 털색으로 이어진다(털색 바꾸면 사진 테두리 색도 같이 바꿔야 함). 사람 얼굴이 합성된 다섯째 사진은 쓰지 않았다(초상).
+  - **움직임 (`CAT LIFE`, 섹션 11 연기 옆):** 커서 광선이 머리에서 `CAT_LOOK_R` 1.5 안을 지나면 광선 위 가장 가까운 점을 카메라 쪽으로 `CAT_GLASS` 당긴 곳을 본다(화면 유리 위의 커서처럼, 위로 `CAT_UP` 0.7·아래 0.6). 덜 감쇠한 용수철이라 살짝 넘쳤다 선다. 멀면 `audio.catBeat()` 박자에 맞춰 갸웃(4박)·까딱(매 박) + 2박마다 음표(`catNoteMesh`, 빌보드 인스턴스 하나, 보일 때만 draw call). 치즈는 25~60초마다 하품(`YAWN_T` 2.4초, 머리 뒤로, 하품 얼굴). 지형 레이캐스트 없음. 음악은 `CozyAudio`의 `CAT_SONGS`·`setCatMusic`·`updateCatMusic`(가장 가까운 고양이, 확대할수록 커짐, `masterGain`으로). 훅 `cats()`, `catPointer(x, y)`, `catYawn()`. 테스트 `tools/tests/cat.mjs`.
+  - **`def.ownRng`:** 새 조립 오브젝트가 공유 색 흔들림 난수(`soupRng`)를 진행시키지 않게 한다(고양이에 켬).
+  - 테스트 (2026-11-29): `cat`·`console`·`ui`·`items`·`terrain`·`save`·`eraser` 통과. `terrain-baseline.json` 다시 기록함: 고양이 메쉬·유령·음표 3개가 늘었고, 울타리·벽돌담 설치 유령 2개가 바뀜(`2aa3f3e` 뒤에 다시 기록하지 않아 이미 어긋나 있던 것, 섬 지형·높이 해시는 그대로).
+  - **답을 기다리는 질문:** 올라가기는 먼저 "윗면에 올려놓기"(그루터기·벽돌담·계단·벤치 등)를 하고 나중에 돌아다니기에서 뛰어오르기로 쓰자고 제안함. 올라갈 곳 목록(그루터기, 벽돌담 윗면, 계단 단, 벤치 좌판, 쓰러진 통나무, 장작더미, 오두막 지붕? 울타리는 빼기 추천) 답이 없다. 돌아다니기(2·3단계: 서기·걷기 자세, 행동 순서, 움직이는 접지 그림자)는 1단계를 본 뒤 정하기로 함.
+  - 남은 확인(사용자): 얼굴 사진이 머리에 놓이는 위치·크기, 털색과 사진 테두리 이음, 위로 쳐다보는 각도, 하품, 음악 크기·느낌, 음표 크기, 실기기 프레임.
 - **다음 작업 (2026-11-28 세션 끝에 정리, 울타리·벽돌담 작업 뒤):**
   0. **사용자 확인 끝 (2026-11-28):** 나무·식물(수양벚나무 `c61f1b5` 포함), 지우개, 지형 편집(높낮이·칠하기·씨앗·물·폭포), 저장, 생활 소품. 아래 각 항목의 "남은 확인"은 실기기 프레임·소리처럼 따로 적힌 것만 남는다.
   1. **사용자 확인 대기:** 울타리·벽돌담 선, 징검다리, 나무 계단, 돌길 모양·계단 이음, 자연 소품(조약돌·쓰러진 통나무·고사리·연잎), 빈손·15° 회전·놓은 물건 돌리기(아래 같은 이름 항목). 울타리·벽돌담은 사용자가 써 보고 유령 방향(2건)과 지우개 효과를 지적해 고쳤다(`2aa3f3e`, `4345d4f`, `db3efd1`). 마지막 수정의 화면 확인과 생김새·실기기 끊김 의견은 아직 없다.
