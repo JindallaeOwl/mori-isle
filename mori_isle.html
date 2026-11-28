@@ -8637,6 +8637,7 @@
       }
 
       function rebuildInstances() {
+        pickBoundsVersion = -1;
         const buckets = {};
         ITEM_DEFS.forEach((d) => { if (isInstancedDef(d)) buckets[d.id] = []; });
 
@@ -9645,7 +9646,7 @@
       // ghost for cabins, paths and fences, a red ring for a seed patch). Drag to erase one after another.
       const ERASE_PICK_PX = 14;  // how far off an object the pointer may be (CSS px)
       const SEED_PATCH_R = 0.24; // world units around the picked seed flower
-      const _ep = new THREE.Vector3(), _hCache = {};
+      const _hCache = {};
       let eraseTarget = null, erasePointer = null, eraseStroke = null, eraseGhost = null;
       const hotMarks = []; // [mesh, instance] currently flushed red
       function itemHeight(id) {
@@ -9658,53 +9659,66 @@
         else if (a.geometry) { if (!a.geometry.boundingBox) a.geometry.computeBoundingBox(); h = Math.max(0.05, a.geometry.boundingBox.max.y); }
         return (_hCache[id] = h);
       }
-      function toClient(x, y, z) {
-        _ep.set(x, y, z).project(camera);
-        return [(_ep.x + 1) * 0.5 * window.innerWidth, (1 - _ep.y) * 0.5 * window.innerHeight];
-      }
-      function segDist(px, py, a, b) {
-        const dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy;
-        const t = L > 1e-6 ? THREE.MathUtils.clamp(((px - a[0]) * dx + (py - a[1]) * dy) / L, 0, 1) : 0;
-        return Math.hypot(px - a[0] - dx * t, py - a[1] - dy * t);
-      }
-      // turnable: the empty hand's pick (only objects that turn freely; no seed flowers)
-      function pickEraseTarget(cx, cy, turnable = false) {
-        if (!cx && !cy) return null;
-        const ppu = window.innerHeight * camera.zoom / (camera.top - camera.bottom); // CSS px per world unit
-        let best = null, bestScore = ERASE_PICK_PX, bestR = 1e9;
-        const consider = (t, x, y, z, h, r) => {
-          if (turnable && (t.kind === 'seeds' || fixedTurn(assetsById[t.id]?.def))) return;
-          const score = segDist(cx, cy, toClient(x, y, z), toClient(x, y + h, z)) - r * ppu;
-          // inside several: the smallest; otherwise the closest
-          if (score <= 0 ? (bestScore > 0 || r < bestR) : score < bestScore) {
-            best = t; bestScore = Math.max(score, 0); bestR = r;
-            t.x = x; t.y = y; t.z = z;
-          }
-        };
+      // Bounds are in island space. Camera motion only changes their projection.
+      let pickBoundsVersion = -1;
+      const pickBounds = [];
+      const pickMatrix = new THREE.Matrix4();
+      function rebuildPickBounds() {
+        pickBounds.length = 0;
+        const add = (kind, ref, x, y, z, h, r) =>
+          pickBounds.push({ kind, ref, id: ref.id, x, y, z, h, r, turnable: !fixedTurn(assetsById[ref.id].def) });
         placedItems.forEach((e) => {
           const def = assetsById[e.id].def, x = e.gx - HALF_GRID + 0.5, z = e.gz - HALF_GRID + 0.5;
           if (def.stairs) { // a segment up the middle of the flight
             const [dx, dz] = rotDir(e.rotation), y = getTileElevation(e.gx, e.gz);
-            consider({ kind: 'placed', ref: e, id: e.id }, x + dx * 0.5, y, z + dz * 0.5, STEP_HEIGHT, 0.26);
+            add('placed', e, x + dx * 0.5, y, z + dz * 0.5, STEP_HEIGHT, 0.26);
             return;
           }
           const r = def.type === '3d_cabin' ? 0.52 : (def.type === 'auto_path' ? 0.42 : (def.type === 'auto_fence' ? 0.12 : Math.max(gridSolidR(e.id), def.contactRadius || 0, 0.12)));
-          consider({ kind: 'placed', ref: e, id: e.id }, x, getTileElevation(e.gx, e.gz), z, itemHeight(e.id), r);
+          add('placed', e, x, getTileElevation(e.gx, e.gz), z, itemHeight(e.id), r);
         });
         snapProps.forEach((o) => {
           const def = assetsById[o.id].def, rc = footprintRect(def, o.wx, o.wz, o.rotation);
-          consider({ kind: 'snap', ref: o, id: o.id }, (rc.x0 + rc.x1) / 2, snapGroundY(def, o.wx, o.wz, o.rotation), (rc.z0 + rc.z1) / 2,
+          add('snap', o, (rc.x0 + rc.x1) / 2, snapGroundY(def, o.wx, o.wz, o.rotation), (rc.z0 + rc.z1) / 2,
             itemHeight(o.id), Math.max(0.1, (rc.x1 - rc.x0 + rc.z1 - rc.z0) / 4));
         });
         freeProps.forEach((fp) => {
           const def = assetsById[fp.id].def, sc = fp.scale || 1;
-          consider({ kind: 'free', ref: fp, id: fp.id }, fp.wx, freePropY(def, fp.wx, fp.wz), fp.wz,
+          add('free', fp, fp.wx, freePropY(def, fp.wx, fp.wz), fp.wz,
             itemHeight(fp.id) * sc, (fp.id === 'rocks' ? 0.34 : (def.solidRadius || 0.1)) * sc);
         });
+        pickBoundsVersion = terrain.version;
+      }
+      function pickEraseTarget(cx, cy, turnable = false) {
+        if (!cx && !cy) return null;
+        if (pickBoundsVersion !== terrain.version) rebuildPickBounds();
+        // Orthographic projection is affine. Every upright segment has the same
+        // projected direction, so project its foot once and scale that direction by height.
+        const halfW = window.innerWidth * 0.5, halfH = window.innerHeight * 0.5;
+        const m = pickMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).elements;
+        const ux = m[4] * halfW, uy = -m[5] * halfH;
+        const ppu = 2 * halfH * camera.zoom / (camera.top - camera.bottom);
+        let best = null, bestScore = ERASE_PICK_PX, bestR = Infinity;
+        const consider = (kind, ref, id, x, y, z, h, r) => {
+          const px = cx - (m[0]*x + m[4]*y + m[8]*z + m[12] + 1) * halfW;
+          const py = cy - (1 - m[1]*x - m[5]*y - m[9]*z - m[13]) * halfH;
+          const dx = ux * h, dy = uy * h, lenSq = dx * dx + dy * dy;
+          const t = lenSq > 1e-6 ? THREE.MathUtils.clamp((px * dx + py * dy) / lenSq, 0, 1) : 0;
+          const score = Math.hypot(px - dx * t, py - dy * t) - r * ppu;
+          if (score <= 0 ? (bestScore > 0 || r < bestR) : score < bestScore) {
+            best = { kind, ref, id, x, y, z };
+            bestScore = Math.max(score, 0);
+            bestR = r;
+          }
+        };
+        for (const b of pickBounds) {
+          if (!turnable || b.turnable) consider(b.kind, b.ref, b.id, b.x, b.y, b.z, b.h, b.r);
+        }
+        if (turnable) return best;
         const now = performance.now() * 0.001;
         for (const f of seedFlowers) {
           if (f.erased || f.goneAt != null || now < f.spawnT) continue;
-          consider({ kind: 'seeds', ref: f, id: 'seeds' }, f.wx, getContinuousTerrainHeight(f.wx, f.wz), f.wz, 0.1 * f.scale, 0.05);
+          consider('seeds', f, 'seeds', f.wx, getContinuousTerrainHeight(f.wx, f.wz), f.wz, 0.1 * f.scale, 0.05);
         }
         if (best && best.kind === 'seeds') { // the patch around it
           const c = best.ref;
@@ -10075,7 +10089,9 @@
       // id null = put down what's held (empty hand)
       function selectTool(id, announce) {
         flushTurnEdit();
+        const wasPicking = picksOnScreen();
         selectedTool = id || null;
+        if (wasPicking && !picksOnScreen() && erasePointer) hoveredHit = getHitUnderClient(...erasePointer);
         audio.playUiBlip(!id ? 300 : (id === 'delete' ? 380 : 520));
         refreshEraseTarget(); // drop (or re-pick) the on-screen target: its colour and kind depend on the tool
         updateSelectionUI();
@@ -10492,7 +10508,14 @@
         } else if (!isPhotoMode && !isExploded) {
           erasePointer = e.target === renderer.domElement ? [e.clientX, e.clientY] : null; // not over the HUD
           if (eraseStroke && erasePointer && (e.buttons & 1)) eraseStrokeTo(e.clientX, e.clientY);
-          if (picksOnScreen()) refreshEraseTarget();
+          if (picksOnScreen()) {
+            refreshEraseTarget();
+            // Only placement, an active brush, or a still-fading grid needs a terrain raycast.
+            if (!paintStroke && !seedStroke && !stoneStroke && gridMat.uniforms.uGridAlpha.value < 0.005) {
+              hoveredHit = null;
+              return;
+            }
+          }
           const hit = getHitUnderClient(e.clientX, e.clientY);
           if (paintStroke && hit && (e.buttons & 1)) paintStrokeTo(hit.wx, hit.wz);
           if (seedStroke && hit && (e.buttons & 1)) seedStrokeTo(hit.wx, hit.wz);
@@ -10719,6 +10742,7 @@
           !picksOnScreen() && !assetsById[selectedTool]?.def.freePlace;
         const targetGridAlpha = showGrid ? 1.0 : 0.0;
         gridMat.uniforms.uGridAlpha.value += (targetGridAlpha - gridMat.uniforms.uGridAlpha.value) * Math.min(1, dt * 10);
+        gridMat.visible = gridMat.uniforms.uGridAlpha.value >= 0.005; // below this the shader discards every fragment
         if (hoveredHit) {
           gridMat.uniforms.uCursorXZ.value.set(hoveredHit.wx, hoveredHit.wz);
         }
