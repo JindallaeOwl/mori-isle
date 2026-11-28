@@ -2407,6 +2407,11 @@
       def.build(S, makeRng((def.seed || 777) + 1));
       def.layers = Math.max(2, Math.min(def.dropGroups || 16, S.parts.length));
       const geometry = S.build({ groups: def.layers, ao: def.ao });
+      if (def.id === 'pebbles') {
+        const part = new Float32Array(S.verts);
+        S.parts.forEach(([start, end], i) => part.fill(i, start, end));
+        geometry.setAttribute('aPebblePart', new THREE.BufferAttribute(part, 1));
+      }
       if (S.arms) { // joining walls: which arm each vertex belongs to (0 = the middle, always shown)
         const A = new Float32Array(S.verts);
         for (const [a, b, k] of S.arms) A.fill(k, a, b);
@@ -2443,6 +2448,42 @@
       }
       out.computeBoundingSphere(); out.computeBoundingBox();
       return out;
+    }
+
+    // Each row rearranges the same four stones. Entries give x/z displacement,
+    // horizontal scale and height scale; zero collapses a chip to a point.
+    const pebbleLayouts = [
+      [[0,0,1,1], [0,0,1,1], [0,0,1,1], [0,0,1,1]],
+      [[-.012,.018,1.08,.85], [.010,-.015,1.12,1.25], [0,0,0,0], [0,0,0,0]],
+      [[.09,-.028,.78,1.12], [-.23,.075,1.15,.91], [.055,-.01,.88,.90], [0,0,0,0]],
+      [[.005,.085,.92,.72], [.014,-.051,.78,1.06], [-.17,-.23,1.15,1.10], [.20,-.024,.92,.90]]
+    ].flat().map(v => new THREE.Vector4(...v));
+    // The free prop's random scale is already saved at full precision. Its low
+    // digits give a repeatable choice independent of position or later turns.
+    const pebbleLook = scale => Math.floor(scale * 65536) % 4;
+    function shapePebbles(mat, pass, preview) {
+      const base = mat.onBeforeCompile;
+      mat.onBeforeCompile = (sh, renderer) => {
+        base.call(mat, sh, renderer);
+        sh.uniforms.uPebbleLayouts = { value: pebbleLayouts };
+        if (preview) sh.uniforms.uPebbleLook = preview;
+        sh.vertexShader = sh.vertexShader
+          .replace('#include <common>', `#include <common>
+            attribute float aPebblePart;
+            uniform vec4 uPebbleLayouts[16];
+            ${preview ? 'uniform float uPebbleLook;' : 'attribute float aVariant;'}
+            vec4 pebbleShape() {
+              return uPebbleLayouts[int(${preview ? 'uPebbleLook' : 'aVariant'}) * 4 + int(aPebblePart)];
+            }`)
+          .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
+            vec4 normalShape = pebbleShape();
+            objectNormal.y *= normalShape.z / max(.001, normalShape.w);`)
+          .replace('#include <begin_vertex>', `#include <begin_vertex>
+            vec4 shape = pebbleShape();
+            transformed.xz = transformed.xz * shape.z + shape.xy;
+            transformed.y *= shape.w;`);
+      };
+      mat.customProgramCacheKey = () => 'mori-pebbles-' + pass;
     }
 
     // Small iso icon rendered from the real model (HDR target -> gamma -> 40px canvas)
@@ -4881,6 +4922,39 @@
             for (let v = st; v < S.verts; v++) S.S[v * 4 + 2] = .45 * clamp((S.P[v * 3 + 1] - ground(z)) / .08, 0, 1);
           }
         }
+      },
+      pebbles: {
+        name: '조약돌',
+        category: 'nature',
+        type: 'soup',
+        seed: 281,
+        freePlace: true,
+        solidRadius: 0.22,
+        contactRadius: 0.19,
+        explodeTier: 0,
+        explodeSliceFactor: 0.35,
+        build(S, rng) {
+          const warmGrey = mixC(MCOL.stone, C('#97846e'), .52);
+          // A broad river pebble, a squat neighbour and two smaller chips.
+          const stone = (x, z, width, height, depth, angle, colour) => {
+            const grain = rng.range(0, 40);
+            S.add(gIco(1), {
+              p: [x, height * .42, z], s: [width, height, depth], r: [0, angle, 0],
+              c: colour, l: L_ROCK, rough: .72, uvs: 1,
+              deform(v) {
+                const wear = .94 + .12 * vnoise(v.x / width + grain, v.z / depth + grain, 7);
+                v.x *= wear;
+                v.z *= wear;
+                v.y = Math.max(-height * .5, v.y);
+                if (v.y > height * .62) v.y = height * .62 + (v.y - height * .62) * .48;
+              }
+            });
+          };
+          stone(-.066, -.024, .133, .055, .093, -.42, warmGrey);
+          stone(.105, -.015, .080, .050, .068, .68, mixC(MCOL.stoneD, warmGrey, .60));
+          stone(.047, .117, .056, .035, .040, -.76, mixC(warmGrey, MCOL.stoneL, .48));
+          stone(-.105, .106, .034, .025, .028, .34, mixC(MCOL.stoneD, warmGrey, .42));
+        }
       }
     };
     if (HASH.stack !== '1') { // #stack=1 keeps the old sprite-stack versions for comparison
@@ -7259,6 +7333,13 @@
           const ghostMat = new THREE.MeshBasicMaterial({ color: '#a8ffbe', transparent: true, opacity: 0.55, depthWrite: false });
           if (def.connect) foldArms(ghostMat, 'uConn', 'mori-soup-arms-ghost'); // the ghost shows the joins it would make
           const ghostMesh = new THREE.Mesh(asset.geometry, ghostMat);
+          if (def.id === 'pebbles') {
+            asset.geometry.setAttribute('aVariant', new THREE.InstancedBufferAttribute(new Float32Array(MAX_INSTANCES), 1));
+            ghostMesh.userData.pebbleLook = { value: 0 };
+            shapePebbles(soupMat, 'colour');
+            shapePebbles(instMesh.customDepthMaterial, 'depth');
+            shapePebbles(ghostMat, 'preview', ghostMesh.userData.pebbleLook);
+          }
           if (def.connect) ghostMesh.userData.conn = ghostMat.userData.conn;
           ghostMesh.visible = false;
           scene.add(ghostMesh);
@@ -7877,6 +7958,8 @@
       // Rotations are kept in quarter turns (rotation * PI/2), in 15° steps: k/6. Things that take their
       // heading from neighbours or the ground (paths, fences, walls, stairs, the dock) stay on quarter turns.
       let currentRotation = 0;
+      const randomFreeScale = () => 0.88 + Math.random() * 0.24;
+      let nextPebbleScale = randomFreeScale();
       const TURN_STEPS = 24;
       const turnStep = (r, dir) => (((Math.round(r * 6) + dir) % TURN_STEPS) + TURN_STEPS) % TURN_STEPS / 6;
       const fixedTurn = (def) => !def || def.type === 'auto_path' || def.type === 'auto_fence' || !!def.connect || !!def.stairs || !!def.shore;
@@ -8132,6 +8215,7 @@
       /* ---- COLLISION VALIDATION (PREVENTS UNREALISTIC CLIPPING / OVERLAP) ---- */
       const PROP_SELF_RADIUS = {
         rocks: 0.28,
+        pebbles: 0.22,
         flowers: 0.12,
         reeds: 0.11,
         mushrooms: 0.10,
@@ -8563,7 +8647,7 @@
           let n = 0;
           const put = (item) => {
             if (n >= MAX_INSTANCES) return;
-            if (vari) vari[n] = variantAt(def, item.wx, item.wz);
+            if (vari) vari[n] = def.id === 'pebbles' ? pebbleLook(item.scale) : variantAt(def, item.wx, item.wz);
             if (conn) conn[n] = item.conn ?? 0;
             dummyObj.position.set(item.wx, item.wy, item.wz);
             dummyObj.rotation.set(0, item.rotation * (Math.PI / 2), 0);
@@ -9623,9 +9707,10 @@
             wx: hit.wx,
             wz: hit.wz,
             rotation: currentRotation,
-            scale: 0.88 + Math.random() * 0.24,
+            scale: selectedTool === 'pebbles' ? nextPebbleScale : randomFreeScale(),
             spawnT: performance.now() * 0.001
           });
+          if (selectedTool === 'pebbles') nextPebbleScale = randomFreeScale();
           rebuildInstances();
           triggerPlaceJuice(def, hit.wx, getContinuousTerrainHeight(hit.wx, hit.wz), hit.wz);
         } else {
@@ -9938,6 +10023,10 @@
             ghost.visible = true;
             ghost.position.set(wx, wy + 0.02, wz);
             ghost.rotation.y = currentRotation * (Math.PI / 2);
+            if (ghost.userData.pebbleLook) {
+              ghost.userData.pebbleLook.value = pebbleLook(nextPebbleScale);
+              ghost.scale.setScalar(nextPebbleScale);
+            }
             setGhostValidityColor(ghost, valid);
           }
         } else {

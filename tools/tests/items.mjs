@@ -30,7 +30,8 @@ export default async ({ wait, evaluate, mouse, key, log }) => {
   }
   let ti = 0;
   const placeSomewhere = async (tool) => {
-    await evaluate(`document.querySelector('#hud-dock [data-tool="${tool}"]').click()`);
+    // Clicking the selected card puts it down. Keep it held for repeated placements.
+    await evaluate(`if (window.__mori.state().tool !== "${tool}") document.querySelector('#hud-dock [data-tool="${tool}"]').click()`);
     await wait(300);
     for (let tries = 0; tries < 14 && ti < tiles.length; tries++) {
       const [wx, wz] = tiles[ti++];
