@@ -235,6 +235,45 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
   ok('old wall tiles: a run each way from the corner', walls.length === 2, JSON.stringify(walls.map((l) => l.pts.slice(0, 2).concat(l.pts.slice(-2)))));
   ok('no tile fences or walls left in the save', !(await J(`JSON.parse(${M}.islandList()).placed.some((p) => p[0] === 'fence' || p[0] === 'stonewall')`)));
 
+  // ---- erasing only touches the piece under the pointer: no post further along moves or floats away ----
+  // a long straight fence and a closed loop, written into the save
+  const loopPts = []; for (let k = 0; k <= 30; k++) { const a = 2 * Math.PI * (k % 30) / 30; loopPts.push(cx + 0.6 * Math.cos(a), cz + 0.6 * Math.sin(a)); }
+  const straight = []; for (let k = 0; k <= 24; k++) straight.push(-2.5, -1.5 + k * 0.125);
+  await evaluate(`(() => { const d = JSON.parse(${M}.saveRaw()); d.island.placed = d.island.placed.filter((p) => p[0] !== 'fence');
+    d.island.lines = [['fence', ${JSON.stringify(straight)}], ['fence', ${JSON.stringify(loopPts)}]]; localStorage.setItem('mori-isle.v1.auto', JSON.stringify(d)); })()`);
+  await evaluate('location.reload()');
+  await wait(1500);
+  for (let i = 0; i < 60; i++) { if (await evaluate('!!window.__mori')) break; await wait(500); }
+  await wait(3000);
+  await tool('delete');
+  await evaluate(`${M}.vanishHold(true)`);
+  // each cut: the posts that stood before and are still on a remaining bay stay; what floats away is by the pointer
+  const eraseAt = async (name, wx, wz) => {
+    await evaluate(`${M}.vanishHold(false)`); await wait(1500);
+    await evaluate(`${M}.vanishHold(true)`);
+    const [x, y] = await at(wx, wz, 0.15);
+    await mouse('mouseMoved', x, y); await wait(500);
+    const et = await J(`${M}.eraseTarget()`);
+    await mouse('mousePressed', x, y, { button: 'left', buttons: 1, clickCount: 1 });
+    await mouse('mouseReleased', x, y, { button: 'left', clickCount: 1 });
+    await wait(500);
+    const gone = await J(`${M}.lineVanishing()`);
+    const far = gone.length && et ? Math.max(...gone.map((v) => Math.hypot(v[1] - et.x, v[2] - et.z))) : 99;
+    ok(`${name}: only the piece by the pointer floats away`, et && et.kind === 'line' && far < 0.45, `farthest ${far.toFixed(2)} of ${gone.length}`);
+  };
+  await eraseAt('straight fence, near its start', -2.5, -1.5 + 2.5 * 0.125);
+  await eraseAt('straight fence, again further on', -2.5, -1.5 + 13.5 * 0.125);
+  await eraseAt('closed loop', loopPts[16], loopPts[17]);
+  // the shifted post spacing survives a save and reload
+  const kept = JSON.stringify(await lines()), keptParts = JSON.stringify(await J(`${M}.lineParts('fence')`));
+  await J(`${M}.autosaveNow()`);
+  await evaluate('location.reload()');
+  await wait(1500);
+  for (let i = 0; i < 60; i++) { if (await evaluate('!!window.__mori')) break; await wait(500); }
+  await wait(3000);
+  const again = await J(`${M}.lineParts('fence')`);
+  ok('after cutting, reload keeps lines and posts', JSON.stringify(await lines()) === kept && again.posts === JSON.parse(keptParts).posts && again.bays === JSON.parse(keptParts).bays, JSON.stringify([again, keptParts]));
+
   await wait(1500);
   const errs = await J('window.__errs');
   ok('no console errors or warnings', errs.length === 0, errs.slice(0, 3).join(' | '));

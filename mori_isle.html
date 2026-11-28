@@ -8540,7 +8540,8 @@
         return assetsById[id]?.def.solidRadius || 0.24;
       }
       /* ---- LINES: fences and walls drawn as free curves (models: LINES, section 4B) ----
-         fenceLines: { id, pts: [x0, z0, x1, z1, ...] } in island space. Neighbouring points are one bay
+         fenceLines: { id, pts: [x0, z0, x1, z1, ...], ph } in island space (ph: where the post spacing
+         starts, bays; 0 when drawn. A cut hands it on, so the posts left standing never move). Neighbouring points are one bay
          (one instance) apart, about a step long; posts stand at the ends, every postEvery bays, and
          either side of a path crossing the line (those bays are left out while the path is there).
          Every bay and post has a key from where it stands: a key that appears drops in (lineBorn holds
@@ -8640,7 +8641,7 @@
           for (let b = 0; b <= n; b++) {
             const before = b > 0 && !gap[b - 1], after = b < n && !gap[b];
             if (!before && !after) continue;
-            if (b !== 0 && b !== n && before === after && !(L.postEvery && b % L.postEvery === 0)) continue;
+            if (b !== 0 && b !== n && before === after && !(L.postEvery && (b + (ln.ph || 0)) % L.postEvery === 0)) continue;
             const x = P[b * 2], z = P[b * 2 + 1], key = lineKey('p', ln.id, x, z);
             if (postSeen.has(key)) continue; // two lines meeting end to end share one post
             postSeen.add(key);
@@ -9752,7 +9753,7 @@
           snap: snapProps.map((o) => [o.id, o.wx, o.wz, o.rotation]),
           free: freeProps.map((fp) => [fp.id, fp.wx, fp.wz, fp.rotation, fp.scale]),
           seeds: seedFlowers.filter((f) => !f.erased).map((f) => [f.wx, f.wz, f.rot, f.scale, f.tint]),
-          lines: fenceLines.map((ln) => [ln.id, ln.pts.slice()])
+          lines: fenceLines.map((ln) => [ln.id, ln.pts.slice(), ln.ph || 0])
         };
       }
       // saves from before fences and walls were drawn as lines kept them as tiles: each straight run of
@@ -9812,12 +9813,13 @@
           if (onIsland(wx, wz) && num(rot) && num(scale) && scale > 0.1 && scale < 4 && Number.isInteger(tint) && tint >= 0 && tint < SEED_TINTS.length) seeds.push({ wx, wz, rot, scale, tint });
         }
         const lines = [];
-        for (const [id, pts] of list(isl.lines)) {
+        for (const [id, pts, ph] of list(isl.lines)) {
           const def = defOf(id);
           if (!def || !def.line || !Array.isArray(pts) || pts.length < 4 || pts.length % 2 || pts.length > 20000) continue;
           let good = true;
           for (let k = 0; k < pts.length && good; k += 2) if (!onIsland(pts[k], pts[k + 1])) good = false;
-          if (good) lines.push({ id, pts: pts.slice() });
+          const every = def.line.postEvery;
+          if (good) lines.push({ id, pts: pts.slice(), ph: every && Number.isInteger(ph) && ph > 0 ? ph % every : 0 });
         }
         for (const id in oldLines) lines.push(...linesFromTiles(id, oldLines[id]));
         return { level, mat: mt, placed, snap, free, seeds, lines, editableLilies: isl.editableLilies === true };
@@ -9838,7 +9840,7 @@
         for (const fp of isl.free) freeProps.push({ ...fp });
         if (!isl.editableLilies) addStarterLilies(); // old saves stored the pads in the scenery
         for (const f of isl.seeds) seedFlowers.push({ ...f, spawnT: -100 });
-        fenceLines = isl.lines.map((ln) => ({ id: ln.id, pts: ln.pts.slice() }));
+        fenceLines = isl.lines.map((ln) => ({ ...ln, pts: ln.pts.slice() }));
         if (rebuild) rebuildInstances();
       }
       /* ---- UNDO / REDO (eraser step 3): Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y ---- */
@@ -9923,7 +9925,7 @@
         snapProps.length = 0; snapProps.push(...snap);
         freeProps.length = 0; freeProps.push(...free);
         seedFlowers.length = 0; seedFlowers.push(...seeds);
-        fenceLines = isl.lines.map((ln) => ({ id: ln.id, pts: ln.pts.slice() })); // bays that differ drop in or float away (computeLines)
+        fenceLines = isl.lines.map((ln) => ({ ...ln, pts: ln.pts.slice() })); // bays that differ drop in or float away (computeLines)
         rebuildInstances();
       }
       function readSave(key) {
@@ -10504,11 +10506,11 @@
         } else if (t.kind === 'line') { // cut the piece out: the line splits in two (a loop opens)
           const ln = t.ref.line, k = fenceLines.indexOf(ln);
           if (k < 0) return false;
-          const [a, b] = lineCut(t.ref), P = ln.pts, n = P.length / 2 - 1;
-          const head = P.slice(0, (a + 1) * 2), tail = P.slice((b + 1) * 2);
-          const loop = n >= 3 && Math.hypot(P[0] - P[P.length - 2], P[1] - P[P.length - 1]) < 1e-6;
-          const parts = loop ? [tail.concat(head.slice(2))] : [head, tail];
-          fenceLines.splice(k, 1, ...parts.filter((p) => p.length >= 4).map((pts) => ({ id: ln.id, pts })));
+          // head and tail keep their points and post spacing, so only the cut piece (and the posts at the new
+          // ends) changes; a loop stays two lines meeting at its start, sharing that post
+          const [a, b] = lineCut(t.ref), P = ln.pts, every = lineDef(ln.id).line.postEvery, ph = ln.ph || 0;
+          const parts = [{ id: ln.id, pts: P.slice(0, (a + 1) * 2), ph }, { id: ln.id, pts: P.slice((b + 1) * 2), ph: every ? (ph + b + 1) % every : 0 }];
+          fenceLines.splice(k, 1, ...parts.filter((p) => p.pts.length >= 4));
           rebuildInstances();
         } else if (t.kind === 'placed') {
           const key = `${t.ref.gx},${t.ref.gz}`;
@@ -12367,6 +12369,7 @@
           lineBlocked: (id, x0, z0, x1, z1) => lineBayBlocked(assetsById[id].def, x0, z0, x1, z1),
           lineGhost: (id) => { const g = ghostMeshesById[id]; return { visible: g.visible, x: g.position.x, z: g.position.z, dx: Math.cos(g.rotation.y), dz: -Math.sin(g.rotation.y), ok: g.material.color.getHexString() !== 'ff5252' }; },
           lineClickPlan: (id, x, z) => lineClickPlan(assetsById[id].def, x, z),
+          lineVanishing: () => vanishing.filter((v) => v.matrix).map((v) => [v.id, v.matrix.elements[12], v.matrix.elements[14]]), // bays and posts floating away
           lineTris: (id) => [instancedById[id].geometry.attributes.position.count / 3, instancedById[id + ':post'].geometry.attributes.position.count / 3],
           // step stones as drawn (instance positions, still standing ones) and the rules they follow
           stones: () => { const m = instancedById.steppingstone, e = m.instanceMatrix.array, v = m.geometry.attributes.aVanish.array, out = []; for (let i = 0; i < m.count; i++) if (v[i] > 1e8) out.push([e[i * 16 + 12], e[i * 16 + 13], e[i * 16 + 14]]); return out; },
