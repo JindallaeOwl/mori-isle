@@ -7922,11 +7922,9 @@
       });
       const dustPoints = new THREE.Points(dustGeo, dustMat);
       dustPoints.frustumCulled = false;
-      dustPoints.visible = false;
       scene.add(dustPoints);
       let dustCursor = 0;
       function burstDust(x, y, z, n = 12, radius = 0.3) {
-        dustPoints.visible = true;
         for (let k = 0; k < n; k++) {
           const i = dustCursor; dustCursor = (dustCursor + 1) % DUST_COUNT;
           const a = Math.random() * Math.PI * 2;
@@ -8077,23 +8075,22 @@
       }
 
       function updateDust(dt) {
-        if (!dustPoints.visible) return;
         let any = false;
         for (let i = 0; i < DUST_COUNT; i++) {
           if (dustLife[i] <= 0) continue;
+          any = true;
           dustLife[i] -= dt * 2.6;
-          if (dustLife[i] > 0) any = true;
           dustVel[i * 3] *= 0.9; dustVel[i * 3 + 2] *= 0.9;
           dustVel[i * 3 + 1] -= dt * 3.0;
           dustPos[i * 3] += dustVel[i * 3] * dt;
           dustPos[i * 3 + 1] += Math.max(dustVel[i * 3 + 1], -0.2) * dt;
           dustPos[i * 3 + 2] += dustVel[i * 3 + 2] * dt;
         }
-        dustPoints.visible = any;
-        if (any) {
+        if (any || dustGeo.userData.wasActive) {
           dustGeo.attributes.position.needsUpdate = true;
           dustGeo.attributes.aLife.needsUpdate = true;
         }
+        dustGeo.userData.wasActive = any;
       }
 
       let shakeStart = -10, shakeAmp = 0;
@@ -10909,7 +10906,6 @@
             ? fireFlicker(elapsed, g.seed)
             : (0.95 + 0.05 * noise1(elapsed * 1.7, g.seed));
           g.sprite.material.opacity = glowPower * 0.72 * flick * introLightK(g.sprite.position.x, g.sprite.position.z, elapsed);
-          g.sprite.visible = g.sprite.material.opacity > 0;
           const liftY = g.isCabin ? pMid * 1.68 : (g.tier === 1 ? pMid * 1.28 : pProps * 0.42);
           g.sprite.position.y = g.baseY + liftY;
           const sc = g.baseScale * (0.94 + 0.08 * flick);
@@ -11092,18 +11088,16 @@
         // Pass 1: Render 3D scene to WebGLRenderTarget
         renderer.setRenderTarget(renderTarget);
         renderer.setClearColor(0x000000, 0);
+        renderer.clear();
         renderer.render(scene, camera);
 
         // Pass 2: Low-res post pipeline (AO + lit mist -> depth tilt-shift -> bloom -> grade + dither)
-        // Each post pass overwrites its whole target, including the final screen pass.
-        renderer.autoClear = false;
         runPostPipeline();
 
         // Pass 3: Sharp upscale to the screen + film grain
         upMat.uniforms.uSeed.value = (elapsed * 60 % 1000) * 7.13;
         renderer.setRenderTarget(null);
         renderer.render(upScene, postCamera);
-        renderer.autoClear = true;
         if (thumbWaiting.length) captureThumb(); // same task as the draw: the canvas still holds this frame
         // behind the loader the finished island is drawn a few times first, so every shader and the
         // shadow map are compiled before the player presses start (no hitch when the assembly begins)
