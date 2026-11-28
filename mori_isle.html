@@ -6990,31 +6990,151 @@
       pathMesh.count = 0; // tiles in the mesh (the visibility code reads it like an InstancedMesh count)
       chunkTopSurface.add(pathMesh);
       const PATH_STONE = C('#bfae92'), PATH_DIRT = C('#8a6846'), PATH_PEBBLE = C('#a59c90');
-      // tiles: { gx, gz, wx, wy, wz, conns: [[dx, dz], ...] }
-      function buildPathGeometry(tiles) {
-        const S = new Soup(), K = 16, RIM = 0.08;
+      // tiles: { gx, gz, wx, wy, wz, conns: [[dx, dz, reach], ...] } (reach: how far the arm runs from the
+      // tile centre, 0.5 = the tile edge; longer into a cabin door or down to the foot of stairs).
+      // opts.stairs: [{ wx, wz, dx, dz }] stairs footprints the path (and its kerb) stops at; opts.flat: icon (no terrain).
+      // The whole network is one distance field (centre lines: a gently wandering run, a quarter arc round a
+      // bend, smooth-joined branches) meshed on a 1/16 grid, so runs, bends and junctions flow into each other
+      // with no seams. It follows the ground and ends where the ground falls away (terrace edge, pond shore,
+      // island rim), the dirt kerb running down to the real turf, so nothing hangs in the air.
+      const PATH_W = 0.27, PATH_RIM = 0.08, PATH_LIFT = 0.045, PATH_H = 1 / 16;
+      function buildPathGeometry(tiles, opts = {}) {
+        const S = new Soup();
         soupRng = makeRng(404);
-        for (const t of tiles) {
-          const y = t.wy + 0.045, yl = t.wy + 0.004, c = [t.wx, y, t.wz];
-          const R = []; for (let k = 0; k < K; k++) R.push(0.38 + 0.07 * (h2(t.gx * 31 + k, t.gz, 401) - 0.5));
-          const P = (k, extra, yy) => { const a = (k / K) * TAU, r = R[k % K] + extra; return [t.wx + Math.cos(a) * r, yy, t.wz + Math.sin(a) * r]; };
-          for (let k = 0; k < K; k++) {
-            const a = P(k, 0, y), b = P(k + 1, 0, y);
-            S.tri(c, b, a, PATH_STONE, L_COBBLE, 0.62, { uvs: 1.0 });
-            S.quad(a, b, P(k + 1, RIM, yl), P(k, RIM, yl), PATH_DIRT, L_DIRT, 0.95, { uvs: 0.55 });
+        if (!tiles.length) return S.build({ groups: 1, ao: null });
+        const flat = !!opts.flat, stairs = opts.stairs || [];
+        const ground = flat ? () => 0 : (x, z) => {
+          let y = getContinuousTerrainHeight(x, z);
+          const bd = Math.min(HALF_GRID - Math.abs(x), HALF_GRID - Math.abs(z));
+          if (bd < 0.18) y -= (0.18 - bd) * 0.45;
+          return y;
+        };
+        const width = (x, z) => PATH_W + 0.06 * (vnoise(x * 2.7, z * 2.7, 411) - 0.5) + 0.022 * (vnoise(x * 9.1, z * 9.1, 413) - 0.5);
+        const segD = (px, pz, a, b) => {
+          const vx = b[0] - a[0], vz = b[1] - a[1], wx = px - a[0], wz = pz - a[1];
+          const t = clamp((wx * vx + wz * vz) / (vx * vx + vz * vz || 1), 0, 1);
+          return Math.hypot(wx - vx * t, wz - vz * t);
+        };
+        const lineD = (px, pz, pts) => { let d = 9; for (let i = 1; i < pts.length; i++) d = Math.min(d, segD(px, pz, pts[i - 1], pts[i])); return d; };
+        const smin = (a, b, k) => { const h = clamp(0.5 + 0.5 * (b - a) / k, 0, 1); return b + (a - b) * h - k * h * (1 - h); };
+        // centre lines per tile
+        const shapes = tiles.map((t) => {
+          const c = [t.wx, t.wz], E = (d, r = 0.5) => [t.wx + d[0] * r, t.wz + d[1] * r];
+          const lines = [], conns = t.conns;
+          let blob = 0;
+          const opp = conns.length === 2 && conns[0][0] === -conns[1][0] && conns[0][1] === -conns[1][1];
+          const bend = conns.length === 2 && !opp;
+          if (!conns.length) blob = 1;
+          else if (opp) { // a run: wanders a little to one side mid-tile, back on the axis at both edges
+            const [a, b] = conns, A = 0.07 * (h2(t.gx, t.gz, 417) - 0.5) * 2, px = -a[1], pz = a[0], pts = [];
+            for (let i = 0; i <= 8; i++) {
+              const s = i / 8, f = -0.5 + s, o = A * Math.sin(Math.PI * s);
+              pts.push([t.wx + b[0] * f + px * o, t.wz + b[1] * f + pz * o]);
+            }
+            lines.push(pts);
+          } else if (bend) { // a quarter arc round the shared corner, edge middle to edge middle
+            const [a, b] = conns, k = [t.wx + (a[0] + b[0]) * 0.5, t.wz + (a[1] + b[1]) * 0.5], pts = [];
+            const ea = E(a), eb = E(b);
+            const angA = Math.atan2(ea[1] - k[1], ea[0] - k[0]), angB0 = Math.atan2(eb[1] - k[1], eb[0] - k[0]);
+            let dA = angB0 - angA; while (dA > Math.PI) dA -= TAU; while (dA < -Math.PI) dA += TAU;
+            for (let i = 0; i <= 10; i++) { const g = angA + dA * i / 10; pts.push([k[0] + Math.cos(g) * 0.5, k[1] + Math.sin(g) * 0.5]); }
+            lines.push(pts);
+          } else for (const d of conns) lines.push([c, E(d)]); // dead end or junction: arms from the middle
+          for (const d of conns) if ((d[2] || 0.5) > 0.5) lines.push([E(d), E(d, d[2])]); // on into a door / down to stairs
+          let x0 = t.wx - 0.5, x1 = t.wx + 0.5, z0 = t.wz - 0.5, z1 = t.wz + 0.5;
+          for (const d of conns) { const e = E(d, d[2] || 0.5); x0 = Math.min(x0, e[0]); x1 = Math.max(x1, e[0]); z0 = Math.min(z0, e[1]); z1 = Math.max(z1, e[1]); }
+          return { t, lines, blob, k: conns.length > 2 ? 0.16 : 0.06, box: [x0 - 0.2, x1 + 0.2, z0 - 0.2, z1 + 0.2] };
+        });
+        const tileF = (sh, x, z) => {
+          const t = sh.t, w = width(x, z);
+          let d;
+          if (sh.blob) d = Math.hypot(x - t.wx, z - t.wz) - (w + 0.06);
+          else { d = 9; for (const L of sh.lines) d = smin(d, lineD(x, z, L), sh.k); d -= w; }
+          if (!flat) d = Math.max(d, (t.wy - ground(x, z) - 0.02) * 2.2); // ends where the ground falls away
+          return d;
+        };
+        const byTile = new Map();
+        for (const sh of shapes) byTile.set(Math.floor(sh.t.wx + HALF_GRID) * 64 + Math.floor(sh.t.wz + HALF_GRID), sh);
+        const F = (x, z) => { // only tiles within two of this point can reach it (stairs arms run 1.2 out)
+          let f = 9;
+          const gx = Math.floor(x + HALF_GRID), gz = Math.floor(z + HALF_GRID);
+          for (let a = gx - 2; a <= gx + 2; a++) for (let b2 = gz - 2; b2 <= gz + 2; b2++) {
+            const sh = byTile.get(a * 64 + b2); if (!sh) continue;
+            const b = sh.box; if (x >= b[0] && x <= b[1] && z >= b[2] && z <= b[3]) f = Math.min(f, tileF(sh, x, z));
           }
-          for (const [dx, dz] of t.conns) { // arm to the tile edge, with sloped dirt kerbs on both sides
-            const px = -dz, pz = dx, hw = 0.3, L = 0.53;
-            const at = (s, f, yy) => [t.wx + px * s + dx * f, yy, t.wz + pz * s + dz * f];
-            S.quad(at(hw, 0, y), at(hw, L, y), at(-hw, L, y), at(-hw, 0, y), PATH_STONE, L_COBBLE, 0.62, { uvs: 1.0 });
-            S.quad(at(hw, L, y), at(hw, 0, y), at(hw + RIM, 0, yl), at(hw + RIM, L, yl), PATH_DIRT, L_DIRT, 0.95, { uvs: 0.55 });
-            S.quad(at(-hw, 0, y), at(-hw, L, y), at(-hw - RIM, L, yl), at(-hw - RIM, 0, yl), PATH_DIRT, L_DIRT, 0.95, { uvs: 0.55 });
+          return f;
+        };
+        // > 0 inside a stairs footprint (path and kerb both stop there)
+        const Cut = (x, z) => {
+          let c = -9;
+          for (const s of stairs) {
+            const qx = x - s.wx, qz = z - s.wz, a = qx * s.dx + qz * s.dz, sd = Math.abs(qx * -s.dz + qz * s.dx);
+            c = Math.max(c, -Math.max(sd - 0.3, 0.15 - a, a - 0.8));
           }
-          for (let k = 0; k < 3; k++) { // loose pebbles kicked to the side
-            const a = h2(t.gx, t.gz * 7 + k, 405) * TAU, r = 0.44 + 0.06 * h2(t.gx, t.gz, 406 + k);
-            const px = t.wx + Math.cos(a) * r, pz = t.wz + Math.sin(a) * r;
-            if (t.conns.some(([dx, dz]) => Math.cos(a) * dx + Math.sin(a) * dz > 0.7)) continue; // not on an arm
-            S.rock(0.03 + 0.03 * h2(t.gx, t.gz, 409 + k), px, t.wy + 0.02, pz, PATH_PEBBLE, { d: 0, rough: 0.7 });
+          return c;
+        };
+        // sample the field on the grid nodes near path tiles
+        const H = PATH_H, nodes = new Map(), key = (i, j) => i * 4096 + j, cells = new Set();
+        for (const sh of shapes) {
+          const b = sh.box;
+          for (let i = Math.floor(b[0] / H); i < Math.ceil(b[1] / H); i++) for (let j = Math.floor(b[2] / H); j < Math.ceil(b[3] / H); j++) cells.add(key(i + 2048, j + 2048));
+        }
+        const node = (i, j) => {
+          const kk = key(i + 2048, j + 2048);
+          let n = nodes.get(kk);
+          if (!n) { const x = i * H, z = j * H; n = { x, z, f: F(x, z), c: stairs.length ? Cut(x, z) : -9 }; nodes.set(kk, n); }
+          return n;
+        };
+        const lerpN = (a, b, t) => ({ x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t, f: a.f + (b.f - a.f) * t, c: a.c + (b.c - a.c) * t });
+        const clip = (poly, val, keepBelow) => { // keep val(v) <= 0 (or >= 0)
+          const out = [], s = keepBelow ? 1 : -1;
+          for (let i = 0; i < poly.length; i++) {
+            const a = poly[i], b = poly[(i + 1) % poly.length], va = val(a) * s, vb = val(b) * s;
+            if (va <= 0) out.push(a);
+            if ((va < 0 && vb > 0) || (va > 0 && vb < 0)) out.push(lerpN(a, b, va / (va - vb)));
+          }
+          return out;
+        };
+        const liftAt = (v) => PATH_LIFT - 0.03 * (1 - THREE.MathUtils.smoothstep(-v.c, 0, 0.15)); // flush with the stairs' treads
+        const emit = (poly, stone) => {
+          if (poly.length < 3) return;
+          const P = poly.map((v) => {
+            const lift = liftAt(v), y = ground(v.x, v.z) + (stone ? lift : THREE.MathUtils.lerp(lift, 0.004, clamp(v.f / PATH_RIM, 0, 1)));
+            return [v.x, y, v.z];
+          });
+          for (let i = 1; i < P.length - 1; i++) {
+            const a = P[0], b = P[i], c = P[i + 1];
+            const up = (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]) > 0;
+            if (stone) S.tri(a, up ? b : c, up ? c : b, PATH_STONE, L_COBBLE, 0.62, { uvs: 1.0 });
+            else S.tri(a, up ? b : c, up ? c : b, PATH_DIRT, L_DIRT, 0.95, { uvs: 0.55 });
+          }
+        };
+        const fv = (v) => v.f, cv = (v) => v.c, rv = (v) => v.f - PATH_RIM;
+        for (const kk of cells) {
+          const i = Math.floor(kk / 4096) - 2048, j = (kk % 4096) - 2048;
+          const n00 = node(i, j), n10 = node(i + 1, j), n01 = node(i, j + 1), n11 = node(i + 1, j + 1);
+          if (Math.min(n00.f, n10.f, n01.f, n11.f) > PATH_RIM) continue;
+          for (const tri of [[n00, n10, n11], [n00, n11, n01]]) {
+            emit(clip(clip(tri, fv, true), cv, true), true);
+            emit(clip(clip(clip(tri, fv, false), rv, true), cv, true), false);
+          }
+        }
+        // a few stones and pebbles bedded along the kerb
+        for (const sh of shapes) {
+          const t = sh.t;
+          for (let k = 0; k < 6; k++) {
+            const a = h2(t.gx * 13 + k, t.gz, 405) * TAU;
+            let x = t.wx + Math.cos(a) * 0.32, z = t.wz + Math.sin(a) * 0.32, f = F(x, z);
+            for (let it = 0; it < 5; it++) { // walk onto the kerb line
+              const e = 0.01, gx = (F(x + e, z) - F(x - e, z)) / (2 * e), gz = (F(x, z + e) - F(x, z - e)) / (2 * e), g2 = gx * gx + gz * gz;
+              if (g2 < 1e-6) break;
+              const s = (f - PATH_RIM * 0.55) / g2; x -= gx * s; z -= gz * s; f = F(x, z);
+            }
+            if (Math.abs(f - PATH_RIM * 0.55) > 0.02 || Math.abs(x - t.wx) > 0.5 || Math.abs(z - t.wz) > 0.5) continue;
+            if (stairs.length && Cut(x, z) > -0.06) continue;
+            if (h2(t.gx, t.gz * 5 + k, 419) < 0.35) continue;
+            const r = 0.022 + 0.026 * h2(t.gx, t.gz, 409 + k);
+            S.rock(r, x, ground(x, z) + 0.008, z, mixC(PATH_PEBBLE, PATH_STONE, h2(k, t.gx, 421) * 0.6), { d: 0, rough: 0.7, sq: 0.6 });
           }
         }
         return S.build({ groups: 1, ao: null });
@@ -7324,7 +7444,7 @@
         const path = new THREE.Group();
         const tile = new THREE.Mesh(createBeveledBoxGeometry(1.0, 0.1, 1.3, 0.03), grassMat); tile.position.y = -0.05; path.add(tile);
         const runMat = makeSoupMaterial(null);
-        const run = new THREE.Mesh(buildPathGeometry([{ gx: 3, gz: 5, wx: 0, wy: 0, wz: 0, conns: [[0, -1], [0, 1]] }]), runMat);
+        const run = new THREE.Mesh(buildPathGeometry([{ gx: 3, gz: 5, wx: 0, wy: 0, wz: 0, conns: [[0, -1, 0.5], [0, 1, 0.5]] }], { flat: true }), runMat);
         path.add(run);
         iconOf('path', path);
         run.geometry.dispose(); runMat.dispose();
@@ -8098,6 +8218,12 @@
       const rotDir = (rot) => [Math.round(Math.sin(rot * Math.PI / 2)), Math.round(Math.cos(rot * Math.PI / 2))]; // local +z in world
       const isStairs = (e) => !!assetsById[e.id]?.def.stairs;
       const stairsRect = (e) => localRect(STAIR_RECT, e.gx - HALF_GRID + 0.5, e.gz - HALF_GRID + 0.5, e.rotation);
+      // a path in front of the stairs runs on over the stairs' own tile to the first step: that strip is path too
+      const stairsFootRect = (e) => {
+        const [dx, dz] = rotDir(e.rotation), f = placedItems.get(`${e.gx - dx},${e.gz - dz}`);
+        if (!f || f.id !== 'path' || getTileElevation(e.gx - dx, e.gz - dz) !== getTileElevation(e.gx, e.gz)) return null;
+        return localRect([-0.3, 0.3, -0.5, 0.12], e.gx - HALF_GRID + 0.5, e.gz - HALF_GRID + 0.5, e.rotation);
+      };
       const stairsTop = (e) => { const [dx, dz] = rotDir(e.rotation); return [e.gx + dx, e.gz + dz]; };
       // which way stairs on this tile would climb: a side neighbour exactly one step up; with several,
       // the one the pointer leans toward. null = no step to climb here
@@ -8139,7 +8265,7 @@
           const ex = e.gx - HALF_GRID + 0.5, ez = e.gz - HALF_GRID + 0.5;
           if (e.id === 'path') { // may brush the path's edge, not stand on it
             if (rectsOverlap(r, { x0: ex - 0.3, x1: ex + 0.3, z0: ez - 0.3, z1: ez + 0.3 })) return true;
-          } else if (isStairs(e)) { if (rectsOverlap(r, stairsRect(e))) return true; }
+          } else if (isStairs(e)) { const fr = stairsFootRect(e); if (rectsOverlap(r, stairsRect(e)) || (fr && rectsOverlap(r, fr))) return true; }
           else if (rectHitsCircle(r, ex, ez, gridSolidR(e.id))) return true;
         }
         for (const rail of railRects()) if (rectsOverlap(r, rail)) return true;
@@ -8235,7 +8361,11 @@
         // 3. Solid grid-placed objects (campfire flames, tree trunks, benches, lanterns, fence posts)
         for (const entry of placedItems.values()) {
           if (entry.id === 'cabin' || entry.id === 'path') continue;
-          if (isStairs(entry)) { if (rectHitsCircle(stairsRect(entry), wx, wz, selfRadius)) return true; continue; }
+          if (isStairs(entry)) {
+            const fr = stairsFootRect(entry);
+            if (rectHitsCircle(stairsRect(entry), wx, wz, selfRadius) || (fr && rectHitsCircle(fr, wx, wz, selfRadius))) return true;
+            continue;
+          }
           const ex = entry.gx - HALF_GRID + 0.5;
           const ez = entry.gz - HALF_GRID + 0.5;
           let solidR = 0.24;
@@ -8600,11 +8730,20 @@
               crateClutterInst.setMatrixAt(crateIdx++, dummyObj.matrix);
             }
           } else if (def.type === 'auto_path') {
-            // cobbled pad, with arms to cardinal neighbors (path or cabin door) on the same elevation
+            // cobbled path, joined to side neighbours on the same elevation (path, cabin door) and to stairs
+            // that climb up to this tile or start from it (their foot is out on the stairs' own tile)
             const conns = [];
             for (const [dx, dz] of [[0, -1], [0, 1], [1, 0], [-1, 0]]) {
               const nb = placedItems.get(`${entry.gx + dx},${entry.gz + dz}`);
-              if (nb && (nb.id === 'path' || nb.id === 'cabin') && getTileElevation(entry.gx + dx, entry.gz + dz) === wy) conns.push([dx, dz]);
+              if (!nb) continue;
+              const same = getTileElevation(entry.gx + dx, entry.gz + dz) === wy;
+              if (nb.id === 'path' && same) conns.push([dx, dz, 0.5]);
+              else if (nb.id === 'cabin' && same) conns.push([dx, dz, 0.56]);
+              else if (isStairs(nb)) {
+                const [sx, sz] = rotDir(nb.rotation);
+                if (sx === -dx && sz === -dz) conns.push([dx, dz, 0.5]); // we are the top tile
+                else if (sx === dx && sz === dz && same) conns.push([dx, dz, 1.2]); // we are in front of the foot
+              }
             }
             pathTiles.push({ gx: entry.gx, gz: entry.gz, wx, wy, wz, conns });
           } else if (def.type === 'auto_fence') {
@@ -8680,7 +8819,9 @@
           activeCabins.push({ mesh: cabin, baseX: v.wx, baseY: v.wy, baseZ: v.wz, rotY: v.rotY, spawnT: -100, goneAt: v.goneAt });
         }
 
-        pathMesh.geometry.dispose(); pathMesh.geometry = buildPathGeometry(pathTiles); pathMesh.count = pathTiles.length;
+        const pathStairs = [];
+        placedItems.forEach((e) => { if (isStairs(e)) { const [dx, dz] = rotDir(e.rotation); pathStairs.push({ wx: e.gx - HALF_GRID + 0.5, wz: e.gz - HALF_GRID + 0.5, dx, dz }); } });
+        pathMesh.geometry.dispose(); pathMesh.geometry = buildPathGeometry(pathTiles, { stairs: pathStairs }); pathMesh.count = pathTiles.length;
         fencePostInst.count = fencePostIdx; fencePostInst.instanceMatrix.needsUpdate = true;
         fenceRailInst.count = fenceRailIdx; fenceRailInst.instanceMatrix.needsUpdate = true;
         crateClutterInst.count = crateIdx; crateClutterInst.instanceMatrix.needsUpdate = true;
@@ -9329,7 +9470,7 @@
           if (e.id === 'cabin') continue;
           const ex = e.gx - HALF_GRID + 0.5, ez = e.gz - HALF_GRID + 0.5;
           if (e.id === 'path') { if (rectHitsCircle({ x0: ex - 0.46, x1: ex + 0.46, z0: ez - 0.46, z1: ez + 0.46 }, cx, cz, CELL_R + 0.04)) return true; }
-          else if (isStairs(e)) { if (rectHitsCircle(stairsRect(e), cx, cz, R)) return true; }
+          else if (isStairs(e)) { const fr = stairsFootRect(e); if (rectHitsCircle(stairsRect(e), cx, cz, R) || (fr && rectHitsCircle(fr, cx, cz, R))) return true; }
           else if (Math.hypot(cx - ex, cz - ez) < Math.max(0.18, gridSolidR(e.id)) + R) return true; // stays off isPondTile
         }
         for (const rail of railRects()) if (rectHitsCircle(rail, cx, cz, R)) return true;
@@ -11392,6 +11533,24 @@
           stones: () => { const m = instancedById.steppingstone, e = m.instanceMatrix.array, v = m.geometry.attributes.aVanish.array, out = []; for (let i = 0; i < m.count; i++) if (v[i] > 1e8) out.push([e[i * 16 + 12], e[i * 16 + 13], e[i * 16 + 14]]); return out; },
           waterY: (x, z) => getHillHeight(x, z) + WATER_SURF,
           stoneOk: (x, z) => stoneSpotOk(x, z),
+          // the path mesh: triangles, how far any vertex stands above the smooth ground (no turf relief), and
+          // with stairs (centre, climb direction) how far along the flight path vertices reach at the foot and top
+          pathStats: (sx, sz, dx, dz) => {
+            const p = pathMesh.geometry.attributes.position, out = { tris: p ? p.count / 3 : 0, float: 0, foot: -9, top: 9, onFlight: 0 };
+            if (!p) return out;
+            const m = pathMesh.matrixWorld.elements, ox = m[12], oy = m[13], oz = m[14];
+            for (let i = 0; i < p.count; i++) {
+              const x = p.getX(i) + ox, y = p.getY(i) + oy, z = p.getZ(i) + oz;
+              let g = getContinuousTerrainHeight(x, z); const bd = Math.min(HALF_GRID - Math.abs(x), HALF_GRID - Math.abs(z)); if (bd < 0.18) g -= (0.18 - bd) * 0.45;
+              out.float = Math.max(out.float, y - g);
+              if (sx === undefined) continue;
+              const qx = x - sx, qz = z - sz, a = qx * dx + qz * dz, s = Math.abs(qx * -dz + qz * dx);
+              if (s > 0.2) continue;
+              if (a < 0.5) out.foot = Math.max(out.foot, a); else out.top = Math.min(out.top, a);
+              if (a > 0.17 && a < 0.78) out.onFlight++;
+            }
+            return out;
+          },
           wallTris: (id = 'stonewall') => { const a = instancedById[id].geometry.attributes.aArm.array, n = [0, 0, 0, 0, 0]; for (let v = 0; v < a.length; v += 3) n[a[v]]++; return n; }, // [middle, arm 1..4]
           wallGhostConn: () => { const g = ghostMeshesById.stonewall; return g.visible ? g.userData.conn.value : null; },
           undo: (dir = -1) => undoRedo(dir),

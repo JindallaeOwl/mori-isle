@@ -226,6 +226,23 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
     ok('erased the stairs', (await J(`${M}.state()`)).placed === n1);
     await J(`${M}.undo(-1)`); await wait(1500);
     ok('undo puts them back', (await J(`${M}.state()`)).placed === n1 + 1);
+    // paths at the top and in front of the foot run on to the stairs, never onto the flight, and lie on the ground
+    const front = [foot.gx - dx, foot.gz - dz];
+    const frontFree = front[0] >= 0 && front[1] >= 0 && front[0] < 12 && front[1] < 12 && !taken(front[0], front[1])
+      && (await J(`${M}.terrainLevel(${front[0]}, ${front[1]})`)) === (await J(`${M}.terrainLevel(${foot.gx}, ${foot.gz})`));
+    await tool('path');
+    const n2 = (await J(`${M}.state()`)).placed;
+    await clickWorld(tileW(top[0]), tileW(top[1]));
+    if (frontFree) await clickWorld(tileW(front[0]), tileW(front[1]));
+    ok('paths placed at the top (and the foot)', (await J(`${M}.state()`)).placed === n2 + 1 + (frontFree ? 1 : 0), JSON.stringify({ front, frontFree }));
+    const ps = await J(`${M}.pathStats(${tileW(foot.gx)}, ${tileW(foot.gz)}, ${dx}, ${dz})`);
+    ok('path reaches the top step', ps.top > 0.76 && ps.top < 0.84, JSON.stringify(ps));
+    if (frontFree) ok('path runs on to the first step', ps.foot > 0.1 && ps.foot < 0.2, JSON.stringify(ps));
+    ok('nothing of the path on the flight', ps.onFlight === 0, JSON.stringify(ps));
+    ok('no path vertex hangs above the ground', ps.float < 0.05, JSON.stringify(ps));
+    await J(`${M}.undo(-1)`); await wait(1500);
+    if (frontFree) { await J(`${M}.undo(-1)`); await wait(1500); }
+    ok('undo takes the paths away again', (await J(`${M}.state()`)).placed === n2);
     // flat ground: a free tile with no side neighbour one step up refuses stairs
     let flat = null;
     for (let gz2 = 1; gz2 < 11 && !flat; gz2++) for (let gx2 = 1; gx2 < 11 && !flat; gx2++) {
