@@ -71,7 +71,29 @@ export default async ({ wait, evaluate, mouse, send, log }) => {
   await tool('fence');
   const [hx, hy] = await at(arcPts[0][0], arcPts[0][1]);
   await mouse('mouseMoved', hx, hy); await wait(400);
-  ok('fence tool shows a ghost post', (await J(`${M}.state()`)).tool === 'fence');
+  let g = await J(`${M}.lineGhost('fence')`);
+  const plan = await J(`${M}.lineClickPlan('fence', ${arcPts[0][0]}, ${arcPts[0][1]})`);
+  ok('fence tool shows the click piece as a ghost', g.visible && g.ok, JSON.stringify(g));
+  ok('ghost starts and points where the click piece would go', Math.hypot(g.x - plan.pts[0], g.z - plan.pts[1]) < 0.03 && g.dx * plan.dx + g.dz * plan.dz > 0.99, JSON.stringify([g, plan.dx, plan.dz]));
+  // near the starter fence's far end (-2.5, 0.5): the ghost sits on the end and carries the line on (along z)
+  const [nx, ny] = await at(-2.47, 0.62);
+  await mouse('mouseMoved', nx, ny); await wait(400);
+  g = await J(`${M}.lineGhost('fence')`);
+  ok('near a line end the ghost starts on it, along the line', Math.hypot(g.x + 2.5, g.z - 0.5) < 1e-3 && Math.abs(g.dz) > 0.99, JSON.stringify(g));
+  // while drawing it turns with the stroke: drag along +x and look before letting go
+  {
+    const [sx, sy] = await at(arcPts[0][0], arcPts[0][1]);
+    await mouse('mouseMoved', sx, sy); await wait(250);
+    await mouse('mousePressed', sx, sy, { button: 'left', buttons: 1, clickCount: 1 });
+    for (let k = 1; k <= 4; k++) { const [x, y] = await at(arcPts[0][0] + 0.0, arcPts[0][1] + k * 0.12); await mouse('mouseMoved', x, y, { button: 'left', buttons: 1 }); await wait(80); }
+    g = await J(`${M}.lineGhost('fence')`);
+    ok('while dragging the ghost turns with the stroke', g.visible && g.dz > 0.9, JSON.stringify(g));
+    const [x, y] = await at(arcPts[0][0], arcPts[0][1] + 0.48);
+    await mouse('mouseReleased', x, y, { button: 'left', clickCount: 1 }); await wait(1200);
+    await J(`${M}.undo(-1)`); await wait(1200);
+  }
+  const [hx2, hy2] = await at(arcPts[0][0], arcPts[0][1]);
+  await mouse('mouseMoved', hx2, hy2); await wait(300);
 
   // ---- a curved drag: bays follow the stroke, one undo step ----
   const u0 = (await J(`${M}.undoDepth()`))[0];

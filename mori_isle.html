@@ -4965,7 +4965,8 @@
       // ---- paths & walls ----
       // Lines (LINES, section 10): drawn by dragging, cut into bays with posts; def.line holds how.
       // step: bay length, half: half thickness (placing rules), height: for the eraser, cut: bays one
-      // eraser click takes, keep: |x| the stretch leaves alone, post: the post model, postEvery: a post
+      // eraser click takes, clickBays: bays a click sets (and the ghost shows), keep: |x| the stretch
+      // leaves alone, post: the post model, postEvery: a post
       // every n bays (0 = ends and path gaps only), stepped: bays stand level and step down a slope
       // (bricks) instead of shearing along it (pickets stay upright either way).
       fence: {
@@ -4979,7 +4980,7 @@
         explodeTier: 0,
         glow: null,
         contactRadius: 0,
-        line: { step: FENCE_STEP, half: .045, height: .32, cut: 4, keep: .036, bay: fenceBay, post: fencePost, postHalf: .045, postEvery: 4, stepped: false, maxMods: 1400, maxPosts: 480, iconBays: 6 },
+        line: { step: FENCE_STEP, half: .045, height: .32, cut: 4, keep: .036, bay: fenceBay, post: fencePost, postHalf: .045, postEvery: 4, stepped: false, maxMods: 1400, maxPosts: 480, iconBays: 6, clickBays: 2 },
         build(S, rng) { fenceBay(S, rng); }
       },
       // the old knee-high dry-stone wall became a waist-high grey brick wall with a coping (same id: saves)
@@ -4994,7 +4995,7 @@
         explodeTier: 0,
         glow: null,
         contactRadius: 0,
-        line: { step: WALL_STEP, half: .095, height: .42, cut: 2, keep: 0, bay: wallBay, post: wallPier, postHalf: .14, postEvery: 0, stepped: true, maxMods: 720, maxPosts: 240, iconBays: 4 },
+        line: { step: WALL_STEP, half: .095, height: .42, cut: 2, keep: 0, bay: wallBay, post: wallPier, postHalf: .14, postEvery: 0, stepped: true, maxMods: 720, maxPosts: 240, iconBays: 4, clickBays: 1 },
         build(S, rng) { wallBay(S, rng); }
       },
       // Stepping stones: free placement on the water only (def.onWater), y = 0 is the water surface.
@@ -7540,7 +7541,13 @@
         };
         const post = buildSoupAsset(pdef);
         instancedById[pdef.id] = makeLineMesh(pdef, post.geometry, L.maxPosts, 9);
-        const ghost = new THREE.Mesh(post.geometry, new THREE.MeshBasicMaterial({ color: '#a8ffbe', transparent: true, opacity: 0.55, depthWrite: false }));
+        // hover ghost: the short piece a click would set (clickBays bays, a post at each end), from its
+        // local origin along +x; one look, no stretch. Turned to where the piece would go (updateHoverVisuals)
+        soupRng = makeRng(def.seed + 9);
+        const G = new Soup(), grng = makeRng(def.seed + 10);
+        for (let k = 0; k < L.clickBays; k++) L.bay(G, grng, (k + 0.5) * L.step, 1);
+        for (const k of [0, L.clickBays]) L.post(G, grng, k * L.step, 1);
+        const ghost = new THREE.Mesh(G.build({ groups: 1, ao: null }), new THREE.MeshBasicMaterial({ color: '#a8ffbe', transparent: true, opacity: 0.55, depthWrite: false }));
         ghost.visible = false;
         scene.add(ghost);
         ghostMeshesById[def.id] = ghost;
@@ -9593,6 +9600,35 @@
         }
         return best;
       }
+      // where a click would set its short piece: from a line end, carrying the line on; elsewhere across the
+      // screen, centred on the point (from the side of a line: starting there). The other way round when
+      // that way is blocked. { pts, dx, dz, ok }
+      const _lineRight = new THREE.Vector3();
+      function lineClickPlan(def, x, z) {
+        const step = def.line.step, nb = def.line.clickBays, t = lineSnapTarget(def.id, x, z);
+        let dx, dz, from = 0;
+        if (t) { x = t.x; z = t.z; }
+        if (t && t.end && t.line.pts.length >= 4) { // outward from that end
+          const P = t.line.pts, n = P.length;
+          [dx, dz] = t.first ? [P[0] - P[2], P[1] - P[3]] : [P[n - 2] - P[n - 4], P[n - 1] - P[n - 3]];
+        } else {
+          _lineRight.setFromMatrixColumn(camera.matrixWorld, 0);
+          dx = _lineRight.x; dz = _lineRight.z;
+          if (!t) from = -nb / 2;
+        }
+        const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
+        let first = null;
+        for (const sgn of [1, -1]) {
+          const pts = [];
+          for (let k = 0; k <= nb; k++) pts.push(x + dx * sgn * (from + k) * step, z + dz * sgn * (from + k) * step);
+          let ok = true;
+          for (let k = 0; k < nb && ok; k++) if (lineBayBlocked(def, pts[k * 2], pts[k * 2 + 1], pts[k * 2 + 2], pts[k * 2 + 3])) ok = false;
+          const plan = { pts, dx: dx * sgn, dz: dz * sgn, ok };
+          if (ok) return plan;
+          first ||= plan;
+        }
+        return first;
+      }
       function lineStartAt(def, hit) { const t = lineSnapTarget(def.id, hit.wx, hit.wz); return t ? { x: t.x, z: t.z, snap: true } : { x: hit.wx, z: hit.wz, snap: false }; }
       function beginLineStroke(hit) {
         const def = assetsById[selectedTool].def, p = lineStartAt(def, hit);
@@ -9657,7 +9693,6 @@
         strokePush(st, st.bx, st.bz);
         lineLaid(st, strokeAdvance(st));
       }
-      const _lineRight = new THREE.Vector3();
       function endLineStroke() {
         const st = lineStroke;
         if (!st) return;
@@ -9680,19 +9715,10 @@
             if (!lineBayBlocked(def, P[P.length - 4], P[P.length - 3], gx, gz)) { P[P.length - 2] = gx; P[P.length - 1] = gz; laid++; }
           }
         } else if (!st.made.length && st.arc[st.arc.length - 1] < step) {
-          // a click: a short piece across the screen (from a line end it carries on, either way)
-          _lineRight.setFromMatrixColumn(camera.matrixWorld, 0);
-          let rx = _lineRight.x, rz = _lineRight.z;
-          const rl = Math.hypot(rx, rz) || 1; rx /= rl; rz /= rl;
-          const nb = def.line.post === fencePost ? 2 : 1, x = st.path[0], z = st.path[1], snapped = !!lineSnapTarget(def.id, x, z);
-          for (const s of [1, -1]) {
-            const from = snapped ? 0 : -nb / 2, pts = [];
-            for (let k = 0; k <= nb; k++) pts.push(x + rx * s * (from + k) * step, z + rz * s * (from + k) * step);
-            let ok = true;
-            for (let k = 0; k < nb && ok; k++) if (lineBayBlocked(def, pts[k * 2], pts[k * 2 + 1], pts[k * 2 + 2], pts[k * 2 + 3])) ok = false;
-            if (ok) { fenceLines.push({ id: def.id, pts }); laid++; st.made.push(1); break; }
-          }
-          if (!laid) audio.playTerrainBlocked(screenPan(x, lineGround(x, z), z));
+          // a click: the short piece the ghost showed (lineClickPlan)
+          const x = st.path[0], z = st.path[1], plan = lineClickPlan(def, x, z);
+          if (plan.ok) { fenceLines.push({ id: def.id, pts: plan.pts }); laid++; st.made.push(1); }
+          else audio.playTerrainBlocked(screenPan(x, lineGround(x, z), z));
         }
         if (st.made.length || laid) {
           rebuildInstances(); // grass, rules and the rest catch up once
@@ -10573,12 +10599,20 @@
 
         const def = assetsById[selectedTool].def;
         const ghost = ghostMeshesById[selectedTool];
-        if (def.line) { // a post where the line would start (on a line end when near one), or where the brush is
-          const st = lineStroke, p = st ? { x: st.bx, z: st.bz } : lineStartAt(def, hoveredHit);
-          const ok = st ? !st.blocked : !lineBayBlocked(def, p.x - 0.02, p.z, p.x + 0.02, p.z);
+        if (def.line) { // the piece a click would set, turned the way it would go; while drawing: from the brush toward the pointer
+          const st = lineStroke;
+          let x, z, dx, dz, ok;
+          if (st) {
+            x = st.bx; z = st.bz; dx = st.cx - x; dz = st.cz - z;
+            if (Math.hypot(dx, dz) < 0.02) { const P = st.path, n = P.length; dx = n >= 4 ? P[n - 2] - P[n - 4] : 1; dz = n >= 4 ? P[n - 1] - P[n - 3] : 0; }
+            ok = !st.blocked;
+          } else {
+            const plan = lineClickPlan(def, hoveredHit.wx, hoveredHit.wz);
+            x = plan.pts[0]; z = plan.pts[1]; dx = plan.dx; dz = plan.dz; ok = plan.ok;
+          }
           ghost.visible = true;
-          ghost.position.set(p.x, lineGround(p.x, p.z) + 0.01, p.z);
-          ghost.rotation.y = -orbitAngle;
+          ghost.position.set(x, lineGround(x, z) + 0.01, z);
+          ghost.rotation.y = Math.atan2(-dz, dx); // local +x along (dx, dz)
           setGhostValidityColor(ghost, ok);
           return;
         }
@@ -12325,6 +12359,8 @@
               maxY: Math.max(-9, ...mods.map((r) => r.y)), minY: Math.min(9, ...mods.map((r) => r.y)), rects: lineRectList.filter((r) => r.id === id).length };
           },
           lineBlocked: (id, x0, z0, x1, z1) => lineBayBlocked(assetsById[id].def, x0, z0, x1, z1),
+          lineGhost: (id) => { const g = ghostMeshesById[id]; return { visible: g.visible, x: g.position.x, z: g.position.z, dx: Math.cos(g.rotation.y), dz: -Math.sin(g.rotation.y), ok: g.material.color.getHexString() !== 'ff5252' }; },
+          lineClickPlan: (id, x, z) => lineClickPlan(assetsById[id].def, x, z),
           lineTris: (id) => [instancedById[id].geometry.attributes.position.count / 3, instancedById[id + ':post'].geometry.attributes.position.count / 3],
           // step stones as drawn (instance positions, still standing ones) and the rules they follow
           stones: () => { const m = instancedById.steppingstone, e = m.instanceMatrix.array, v = m.geometry.attributes.aVanish.array, out = []; for (let i = 0; i < m.count; i++) if (v[i] > 1e8) out.push([e[i * 16 + 12], e[i * 16 + 13], e[i * 16 + 14]]); return out; },
